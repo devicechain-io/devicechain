@@ -218,7 +218,9 @@ const labelWidth = 12
 type row struct {
 	label, value string
 	command      bool
-	style        *lipgloss.Style
+	// words are a command's words, when the serialiser recorded them.
+	words []string
+	style *lipgloss.Style
 	// drop ranks the row for leaving out when the screen is short: 0 never, and
 	// the highest goes first. The exit summary keeps what a short screen drops.
 	drop int
@@ -304,7 +306,7 @@ func (m *Model) commandRows(label string) []row {
 	if c.Line.IsZero() {
 		return nil
 	}
-	rs := []row{{label: label, value: c.Line.String(), command: true}}
+	rs := []row{{label: label, value: c.Line.String(), command: true, words: c.words(m.in.Shell)}}
 	if c.Template {
 		dim := m.theme.dim
 		rs = append(rs, row{value: "template: supply the redacted credentials privately", style: &dim, drop: dropFirst})
@@ -349,9 +351,10 @@ func (m *Model) bodyLines(width, budget int) []string {
 	for i, r := range rows {
 		wrapped[i] = []string{""}
 		if r.value != "" {
-			wrapped[i] = wrap(r.value, vw)
 			if r.command {
-				wrapped[i] = wrapCommand(r.value, vw)
+				wrapped[i] = wrapCommand(m.commandWords(r.value, r.words), vw)
+			} else {
+				wrapped[i] = wrap(m.in.shown(r.value), vw)
 			}
 		}
 		total += len(wrapped[i])
@@ -442,7 +445,7 @@ func (m *Model) footer() string {
 func (m *Model) header(width int) string {
 	parts := []string{"dcctl install"}
 	if c := m.in.contextName(); c != "" {
-		parts = append(parts, c)
+		parts = append(parts, m.in.shown(c))
 	}
 	if m.in.Version != "" {
 		parts = append(parts, m.in.Version)
@@ -521,7 +524,7 @@ func (m *Model) renderMinimal(w, h int) string {
 	var next []string
 	switch kindOf(m.in.Summary) {
 	case kindSucceeded, kindPlanned:
-		next = wrapCommand("Next: "+m.in.nextSteps()[0], inner)
+		next = wrapCommand(append([]string{"Next:"}, m.commandWords(m.in.nextSteps()[0], nil)...), inner)
 	default:
 		if at := m.in.failedAt(); at != "" {
 			lines = append(lines, wrap("At: "+at, inner)...)
@@ -556,61 +559,110 @@ func clip(lines []string, n, width int, t theme) []string {
 	return append(out, paint(t.dim, truncate(note, width)))
 }
 
+// commandWords are a command's words as they may be drawn: the recorded ones,
+// or those read from its quoting, re-checked against redaction as one line.
+func (m *Model) commandWords(line string, words []string) []string {
+	if words == nil {
+		words = splitCommand(line, m.in.Shell)
+	}
+	joined := strings.Join(words, " ")
+	if s := m.in.shown(joined); s != joined {
+		return splitCommand(s, m.in.Shell)
+	}
+	return words
+}
+
 // wrap breaks plain text at spaces to width cells, hard-breaking only a word
 // longer than a line. A hyphen is never a break, since a flag split at one reads
 // as two flags, and the spaces kept on a line are the text's own: a name with
 // two spaces in it is drawn with two.
-func wrap(s string, width int) []string { return wrapTokens(s, width, false) }
-
-// wrapCommand breaks a command line between its arguments and nowhere else,
-// keeping every byte of each argument: whitespace inside single or double quotes
-// is part of the argument, so it is never collapsed or broken at. An argument
-// longer than a line is cut across lines, still byte for byte.
-func wrapCommand(s string, width int) []string { return wrapTokens(s, width, true) }
-
-// wrapTokens splits s at runs of spaces (outside quotes, when quoted) and fills
-// lines with the tokens and the exact separators between them.
-func wrapTokens(s string, width int, quoted bool) []string {
-	if width < 1 {
-		width = 1
-	}
-	var args, seps []string // seps[i] is the separator before args[i]
-	var arg strings.Builder
+func wrap(s string, width int) []string {
+	var words, seps []string // seps[i] is the run of spaces before words[i]
 	sep := ""
+	for _, part := range strings.Split(s, " ") {
+		if part == "" {
+			sep += " "
+			continue
+		}
+		words, seps = append(words, part), append(seps, sep)
+		sep = " "
+	}
+	if len(words) > 0 && seps[0] == " " {
+		seps[0] = ""
+	}
+	return fill(words, seps, width)
+}
+
+// wrapCommand lays a command's words out on lines, breaking only between two
+// words and keeping every byte of each: whitespace inside a quoted argument is
+// part of it, so it is never collapsed or broken at. A word longer than a line
+// is cut across lines, still byte for byte.
+func wrapCommand(words []string, width int) []string {
+	seps := make([]string, len(words))
+	for i := 1; i < len(seps); i++ {
+		seps[i] = " "
+	}
+	return fill(words, seps, width)
+}
+
+// splitCommand finds the words of a quoted command line, for a line that came
+// without them. It follows the shell's quoting: single quotes take everything up
+// to the next single quote (PowerShell's doubled ” reads as a close and a
+// reopen, which is the same word); inside double quotes, and outside any quote,
+// the shell's escape character (POSIX backslash, PowerShell backtick) takes the
+// next character with it, so an escaped quote never ends a word.
+func splitCommand(s string, shell Shell) []string {
+	esc := '\\'
+	if shell == PowerShell {
+		esc = '`'
+	}
+	var words []string
+	var word strings.Builder
 	quote := rune(0)
 	escaped := false
 	for _, r := range s {
 		switch {
 		case escaped:
 			escaped = false
-		case quote != 0:
-			if r == quote {
+		case quote == '\'':
+			if r == '\'' {
 				quote = 0
 			}
-		case quoted && r == '\\':
-			escaped = true // a POSIX escape outside quotes, as in '\''
-		case quoted && (r == '\'' || r == '"'):
+		case r == esc:
+			escaped = true
+		case quote == '"':
+			if r == '"' {
+				quote = 0
+			}
+		case r == '\'' || r == '"':
 			quote = r
 		case r == ' ':
-			if arg.Len() > 0 {
-				args, seps = append(args, arg.String()), append(seps, sep)
-				arg.Reset()
-				sep = ""
+			if word.Len() > 0 {
+				words = append(words, word.String())
+				word.Reset()
 			}
-			sep += " "
 			continue
 		}
-		arg.WriteRune(r)
+		word.WriteRune(r)
 	}
-	if arg.Len() > 0 {
-		args, seps = append(args, arg.String()), append(seps, sep)
+	if word.Len() > 0 {
+		words = append(words, word.String())
+	}
+	return words
+}
+
+// fill puts words on lines of at most width cells, each word after its own
+// separator, a line break standing in for the separator it falls on.
+func fill(words, seps []string, width int) []string {
+	if width < 1 {
+		width = 1
 	}
 	var out []string
 	cur := ""
-	for i, a := range args {
+	for i, a := range words {
 		switch {
 		case cur == "" && len(out) == 0:
-			cur = seps[i] + a // leading separator kept on the first line
+			cur = seps[i] + a // a leading separator stays on the first line
 		case cur == "":
 			cur = a
 		case lipgloss.Width(cur+seps[i]+a) <= width:
@@ -622,8 +674,11 @@ func wrapTokens(s string, width int, quoted bool) []string {
 		for lipgloss.Width(cur) > width {
 			head := truncate(cur, width)
 			if head == "" {
+				// A rune wider than the whole line (a wide character in one
+				// column) cannot be drawn without overflowing it: it is left out.
 				_, n := utf8.DecodeRuneInString(cur)
-				head = cur[:n]
+				cur = cur[n:]
+				continue
 			}
 			out = append(out, head)
 			cur = cur[len(head):]

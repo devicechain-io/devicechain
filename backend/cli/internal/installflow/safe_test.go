@@ -31,6 +31,10 @@ func TestTextStripsTerminalControl(t *testing.T) {
 		"bell\x07del\x7fnul\x00":                 "belldelnul",
 		"bidi‮evil⁦x⁩":                           "bidievilx",
 		"bad\xffutf8":                            "bad�utf8",
+		"abc\u200bdef":                           "abcdef", // zero-width space
+		"z\u200cw\u200dj\u2060w\ufeffb\u00ads":   "zwjwbs", // ZWNJ, ZWJ, word joiner, BOM, soft hyphen
+		"lrm\u200e\u200f\u061cx":                 "lrmx",   // LRM, RLM, Arabic letter mark
+		"ls\u2028ps\u2029":                       "ls ps ",
 	} {
 		if got := Text(in).String(); got != want {
 			t.Errorf("Text(%q) = %q, want %q", in, got, want)

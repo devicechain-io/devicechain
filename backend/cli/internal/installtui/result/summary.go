@@ -26,7 +26,9 @@ func WriteExitSummary(w io.Writer, in Input) error {
 		if value == "" {
 			return
 		}
-		fmt.Fprintf(&b, "  %-9s %s\n", label+":", value)
+		// Each line is re-checked as it is composed: joining safe values can
+		// complete a registered one.
+		fmt.Fprintf(&b, "  %-9s %s\n", label+":", in.shown(value))
 	}
 	fmt.Fprintf(&b, "dcctl install: %s\n", in.outcome())
 	line("Target", in.target())

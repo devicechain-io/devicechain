@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -18,8 +19,10 @@ const MaxTextBytes = 8 << 10
 const truncationMark = "…"
 
 // SafeText is display text that has been sanitised: terminal escape sequences
-// (CSI, OSC, DCS and the rest), C0 and C1 controls and bidirectional overrides
-// are removed, line breaks and tabs become spaces, invalid UTF-8 is replaced,
+// (CSI, OSC, DCS and the rest), C0 and C1 controls and every Unicode format
+// character (category Cf: the bidirectional controls and the invisible joiners
+// and separators) are removed, line breaks, tabs and the Unicode line and
+// paragraph separators become spaces, invalid UTF-8 is replaced,
 // and the result is capped at MaxTextBytes. The only way to make one is Text,
 // so a payload field of this type has always been through it.
 //
@@ -122,11 +125,15 @@ func sanitize(s string) string {
 		case r == 0x9d || r == 0x90 || r == 0x98 || r == 0x9e || r == 0x9f: // C1 OSC, DCS, SOS, PM, APC
 			state = str
 			continue
-		case r == '\t' || r == '\n' || r == '\r':
+		case r == '\t' || r == '\n' || r == '\r' || r == 0x2028 || r == 0x2029:
 			r = ' '
 		case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
 			continue
-		case (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069):
+		case unicode.Is(unicode.Cf, r):
+			// Format characters draw nothing: the bidi controls, and the invisible
+			// joiners and separators (ZWSP, ZWNJ, ZWJ, word joiner, BOM, soft
+			// hyphen). Left in, one splits a value so that it matches no known
+			// secret while it still reads as that secret on screen.
 			continue
 		}
 		if b.Len()+utf8.RuneLen(r) > MaxTextBytes-len(truncationMark) {

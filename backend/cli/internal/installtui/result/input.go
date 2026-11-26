@@ -5,6 +5,7 @@ package result
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
 )
@@ -63,8 +64,27 @@ type Facts struct {
 // Command is a display-safe command line: credential values already replaced
 // with a placeholder by the serialiser, which then marks it a Template.
 type Command struct {
-	Line     installflow.SafeText
+	Line installflow.SafeText
+	// Args are Line's words exactly as they appear in it, quotes and all, in
+	// order, as the serialiser quoted them. When they join with single spaces to
+	// Line, the screen breaks the line only between them; otherwise it finds the
+	// words by reading Line's quoting.
+	Args     []installflow.SafeText
 	Template bool
+}
+
+// words are the command's words, for wrapping.
+func (c Command) words(shell Shell) []string {
+	if len(c.Args) > 0 {
+		ws := make([]string, len(c.Args))
+		for i, a := range c.Args {
+			ws[i] = a.String()
+		}
+		if strings.Join(ws, " ") == c.Line.String() {
+			return ws
+		}
+	}
+	return splitCommand(c.Line.String(), shell)
 }
 
 // Shell selects the quoting of a composed command.
@@ -88,24 +108,57 @@ func (in Input) Cause() string {
 		return "The run's progress could not be fully reported, so it is not known to have finished."
 	}
 	if in.Err != nil && in.Redact != nil {
-		if t := redactedText(in.Redact, in.Err.Error()); !t.IsZero() {
+		if t, ok := redactedText(in.Redact, in.Err.Error()); ok && !t.IsZero() {
 			return t.String()
 		}
 	}
 	return "dcctl prints the install's error when you leave this screen."
 }
 
-// redactedText is raw text made safe to draw.
+// maxRedactPasses bounds the redaction loop. Each pass that changes the text
+// replaces at least one registered value with the shorter-or-equal marker, so
+// real input settles in two or three; one that has not settled by then is
+// withheld rather than drawn.
+const maxRedactPasses = 8
+
+// redactedText is raw text made safe to draw, or false when it cannot be.
 //
-// 🔴 SANITISE, THEN REDACT. Sanitising removes escape sequences and control bytes,
-// and so can JOIN what they split: "secret\x1b[31mvalue" matches no registered
-// secret, and becomes "secretvalue" once the escape is gone. So the text is
-// redacted as it came (a secret whose own form holds a line break), sanitised,
-// redacted again as it will be drawn, and sanitised once more, since a
-// replacement is text too.
-func redactedText(redact func(string) string, raw string) installflow.SafeText {
-	clean := installflow.Text(redact(raw))
-	return installflow.Text(redact(clean.String()))
+// 🔴 SANITISE, THEN REDACT, UNTIL NOTHING CHANGES. Sanitising removes escape
+// sequences, control bytes and invisible format characters, and so can JOIN what
+// they split: "secret\x1b[31mvalue" matches no registered secret, and becomes
+// "secretvalue" once the escape is gone. And a replacement is text too: the
+// marker that replaced one secret can complete another ("prefix" + the marker is
+// a registered value). So the text is redacted as it came (a secret whose own
+// form holds a line break), then sanitised and redacted again and again until a
+// pass changes nothing: what is returned holds no registered value.
+func redactedText(redact func(string) string, raw string) (installflow.SafeText, bool) {
+	cur := installflow.Text(redact(raw))
+	for range maxRedactPasses {
+		next := installflow.Text(redact(cur.String()))
+		if next == cur {
+			return cur, true
+		}
+		cur = next
+	}
+	return installflow.SafeText{}, false
+}
+
+// withheld stands for a value that redaction could not settle.
+const withheld = "[withheld]"
+
+// shown is a value as it may be drawn or printed: the hub's redaction applied
+// to a fixed point, as for the cause. Every value has been through the hub
+// already; this re-checks it where it is composed into a line, since joining
+// two safe values can make an unsafe one. Without a redactor it is unchanged.
+func (in Input) shown(s string) string {
+	if in.Redact == nil || s == "" {
+		return s
+	}
+	t, ok := redactedText(in.Redact, s)
+	if !ok {
+		return withheld
+	}
+	return t.String()
 }
 
 // ErrIncomplete is returned when the engine returned no error yet the run did not

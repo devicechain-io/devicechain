@@ -489,7 +489,15 @@ func TestTheMinimalBlockFits(t *testing.T) {
 func TestASecretSplitByControlBytesIsRedacted(t *testing.T) {
 	hub := canaryHub(t)
 	splitters := []string{"\x1b[31m", "\x1b[0m", "\x1b]0;title\x07", "\x1bP1$r\x1b\\", "\x07", "\x00", "\x7f",
-		"\u009b31m", "‮", "⁦", "\x1b7", "\x1b(B", "\x0e"}
+		"\x1b7", "\x1b(B", "\x0e"}
+	// A whole C1 CSI sequence, then the invisible format characters: the bidi
+	// controls, ZWSP, ZWNJ, ZWJ, word joiner, BOM, soft hyphen, LRM, RLM, Arabic
+	// letter mark.
+	splitters = append(splitters, string(rune(0x9b))+"31m")
+	for _, r := range []rune{0x202a, 0x202e, 0x2066, 0x2069, 0x200b, 0x200c, 0x200d, 0x2060, 0xfeff,
+		0x00ad, 0x200e, 0x200f, 0x061c} {
+		splitters = append(splitters, string(r))
+	}
 	for _, c := range testkit.Canaries() {
 		for _, core := range c.Cores {
 			for _, sp := range splitters {
@@ -558,17 +566,137 @@ func TestCommandsKeepTheirArgumentsByteForByte(t *testing.T) {
 // Wrapping breaks only between arguments, and joining the lines back with the
 // separator it removed gives the command it was given.
 func TestWrapCommandBreaksOnlyBetweenArguments(t *testing.T) {
-	line := `dcctl install local '--kube-context=a  b' "--x=c   d" 'it'\''s  here' --yes=true`
-	for w := 1; w <= len(line)+1; w++ {
-		lines := wrapCommand(line, w)
-		for _, l := range lines {
-			if lipgloss.Width(l) > w {
-				t.Fatalf("width %d: line %q", w, l)
+	for _, c := range []struct {
+		shell Shell
+		line  string
+		args  []string
+	}{
+		{POSIX, `dcctl install local '--kube-context=a  b' "--x=c   d" 'it'\''s  here' "--y=\"q  r\"  s" --yes=true`,
+			[]string{`'--kube-context=a  b'`, `"--x=c   d"`, `'it'\''s  here'`, `"--y=\"q  r\"  s"`}},
+		{PowerShell, "& dcctl install local '--kube-context=a  b' 'it''s  here' \"--kube-context=a`\"  b\" \"--z=`\"q  r`\"  s\" --yes=true",
+			[]string{`'--kube-context=a  b'`, `'it''s  here'`, "\"--kube-context=a`\"  b\"", "\"--z=`\"q  r`\"  s\""}},
+	} {
+		words := splitCommand(c.line, c.shell)
+		if strings.Join(words, " ") != c.line {
+			t.Errorf("shell %d: the words %q do not rebuild the line", c.shell, words)
+		}
+		for w := 1; w <= len(c.line)+1; w++ {
+			lines := wrapCommand(words, w)
+			for _, l := range lines {
+				if lipgloss.Width(l) > w {
+					t.Fatalf("width %d: line %q", w, l)
+				}
+			}
+			for _, arg := range c.args {
+				if len(arg) <= w && !strings.Contains(strings.Join(lines, "\n"), arg) {
+					t.Errorf("shell %d, width %d broke or rewrote %s: %q", c.shell, w, arg, lines)
+				}
 			}
 		}
-		for _, arg := range []string{"'--kube-context=a  b'", `"--x=c   d"`, `'it'\''s  here'`} {
-			if len(arg) <= w && !strings.Contains(strings.Join(lines, "\n"), arg) {
-				t.Errorf("width %d broke or rewrote %s: %q", w, arg, lines)
+	}
+}
+
+// escapedQuoteScenarios carry a double-quoted argument with an escaped double
+// quote and two spaces in it, for each shell, once with the words the serialiser
+// recorded and once without.
+func escapedQuoteScenarios() []scenario {
+	mk := func(shell Shell, line string, args []string) func() Input {
+		return func() Input {
+			in := scenarioReadiness()
+			in.Shell = shell
+			in.Equivalent = Command{Line: installflow.Text(line)}
+			for _, a := range args {
+				in.Equivalent.Args = append(in.Equivalent.Args, installflow.Text(a))
+			}
+			return in
+		}
+	}
+	posix := `dcctl install local --ha=true "--kube-context=a \"q\"  b" --yes=true`
+	ps := "& dcctl install local --ha=true \"--kube-context=a `\"q`\"  b\" --yes=true"
+	return []scenario{
+		{"escaped-posix", mk(POSIX, posix, nil), nil},
+		{"escaped-powershell", mk(PowerShell, ps, nil), nil},
+		{"escaped-posix-args", mk(POSIX, posix, []string{"dcctl", "install", "local", "--ha=true",
+			`"--kube-context=a \"q\"  b"`, "--yes=true"}), nil},
+		{"escaped-powershell-args", mk(PowerShell, ps, []string{"&", "dcctl", "install", "local", "--ha=true",
+			"\"--kube-context=a `\"q`\"  b\"", "--yes=true"}), nil},
+	}
+}
+
+func TestEscapedQuotesStayInsideTheirArgument(t *testing.T) {
+	for _, sc := range escapedQuoteScenarios() {
+		want := `"--kube-context=a \"q\"  b"`
+		if strings.Contains(sc.name, "powershell") {
+			want = "\"--kube-context=a `\"q`\"  b\""
+		}
+		for _, sz := range [][2]int{{120, 40}, {60, 20}} {
+			name := fmt.Sprintf("%s/L1-%dx%d", sc.name, sz[0], sz[1])
+			text := drive(sc.in(), levelCaps(terminal.L1, sz[0], sz[1])).render()
+			if !strings.Contains(text, want) {
+				t.Errorf("%s does not draw %s intact:\n%s", name, want, text)
+			}
+			checkFits(t, text, sz[0], sz[1])
+			requireGolden(t, name+".txt", []byte(text+"\n"))
+		}
+	}
+}
+
+// Recorded words that do not rebuild the line are not trusted: the line is read.
+func TestRecordedWordsMustRebuildTheLine(t *testing.T) {
+	c := Command{Line: installflow.Text("dcctl install local '--kube-context=a  b'"),
+		Args: []installflow.SafeText{installflow.Text("dcctl"), installflow.Text("install local '--kube-context=a"),
+			installflow.Text("b'")}}
+	got := c.words(POSIX)
+	if len(got) != 4 || got[3] != "'--kube-context=a  b'" {
+		t.Errorf("words %q", got)
+	}
+}
+
+// 🔴 The marker that replaces one secret can complete another; redaction runs to
+// a fixed point, so no registered value is ever drawn or printed.
+func TestRedactionRunsToAFixedPoint(t *testing.T) {
+	hub := canaryHub(t)
+	for _, s := range []string{"abcdef", "prefix[redacted]", "outer[redacted]suffix"} {
+		if err := hub.AddSecret(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in := scenarioFailed(hub.Redact)
+	in.Err = errors.New("refused: outerprefixabcdefsuffix")
+	// The same text arriving in a field the hub has already scrubbed once.
+	in.Target = installflow.Target{Mode: "existing-context", Context: installflow.Text("outerprefix[redacted]suffix")}
+	var b bytes.Buffer
+	if err := WriteExitSummary(&b, in); err != nil {
+		t.Fatal(err)
+	}
+	view := stripANSI(drive(in, levelCaps(terminal.L1, 120, 40)).render())
+	for where, text := range map[string]string{"cause": in.Cause(), "screen": view, "exit summary": b.String()} {
+		for _, s := range []string{"abcdef", "prefix[redacted]", "outer[redacted]suffix"} {
+			if strings.Contains(text, s) {
+				t.Errorf("the %s holds the registered value %q:\n%s", where, s, text)
+			}
+		}
+	}
+	// A redactor that never settles withholds the value rather than drawing it.
+	grow := func(s string) string { return s + "x" }
+	if got := (Input{Redact: grow}).shown("anything"); got != withheld {
+		t.Errorf("an unsettled redaction drew %q", got)
+	}
+	if got := (Input{Err: errors.New("boom"), Redact: grow}).Cause(); strings.Contains(got, "boom") {
+		t.Errorf("an unsettled cause was drawn: %q", got)
+	}
+}
+
+// A wide character in a one-column frame is left out rather than overflowing it.
+func TestWideRunesNeverOverflowANarrowFrame(t *testing.T) {
+	in := scenarioSucceeded()
+	in.Target = installflow.Target{Mode: "existing-context", Context: installflow.Text("界界")}
+	in.Facts = Facts{Provider: "local", KubeContext: installflow.Text("界界")}
+	for _, sz := range [][2]int{{1, 80}, {2, 80}, {3, 80}, {1, 1}, {8, 8}} {
+		text := stripANSI(drive(in, levelCaps(terminal.L1, sz[0], sz[1])).render())
+		for i, l := range strings.Split(text, "\n") {
+			if lipgloss.Width(l) > sz[0] {
+				t.Errorf("%v: line %d is %d cells: %q", sz, i, lipgloss.Width(l), l)
 			}
 		}
 	}
