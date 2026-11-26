@@ -1232,7 +1232,7 @@ helm template dc "$chart" --set "instance.config.infrastructure.secrets.rootKey=
 
 # The rule files this repository knows it ships. Literal, not derived from what
 # rendered: deriving it would restate the render's own output and assert nothing.
-required_groups=(uniform-signals notification-management database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery governance dead-letter event-processing event-sources device-management container-restarts area-availability safety-gates edge device-state update-management broker event-management token-audience payload-decoder)
+required_groups=(uniform-signals notification-management database-backup database-storage jetstream-replication database-control-plane command-delivery tenant-purge sign-in jetstream-delivery governance dead-letter event-processing event-sources device-management container-restarts area-availability safety-gates edge device-state update-management broker event-management token-audience payload-decoder bulk-changes)
 
 extract_rules "$work/rendered.yaml" "$work" "${required_groups[@]}" ||
   fail "the chart did not render the PrometheusRules this check requires"
@@ -1351,6 +1351,7 @@ declare -A rule_tests=(
   [event-management]="$repo_root/hack/testdata/prometheus-rules-event-management-tests.yaml"
   [token-audience]="$repo_root/hack/testdata/prometheus-rules-token-audience-tests.yaml"
   [payload-decoder]="$repo_root/hack/testdata/prometheus-rules-payload-decoder-tests.yaml"
+  [bulk-changes]="$repo_root/hack/testdata/prometheus-rules-bulk-changes-tests.yaml"
 )
 
 # 🔴 AND THE GROUPS THAT ARE KNOWINGLY UNTESTED, NAMED. Without this list the loop

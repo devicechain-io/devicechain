@@ -405,5 +405,5 @@ func TestSettlementSustainsFiveHundredPerSecondOnPostgres(t *testing.T) {
 	}
 	require.Less(t, lag, 15*time.Second, "reconciler lag gauge at the end of the 10-tenant run")
 	require.NoError(t, api.RunFleetSettlement(base, true, false))
-	require.Less(t, testutil.ToFloat64(fleetReconcilerLag), 15.0)
+	require.Less(t, testutil.ToFloat64(bulkMetrics.reconcilerLag), 15.0)
 }

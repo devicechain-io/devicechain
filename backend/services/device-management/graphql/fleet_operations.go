@@ -422,13 +422,11 @@ func (r *FleetOperationResolver) HoldSince() (*string, error) {
 	return util.FormatTime(rt.HoldSince.Time), nil
 }
 
-// Executor is UNKNOWN for an operation that is RUNNING until the engine reports on itself, and IDLE
-// for every state in which nothing is meant to be happening: an unknown is never reported as healthy.
-func (r *FleetOperationResolver) Executor() string {
-	if r.M.Dispatch == model.FleetDispatchPlanning || r.M.Dispatch == model.FleetDispatchReady {
-		return "IDLE"
-	}
-	return "UNKNOWN"
+// Executor is decided from stored facts on the database clock (model.FleetExecutor): the driver's
+// heartbeat, the hold and when it was last reported, the last progress and whether lines remain. The
+// dispatch alone never decides it: a RUNNING operation nobody is driving is UNKNOWN, not WORKING.
+func (r *FleetOperationResolver) Executor() (string, error) {
+	return r.S.GetApi(r.C).FleetExecutor(r.C, &r.M)
 }
 
 func (r *FleetOperationResolver) LastProgressAt() (*string, error) {

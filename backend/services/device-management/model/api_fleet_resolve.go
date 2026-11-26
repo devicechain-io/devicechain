@@ -120,13 +120,15 @@ func (api *Api) ResolveAmbiguousFleetLines(ctx context.Context, req FleetAmbigui
 	if head == nil {
 		return nil, gorm.ErrRecordNotFound
 	}
+	var resolved int64
 	err = db.Transaction(func(tx *gorm.DB) error {
+		resolved = 0
 		if err := fleetSetLockTimeout(tx, fleetFenceWait); err != nil {
 			return err
 		}
 		// Retention holds this fence exclusively. Resolve shares it and never
 		// locks or changes the header; only the line CAS decides who wins.
-		if err := fleetLock(tx, fleetOpKey(tenant, head.ID), true); err != nil {
+		if err := fleetFence(tx, fleetOpKey(tenant, head.ID), true, "RESOLVE"); err != nil {
 			return err
 		}
 		var op FleetOperation
@@ -170,6 +172,7 @@ func (api *Api) ResolveAmbiguousFleetLines(ctx context.Context, req FleetAmbigui
 			if res.RowsAffected == 0 {
 				continue
 			}
+			resolved += res.RowsAffected
 			if err := tx.Create(&FleetOperationEvent{OperationId: int64(op.ID), Kind: "VERDICT", At: now,
 				LineId: sql.NullInt64{Int64: int64(line.ID), Valid: true}, RefEventId: sql.NullInt64{Int64: int64(resolution.ID), Valid: true},
 				Actor: resolution.Actor, Reason: settlement}).Error; err != nil {
@@ -184,6 +187,7 @@ func (api *Api) ResolveAmbiguousFleetLines(ctx context.Context, req FleetAmbigui
 		}
 		return nil, err
 	}
+	bulkMetrics.settle("RESOLVED_"+req.Verdict, "", int(resolved))
 	// Close evidence with no other locks held, as the reconciler does. Never
 	// acquire the header row while holding line locks (control locks it first).
 	if err := closeFleetEvidence(db, map[int64]bool{int64(head.ID): true}); err != nil {

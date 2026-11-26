@@ -55,6 +55,64 @@ the broker is not requesting device client certificates
 
 **含义与处理方式.** The broker server named by the pod label is not asking MQTT devices for a client certificate, so devices that authenticate by certificate cannot connect. Devices that use a token or a password are not affected. Either the server is running but its MQTT listener stopped requesting certificates (a configuration reload that did not keep the setting, or the broker's own check of its listener keeps failing; its log says which), or the server is not running the DeviceChain broker image, for example after a rollback to the upstream nats image. Check the server's image with kubectl get pod -o jsonpath='\{.spec.containers[0].image\}'. On the DeviceChain image, restart the server pod, and report the log lines around the last configuration reload. On the upstream image, certificate devices stay refused until the DeviceChain image is restored.
 
+## `devicechain.bulk-changes`
+
+### BulkChangesAuthorityUnavailable {#bulkchangesauthorityunavailable}
+
+**严重程度:** `warning` · **规则组:** `devicechain.bulk-changes`
+
+Bulk change authority checks are unavailable
+
+**含义与处理方式.** A running bulk change has been held for five minutes because device-management cannot get a fresh answer from user-management on whether the person it runs for still holds the authority to apply it. Nothing is applied while it is held, and it is not paused. Check that user-management is running and reachable from device-management, and read its logs. Posting resumes on the first fresh answer; there is no way around the check.
+
+### BulkChangesDriverSilent {#bulkchangesdriversilent}
+
+**严重程度:** `critical` · **规则组:** `devicechain.bulk-changes`
+
+Bulk change drivers are silent
+
+**含义与处理方式.** Running bulk changes exist and no device-management pod has completed a bulk change driver pass in the last sixty seconds, for two minutes; their executor reads UNKNOWN. Check that the device-management pods are running and ready, and look in their logs for driver errors or database connection failures. Nothing is applied while the driver is silent, and lines continue where they stopped once a pod completes a pass.
+
+### BulkChangesFencePending {#bulkchangesfencepending}
+
+**严重程度:** `warning` · **规则组:** `devicechain.bulk-changes`
+
+Bulk change controls keep waiting for posts
+
+**含义与处理方式.** For ten minutes, pause, abort, resume or start requests have kept timing out (FENCE_PENDING) while waiting for in-flight posting to finish. Look for long-running posting transactions and lock waits in the database. Retry the request once the in-flight work drains and confirm the dispatch state afterwards: a FENCE_PENDING answer means the change did not happen.
+
+### BulkChangesNotActivated {#bulkchangesnotactivated}
+
+**严重程度:** `critical` · **规则组:** `devicechain.bulk-changes`
+
+Bulk changes are not activated
+
+**含义与处理方式.** For fifteen minutes the database has not enforced the device attribute writer protocol that bulk changes post under, or its state could not be read. Starting and resuming are refused and running bulk changes hold (NOT_ACTIVATED). Check that device-management's database migrations completed and that the enforcing trigger on the device attribute table is installed and enabled. Do not turn enforcement off to let posting proceed.
+
+### BulkChangesNotAdvancing {#bulkchangesnotadvancing}
+
+**严重程度:** `warning` · **规则组:** `devicechain.bulk-changes`
+
+Bulk changes are not advancing
+
+**含义与处理方式.** A running bulk change with lines still to apply has gone more than five minutes without applying one, and no authority, activation or pending-control hold explains it. Read the bulk change's executor, holdCode and lastErrorCode. STALLED with POST_ERROR means a line keeps failing in a way that is retried (database contention, a timeout, a lost connection), and the bulk change pauses itself after 24 hours of that; a device held by another writer or a shared posting rate shows no hold. Look in the device-management logs for the error, and pause the bulk change if the cause will not clear soon.
+
+### BulkChangesSettlementLagging {#bulkchangessettlementlagging}
+
+**严重程度:** `warning` · **规则组:** `devicechain.bulk-changes`
+
+Bulk change settlement is lagging
+
+**含义与处理方式.** An applied bulk change line is more than fifteen minutes past its settlement deadline, or a device report that could settle one has waited more than fifteen minutes. Check the device-management logs for settlement task errors and the database for load. Applied lines are not lost while this lags; they settle once the tasks catch up. An applied line is not proof that the device took the change, so read its evidence before resolving it by hand.
+
+### BulkChangesStalled {#bulkchangesstalled}
+
+**严重程度:** `critical` · **规则组:** `devicechain.bulk-changes`
+
+Bulk changes have stalled
+
+**含义与处理方式.** A running bulk change with lines still to apply has gone more than fifteen minutes without applying one, and no authority, activation or pending-control hold explains it. Its executor reads STALLED. Read lastErrorCode and the device-management logs for why each attempt fails, fix the dependency, and pause the bulk change if it cannot be fixed now. Settling applied lines against device reports is separate and has its own deadline.
+
 ## `devicechain.command-delivery`
 
 ### CommandBatchReserveRefusals {#commandbatchreserverefusals}

@@ -63,11 +63,11 @@ func TestFleetExistingEventWritersLockBeforeMutation(t *testing.T) {
 				transaction = tx
 				switch path {
 				case "erase", "repair":
-					return redactFleetDeviceLinesOnTx(tx, e.dev.ID, path == "repair")
+					return redactFleetDeviceLinesOnTx(tx, e.dev.ID, path == "repair", nil)
 				case "purge":
-					return fleetPurgeEvidenceChunk(tx, e.op)
+					return fleetPurgeEvidenceChunk(tx, e.op, nil)
 				default:
-					return fleetDeleteTombstone(tx, e.op)
+					return fleetDeleteTombstone(tx, e.op, nil)
 				}
 			}))
 			require.True(t, eventLocked)
@@ -130,12 +130,12 @@ func TestFleetBulkWritersLockBeforeMutation(t *testing.T) {
 			require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
 				switch path {
 				case "erase":
-					return redactFleetDeviceLinesOnTx(tx, e.dev.ID, false)
+					return redactFleetDeviceLinesOnTx(tx, e.dev.ID, false, nil)
 				case "abort":
 					_, _, err := fleetAbortChanges(tx, e.op, fleetClock(), "test", "", fleetEventAbort)
 					return err
 				default:
-					return fleetPurgeEvidenceChunk(tx, e.op)
+					return fleetPurgeEvidenceChunk(tx, e.op, nil)
 				}
 			}))
 			require.True(t, locked)
