@@ -1,0 +1,119 @@
+{
+  "generator": "genbrand",
+  "version": 1,
+  "source": "branding/logos/symbol.svg",
+  "sourceSHA256": "6e91c9d54e5a742fb461ac391db00541644a6f85a7697c26367017a00a4507eb",
+  "viewBox": [
+    123.03,
+    66.32,
+    103.93,
+    103.93
+  ],
+  "supersample": 4,
+  "facets": [
+    {
+      "index": 1,
+      "fill": "#1F425E",
+      "ansi256": 23,
+      "part": "rim",
+      "ascii": "#"
+    },
+    {
+      "index": 2,
+      "fill": "#7AB7D9",
+      "ansi256": 110,
+      "part": "rim",
+      "ascii": "#"
+    },
+    {
+      "index": 3,
+      "fill": "#208CB7",
+      "ansi256": 31,
+      "part": "rim",
+      "ascii": "#"
+    },
+    {
+      "index": 4,
+      "fill": "#52A2C9",
+      "ansi256": 74,
+      "part": "rim",
+      "ascii": "#"
+    },
+    {
+      "index": 5,
+      "fill": "#007BA6",
+      "ansi256": 31,
+      "part": "rim",
+      "ascii": "#"
+    },
+    {
+      "index": 6,
+      "fill": "#006790",
+      "ansi256": 24,
+      "part": "rim",
+      "ascii": "#"
+    },
+    {
+      "index": 7,
+      "fill": "#9ACEEC",
+      "ansi256": 117,
+      "part": "rim",
+      "ascii": "#"
+    },
+    {
+      "index": 8,
+      "fill": "#006B97",
+      "ansi256": 24,
+      "part": "cube",
+      "ascii": "+"
+    },
+    {
+      "index": 9,
+      "fill": "#006790",
+      "ansi256": 24,
+      "part": "cube",
+      "ascii": "/"
+    },
+    {
+      "index": 10,
+      "fill": "#007BA6",
+      "ansi256": 31,
+      "part": "cube",
+      "ascii": "\\"
+    },
+    {
+      "index": 11,
+      "fill": "#9ACEEC",
+      "ansi256": 117,
+      "part": "cube",
+      "ascii": ":"
+    },
+    {
+      "index": 12,
+      "fill": "#208CB7",
+      "ansi256": 31,
+      "part": "cube",
+      "ascii": "."
+    }
+  ],
+  "marks": [
+    {
+      "name": "large",
+      "pixels": 32,
+      "cols": 32,
+      "rows": 16,
+      "axis": 16.002,
+      "cells": "large.cells",
+      "ascii": "large.ascii"
+    },
+    {
+      "name": "compact",
+      "pixels": 24,
+      "cols": 24,
+      "rows": 12,
+      "axis": 12.001,
+      "cells": "compact.cells",
+      "ascii": "compact.ascii"
+    }
+  ]
+}
