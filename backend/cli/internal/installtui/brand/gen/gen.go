@@ -131,7 +131,7 @@ func Generate(svg []byte) (map[string][]byte, error) {
 	}
 	cube := 0
 	for i, s := range shapes {
-		r, g, b, err := parseHex(s.fill)
+		r, g, b, err := ParseHex(s.fill)
 		if err != nil {
 			return nil, err
 		}
@@ -556,12 +556,21 @@ func encodeASCII(grid [][]uint8, facets []Facet) []byte {
 	return b.Bytes()
 }
 
-func parseHex(s string) (uint8, uint8, uint8, error) {
-	v, err := strconv.ParseUint(strings.TrimPrefix(s, "#"), 16, 32)
-	if err != nil || len(s) != 7 {
+// ParseHex parses a "#RRGGBB" colour.
+func ParseHex(s string) (uint8, uint8, uint8, error) {
+	if len(s) != 7 || s[0] != '#' {
 		return 0, 0, 0, fmt.Errorf("colour %q", s)
 	}
-	return uint8(v >> 16), uint8(v >> 8), uint8(v), nil
+	var rgb [3]uint8
+	for i := range rgb {
+		// Each channel is parsed at 8 bits, so it is range-checked, never truncated.
+		v, err := strconv.ParseUint(s[1+2*i:3+2*i], 16, 8)
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("colour %q", s)
+		}
+		rgb[i] = uint8(v)
+	}
+	return rgb[0], rgb[1], rgb[2], nil
 }
 
 // Nearest256 maps a colour to the nearest xterm-256 colour in 16-255 by

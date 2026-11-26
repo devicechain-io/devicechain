@@ -73,11 +73,11 @@ func load() error {
 		if f.Index != i+1 {
 			return fmt.Errorf("facet %d has index %d", i+1, f.Index)
 		}
-		v, err := strconv.ParseUint(strings.TrimPrefix(f.Fill, "#"), 16, 32)
+		r, g, b, err := gen.ParseHex(f.Fill)
 		if err != nil {
 			return err
 		}
-		facets = append(facets, Facet{Facet: f, RGB: [3]uint8{uint8(v >> 16), uint8(v >> 8), uint8(v)}})
+		facets = append(facets, Facet{Facet: f, RGB: [3]uint8{r, g, b}})
 	}
 	for _, m := range manifest.Marks {
 		mark, err := loadMark(m)
