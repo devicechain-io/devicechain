@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 
@@ -13,6 +14,67 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+func TestFleetExistingEventWritersLockBeforeMutation(t *testing.T) {
+	for _, path := range []string{"erase", "repair", "purge", "tombstone"} {
+		t.Run(path, func(t *testing.T) {
+			e := postFixture(t, "v1", false)
+			db := e.api.RDB.DB(e.ctx)
+			note := FleetOperationEvent{OperationId: int64(e.op.ID), Kind: "RESOLUTION", At: fleetClock(), Note: sql.NullString{String: "shared note", Valid: true}}
+			require.NoError(t, db.Create(&note).Error)
+			require.NoError(t, db.Model(&e.line).Update("resolution_id", note.ID).Error)
+			if path == "tombstone" {
+				require.NoError(t, db.Delete(&e.line).Error)
+			}
+			lineLocked, eventLocked, mutated := false, false, false
+			var transaction *gorm.DB
+			require.NoError(t, db.Callback().Query().Before("gorm:query").Register("test:event-lock", func(tx *gorm.DB) {
+				if tx.Statement.Schema == nil {
+					return
+				}
+				lock, ok := tx.Statement.Clauses["FOR"].Expression.(clause.Locking)
+				if !ok || lock.Strength != "UPDATE" {
+					return
+				}
+				switch tx.Statement.Schema.Name {
+				case "FleetOperationLine":
+					lineLocked = true
+				case "FleetOperationEvent":
+					require.True(t, lineLocked || path == "tombstone", "event locks must follow line locks")
+					require.Same(t, transaction.Statement.ConnPool, tx.Statement.ConnPool, "event locks must belong to the mutation transaction")
+					order, ok := tx.Statement.Clauses["ORDER BY"].Expression.(clause.OrderBy)
+					require.True(t, ok)
+					require.NotEmpty(t, order.Columns)
+					require.Equal(t, "id", order.Columns[0].Column.Name)
+					require.False(t, order.Columns[0].Desc)
+					require.Empty(t, lock.Options, "shared events must not be skipped")
+					eventLocked = true
+				}
+			}))
+			check := func(tx *gorm.DB) {
+				if tx.Statement.Schema != nil && tx.Statement.Schema.Name == "FleetOperationEvent" {
+					require.True(t, eventLocked, "existing event mutation must first acquire ordered row locks")
+					mutated = true
+				}
+			}
+			require.NoError(t, db.Callback().Update().Before("gorm:update").Register("test:event-update", check))
+			require.NoError(t, db.Callback().Delete().Before("gorm:delete").Register("test:event-delete", check))
+			require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
+				transaction = tx
+				switch path {
+				case "erase", "repair":
+					return redactFleetDeviceLinesOnTx(tx, e.dev.ID, path == "repair")
+				case "purge":
+					return fleetPurgeEvidenceChunk(tx, e.op.ID)
+				default:
+					return fleetDeleteTombstone(tx, e.op)
+				}
+			}))
+			require.True(t, eventLocked)
+			require.True(t, mutated)
+		})
+	}
+}
 
 func TestFleetSettlementOrdersJoinedResults(t *testing.T) {
 	api, recorder := fleetRecordedPG(t)

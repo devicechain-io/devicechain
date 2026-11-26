@@ -7,7 +7,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"slices"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -79,7 +78,11 @@ func redactFleetDeviceLinesOnTx(tx *gorm.DB, deviceID uint, repair bool) error {
 				LineId: sql.NullInt64{Int64: int64(current.ID), Valid: true}, At: now, Kind: "REDACTED"}
 		}
 		if len(notes) != 0 {
-			slices.Sort(notes)
+			var locked []FleetOperationEvent
+			if err := tx.Select("id").Where("id IN ? AND kind = 'RESOLUTION'", notes).
+				Scopes(fleetEventLockOrder).Find(&locked).Error; err != nil {
+				return err
+			}
 			if err := tx.Model(&FleetOperationEvent{}).Where("id IN ? AND kind = 'RESOLUTION'", notes).
 				Updates(map[string]any{"note": "", "note_redacted_at": now}).Error; err != nil {
 				return err

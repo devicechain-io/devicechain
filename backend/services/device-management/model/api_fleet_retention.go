@@ -163,8 +163,12 @@ func fleetPurgeEvidenceChunk(tx *gorm.DB, id uint) error {
 	if err := tx.Where("id IN ?", lines).Delete(&FleetOperationLine{}).Error; err != nil {
 		return err
 	}
-	events := tx.Model(&FleetOperationEvent{}).Select("id").Where("operation_id = ? AND (line_id IS NOT NULL OR kind IN ('RESOLUTION','VERDICT','CONTRADICTING_EVIDENCE','OVERRIDE_CHANGED','REDACTED'))", id).Order("id").Limit(fleetMaintenanceChunk)
-	if err := tx.Where("id IN (?)", events).Delete(&FleetOperationEvent{}).Error; err != nil {
+	var events []uint
+	if err := tx.Model(&FleetOperationEvent{}).Where("operation_id = ? AND (line_id IS NOT NULL OR kind IN ('RESOLUTION','VERDICT','CONTRADICTING_EVIDENCE','OVERRIDE_CHANGED','REDACTED'))", id).
+		Scopes(fleetEventLockOrder).Limit(fleetMaintenanceChunk).Pluck("id", &events).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("id IN ?", events).Delete(&FleetOperationEvent{}).Error; err != nil {
 		return err
 	}
 	contracts := tx.Model(&FleetOperationContract{}).Select("id").Where("operation_id = ? AND body <> ''", id).Order("id").Limit(fleetMaintenanceChunk)
@@ -173,8 +177,15 @@ func fleetPurgeEvidenceChunk(tx *gorm.DB, id uint) error {
 
 func fleetDeleteTombstone(tx *gorm.DB, op *FleetOperation) error {
 	for _, model := range []any{&FleetOperationEvent{}, &FleetOperationContract{}} {
-		ids := tx.Model(model).Select("id").Where("operation_id = ?", op.ID).Order("id").Limit(fleetMaintenanceChunk)
-		if err := tx.Where("id IN (?)", ids).Delete(model).Error; err != nil {
+		var ids []uint
+		query := tx.Model(model).Where("operation_id = ?", op.ID).Order("id").Limit(fleetMaintenanceChunk)
+		if _, events := model.(*FleetOperationEvent); events {
+			query = query.Scopes(fleetEventLockOrder)
+		}
+		if err := query.Pluck("id", &ids).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("id IN ?", ids).Delete(model).Error; err != nil {
 			return err
 		}
 		var n int64
