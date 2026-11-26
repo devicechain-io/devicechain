@@ -190,7 +190,7 @@ func TestFleetBulkLineLockOrderOnPostgres(t *testing.T) {
 				case "abort":
 					_, _, err = fleetAbortChanges(writer, p.op, time.Now(), "test", "", fleetEventAbort)
 				default:
-					err = fleetPurgeEvidenceChunk(writer, p.op.ID)
+					err = fleetPurgeEvidenceChunk(writer, p.op)
 				}
 				if err == nil {
 					err = writer.Commit().Error
