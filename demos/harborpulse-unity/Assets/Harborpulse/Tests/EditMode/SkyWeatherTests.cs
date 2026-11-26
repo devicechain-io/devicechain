@@ -130,7 +130,7 @@ namespace DeviceChain.Harborpulse.Tests
             Assert.That(At(18.3).SunIntensity + At(18.3).MoonIntensity, Is.LessThan(0.05), "the storm dusk is the keyless case this pins");
             // and the grade opens up for dim daylight, without touching the noon or the night it was tuned for
             Assert.That(At(12.5).ExposureLift, Is.EqualTo(0).Within(0.01));
-            Assert.That(At(1.0).ExposureLift, Is.EqualTo(0.55).Within(0.01));
+            Assert.That(At(1.0).ExposureLift, Is.EqualTo(0.55 + DayLighting.NightStoryLift).Within(0.01), "the eye opening, and the story lift a recorded cut needs");
             Assert.That(At(6.4).ExposureLift, Is.GreaterThan(0.6), "dawn");
             Assert.That(At(18.3).ExposureLift, Is.GreaterThan(0.6), "storm dusk");
         }
