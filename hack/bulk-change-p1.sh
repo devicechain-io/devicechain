@@ -365,7 +365,7 @@ one_arm() { # <arm> <run>
   local p_load=$!
   "$ROOT/hack/perf-ab.sh" --kubeconfig "$kubeconfig" --namespace "$ns" --instance "$instance" --arm "$name" \
     --bin-dir "$bin_dir" --dcctl "$dcctl" --out "$dir/perf-ab" --mqtt-rate "$mqtt_rate" --http-rate "$http_rate" \
-    --duration "$duration" --warmup "$warmup" --settle "$settle" >"$dir/$name.perf-ab.log" 2>&1 || ab_rc=$?
+    --duration "$duration" --warmup "$warmup" --settle "$settle" --sim-prefix p1 >"$dir/$name.perf-ab.log" 2>&1 || ab_rc=$?
   wait "$p_load" || load_rc=$?
   arm_down
   [[ "$ab_rc" == 0 && "$load_rc" == 0 ]] || ok=false

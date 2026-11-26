@@ -124,7 +124,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# sim_reusable <handshake> <instance> <namespace> succeeds when the handshake exists and was made for that
+# instance, with its ingress in that namespace. Pure.
+sim_reusable() {
+  [[ -f "$1" ]] || return 1
+  jq -e --arg i "$2" --arg ns "$3" '.instanceId == $i and ((.endpoints.ingress // "") | test("\\." + $ns + "\\.svc[.:]"))' "$1" >/dev/null 2>&1
+}
+
 if [[ "$self_test" == 1 ]]; then
+  st="$(mktemp -d)"
+  printf '{"instanceId":"perf","endpoints":{"ingress":"http://event-sources.dci-perf.svc.cluster.local:8081"}}' >"$st/ok.json"
+  sim_reusable "$st/ok.json" perf dci-perf || { echo "SELF-TEST: a handshake of this instance was not reused" >&2; exit 1; }
+  sim_reusable "$st/ok.json" p1 dci-perf && { echo "SELF-TEST: another instance's handshake was reused" >&2; exit 1; }
+  sim_reusable "$st/ok.json" perf dci-p1 && { echo "SELF-TEST: a handshake for another namespace was reused" >&2; exit 1; }
+  sim_reusable "$st/ok.json" perf dci-per && { echo "SELF-TEST: a namespace was matched as a prefix" >&2; exit 1; }
+  sim_reusable "$st/none.json" perf dci-perf && { echo "SELF-TEST: a missing handshake was reused" >&2; exit 1; }
+  rm -rf "$st"
   py "$HELPER" self-test
   exit $?
 fi
@@ -284,7 +299,11 @@ tier_msgs=$((tier_multiple * max_rate))
 tier_burst=$((2 * tier_msgs))
 tier_config="{\"ingestReadingsPerSecond\":$tier_msgs,\"ingestBurst\":$tier_burst}"
 mk_sim() { # name
-  if [[ "$fresh_sims" == 1 || ! -f "$sim_dir/$1.json" ]]; then
+  # A handshake is reused only when it belongs to THIS instance and namespace. The sims directory is the
+  # user's, shared by every instance on the machine, so a file of the same name can be another (or an earlier,
+  # destroyed) instance's: reusing it signs in with credentials this instance never issued, and every arm
+  # then dies waiting for a steady state the harnesses cannot reach.
+  if [[ "$fresh_sims" == 1 ]] || ! sim_reusable "$sim_dir/$1.json" "$instance" "$ns"; then
     env KUBECONFIG="$kubeconfig" "$dcctl" sim create "$1" -s "$console_host" -i "$instance" --kube-context "$kctx" \
       --tier "$tier_token" --tier-config "$tier_config" \
       --ingress "http://event-sources.$ns.svc.cluster.local:8081" \
