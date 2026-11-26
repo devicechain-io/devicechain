@@ -373,9 +373,12 @@ arm_up() { # <arm> <run>
     local tok
     for t in 1 2; do
       tok="p1-cap-$i-$t-$(date -u +%H%M%S)"
+      # Registered BEFORE the start: `bulkchange start` creates the change and then starts it, so a refused
+      # start leaves it READY with its lines counted against the tenant's waiting cap. arm_down aborts every
+      # registered token (an absent one is a no-op), so the next arm is not refused by a stranded change.
+      caps_tokens+=("$tok")
       "$apiprobe" bulkchange start "${api[@]}" --url "$dm_url" --bulk "$bulk" --token "$tok" --value "cap-$tok" \
         --first $((201 + (t - 1) * 10000)) --last $((200 + t * 10000)) --rate 50 >/dev/null || die "could not start caps change $tok"
-      caps_tokens+=("$tok")
     done
     ;;
   esac
