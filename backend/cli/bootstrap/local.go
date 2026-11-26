@@ -114,6 +114,9 @@ func clusterNameFromKindContext(kubeContext string) string {
 
 const kindContextPrefix = "kind-"
 
+// runKindCommand lets tests inspect the child's descriptors without creating a cluster.
+var runKindCommand = (*exec.Cmd).Run
+
 // createKindCluster creates a kind cluster from the embedded topology (the same
 // config in deploy/local/kind-cluster.yaml). kind streams its own progress.
 func createKindCluster(ctx context.Context, name string) error {
@@ -138,9 +141,8 @@ func createKindCluster(ctx context.Context, name string) error {
 	c.println(color.WhiteString("Creating kind cluster %q:", name))
 	cmd := exec.CommandContext(ctx, "kind", "create", "cluster",
 		"--name", name, "--config", cfg.Name(), "--wait", "90s")
-	cmd.Stdout = c.stdout()
-	cmd.Stderr = c.stderr()
-	if err := cmd.Run(); err != nil {
+	cmd.Stdout, cmd.Stderr = c.commandStreams()
+	if err := runKindCommand(cmd); err != nil {
 		return fmt.Errorf("creating kind cluster %q: %w", name, err)
 	}
 	return nil

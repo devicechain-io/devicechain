@@ -70,6 +70,13 @@ type Runtime struct {
 type Console struct {
 	Stdout io.Writer
 	Stderr io.Writer
+	// Flush waits for previously emitted events to be rendered, when the
+	// presenter renders asynchronously.
+	Flush func()
+	// ChildStreams optionally hands a subprocess its streams after flushing.
+	// The plain terminal presenter uses this to preserve inherited file
+	// descriptors; other consoles keep using the writers above.
+	ChildStreams func() (io.Writer, io.Writer)
 }
 
 // Reporter is the engine's side of the hub.
