@@ -157,6 +157,36 @@ func TestAWriteBeforeTheDeviceLockIsSeenByChangedSince(t *testing.T) {
 	require.Equal(t, "v2", *f.k(t, f.devs[0]), "the interactive write survives")
 }
 
+// The device lock does not serialise with revision minting: a configuration sync mints under the
+// configuration lock alone. A sync that has minted, but not committed, a revision without the key and then
+// one with it again must still be seen by changed-since, however the reversal's post interleaves with it.
+func TestAnUncommittedSyncRevisionIsSeenByChangedSince(t *testing.T) {
+	f := newReversalPG(t)
+	d := f.devs[0]
+	rev, err := f.api.ReverseFleetOperation(f.ctx, revReq("orig", "undo"), "creator")
+	require.NoError(t, err)
+	rev = f.start(t, rev)
+
+	db := f.api.RDB.DB(f.ctx)
+	sync := db.Begin()
+	require.NoError(t, sync.Error)
+	defer sync.Rollback()
+	require.NoError(t, lockDeviceConfiguration(f.ctx, sync, d.ID))
+	for i, doc := range []string{`{}`, `{"k":"v1"}`} {
+		_, minted, err := mintConfigurationRevision(sync, d.ID, &ConfigurationDocument{Canonical: []byte(doc), Digest: fmt.Sprintf("sha256:sync-%d", i)}, nil, "sync")
+		require.NoError(t, err)
+		require.True(t, minted)
+	}
+	done := make(chan FleetPostResult, 1)
+	go func() { done <- postUntilDecided(t, f, rev) }()
+	waitForBlockedBackend(t, db)
+	require.NoError(t, sync.Commit().Error)
+	r := <-done
+	require.Equal(t, FleetPostRefused, r.Outcome, "the key left the document and came back while the reversal posted")
+	require.Equal(t, FleetLineChangedSince, r.Code)
+	require.Equal(t, "v1", *f.k(t, d), "the refused reversal wrote nothing")
+}
+
 // M30 under concurrency: retention and a reversal's create race on an original whose retention is due.
 // Whichever wins, the original's evidence is never purged under a live reversal: either the reversal
 // exists and every line is retained, or the lines are gone and the reversal was refused EVIDENCE_EXPIRED.

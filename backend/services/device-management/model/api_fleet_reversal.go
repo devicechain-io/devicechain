@@ -316,12 +316,16 @@ func (api *Api) planFleetReversal(ctx context.Context, n *fleetNormalized) (*Fle
 	return plan, counts, nil
 }
 
-// fleetReversedLines answers which of the given original lines already have an applied reversal.
+// fleetReversedLines answers which of the given original lines already have an applied reversal: a
+// retained POSTED contra, or the REVERSED event retention leaves on the original line when it purges one.
 func fleetReversedLines(db *gorm.DB, lines []FleetOperationLine) (map[uint]bool, error) {
-	out := make(map[uint]bool)
 	ids := make([]uint, 0, len(lines))
 	for _, l := range lines {
 		ids = append(ids, l.ID)
+	}
+	out, err := fleetContraRecorded(db, ids)
+	if err != nil {
+		return nil, err
 	}
 	for start := 0; start < len(ids); start += rdb.MaxLookupKeys {
 		chunk := ids[start:min(start+rdb.MaxLookupKeys, len(ids))]
@@ -334,6 +338,54 @@ func fleetReversedLines(db *gorm.DB, lines []FleetOperationLine) (map[uint]bool,
 		}
 	}
 	return out, nil
+}
+
+// fleetEventReversed is left on an original line when retention purges the applied reversal line that
+// restored it. The contra line and its unique-index entry go with the reversal's lines, while the original
+// may be retained much longer (its evidence still open): without this record a later reversal could
+// restore the same line a second time. It holds no identifier and leaves with the original's lines.
+const fleetEventReversed = "REVERSED"
+
+// fleetContraRecorded answers which of the given original lines carry a REVERSED event.
+func fleetContraRecorded(db *gorm.DB, ids []uint) (map[uint]bool, error) {
+	out := make(map[uint]bool)
+	for start := 0; start < len(ids); start += rdb.MaxLookupKeys {
+		chunk := ids[start:min(start+rdb.MaxLookupKeys, len(ids))]
+		var events []FleetOperationEvent
+		if err := db.Select("line_id").Where("kind = ? AND line_id IN ?", fleetEventReversed, chunk).Find(&events).Error; err != nil {
+			return nil, err
+		}
+		for _, e := range events {
+			out[uint(e.LineId.Int64)] = true
+		}
+	}
+	return out, nil
+}
+
+// fleetRecordPurgedContrasOnTx runs in retention's transaction, under the reversal's own fence, just before
+// a chunk of its lines is deleted: every applied contra in the chunk becomes a REVERSED event on the line it
+// restored, in the same transaction, so there is no moment at which neither record exists.
+func fleetRecordPurgedContrasOnTx(tx *gorm.DB, op *FleetOperation, lineIDs *gorm.DB) error {
+	if !op.ReversalOf.Valid {
+		return nil
+	}
+	var contras []FleetOperationLine
+	if err := tx.Select("id", "reverses_line_id").Where("id IN (?) AND posting = ? AND reverses_line_id IS NOT NULL", lineIDs, FleetPostingPosted).
+		Find(&contras).Error; err != nil {
+		return err
+	}
+	if len(contras) == 0 {
+		return nil
+	}
+	at, err := fleetMaintenanceNow(tx)
+	if err != nil {
+		return err
+	}
+	events := make([]FleetOperationEvent, len(contras))
+	for i, c := range contras {
+		events[i] = FleetOperationEvent{OperationId: op.ReversalOf.Int64, LineId: c.ReversesLineId, At: at, Kind: fleetEventReversed}
+	}
+	return tx.CreateInBatches(&events, fleetLinesPerInsert).Error
 }
 
 // fleetReversalOriginal reads a reversal request's original and answers the normalized request.
@@ -389,11 +441,6 @@ func (api *Api) ReverseFleetOperation(ctx context.Context, req *FleetReversalReq
 	if !fleetKindExecutable(FleetKindConfigSet) {
 		return nil, fleetErr(FleetCodeKindNotExecutable, "kind %q cannot be executed by this build", FleetKindConfigSet)
 	}
-	if req.wantsOverride() {
-		if _, _, err := api.fleetSecondFactor(ctx, "overriding a change in a reversal", "reversed with an override"); err != nil {
-			return nil, err
-		}
-	}
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok || tenant == "" {
 		return nil, errors.New("a bulk change needs a tenant in the context")
@@ -414,6 +461,14 @@ func (api *Api) ReverseFleetOperation(ctx context.Context, req *FleetReversalReq
 		}
 		if existing.Dispatch != FleetDispatchPlanning {
 			return existing, nil
+		}
+	}
+	// Step-up guards a write, so it comes after the replay probe: replaying a reversal that was created
+	// writes nothing and needs no fresh factor. Finishing a header an earlier call left in PLANNING does
+	// write, and is checked like a first create.
+	if req.wantsOverride() {
+		if _, _, err := api.fleetSecondFactor(ctx, "overriding a change in a reversal", "reversed with an override"); err != nil {
+			return nil, err
 		}
 	}
 	if err := fleetReversalAdmissible(n.reversal.original); err != nil {
@@ -468,6 +523,8 @@ type fleetReversalPost struct {
 	changed bool
 	// decided is a refusal; nothing is written.
 	decided *fleetDecision
+	// original is the line being reversed, for the revision walk after the effect.
+	original *FleetOperationLine
 }
 
 // fleetReversalOnTx judges one reversal line inside the posting transaction. The caller holds the device
@@ -505,46 +562,62 @@ func fleetReversalOnTx(tx *gorm.DB, op *FleetOperation, line *FleetOperationLine
 		}
 		return refuse(FleetLineAlreadyReversed, fmt.Sprintf("already reversed by line %d of bulk change %q", winners[0].Ordinal, w.Token))
 	}
-	changed, err := fleetChangedSince(tx, devID, intent.Key, &orig)
+	if reversed, err := fleetContraRecorded(tx, []uint{orig.ID}); err != nil {
+		return nil, err
+	} else if reversed[orig.ID] {
+		return refuse(FleetLineAlreadyReversed, "already reversed by a bulk change whose lines are past retention")
+	}
+	// Changed-since, first half: the generation. Only an attribute writer advances it, and every one of
+	// them holds the device lock this transaction holds, so this read cannot go stale before the effect.
+	var posted fleetValueImage
+	if err := json.Unmarshal([]byte(orig.PostedValue.String), &posted); err != nil {
+		return nil, err
+	}
+	gen, _, err := attributeGeneration(tx, devID, string(AttributeScopeShared), intent.Key)
 	if err != nil {
 		return nil, err
 	}
+	changed := gen != posted.Generation
 	if changed && !line.OverrideChanged {
-		return refuse(FleetLineChangedSince, "the key changed after the original was applied; reverse it again with an override to apply it anyway")
+		return refuse(FleetLineChangedSince, fleetChangedSinceDetail)
 	}
 	var prior fleetValueImage
 	if err := json.Unmarshal([]byte(orig.Prior.String), &prior); err != nil {
 		return nil, err
 	}
 	prior.Generation = 0
-	return &fleetReversalPost{target: prior, changed: changed}, nil
+	return &fleetReversalPost{target: prior, changed: changed, original: &orig}, nil
 }
 
-// fleetChangedSince reports whether the device's key changed after the original line was applied. Two
-// checks, and either one is enough:
+const fleetChangedSinceDetail = "the key changed after the original was applied; reverse it again with an override to apply it anyway"
+
+// fleetReversalRevisionsOnTx is changed-since, second half: the revision walk. It runs AFTER the effect,
+// under the device's configuration lock. The device lock does not serialise with revision minting: a
+// configuration sync mints under the configuration lock alone, so a walk taken earlier could miss a
+// revision a sync had minted and not yet committed. Under the configuration lock every revision minted
+// before this one is committed and visible (each statement reads a fresh snapshot), and the walk stops
+// below the revision this transaction minted itself, if it minted one.
+func fleetReversalRevisionsOnTx(ctx context.Context, tx *gorm.DB, devID uint, key string, orig *FleetOperationLine, minted *DeviceConfigurationRevision) (bool, error) {
+	if err := lockDeviceConfiguration(ctx, tx, devID); err != nil {
+		return false, err
+	}
+	before := int64(0)
+	if minted != nil {
+		before = minted.Revision
+	}
+	return fleetRevisionsChangedKey(tx, devID, key, orig.PostedRevision, before)
+}
+
+// Changed-since asks two questions, and either answer is enough:
 //  1. the key's generation differs from the one the original recorded. Every attribute write advances
 //     it, so this sees a write that minted no revision (the key undeclared at the time) and a write that
 //     put back the same value;
 //  2. some configuration revision after the original's changed the key's presence, value or type
 //     relative to its predecessor. This sees a change that wrote no attribute, such as a profile that
 //     stopped declaring the key and then declared it again: the current value alone would look untouched.
-func fleetChangedSince(db *gorm.DB, devID uint, key string, orig *FleetOperationLine) (bool, error) {
-	var posted fleetValueImage
-	if err := json.Unmarshal([]byte(orig.PostedValue.String), &posted); err != nil {
-		return false, err
-	}
-	gen, _, err := attributeGeneration(db, devID, string(AttributeScopeShared), key)
-	if err != nil {
-		return false, err
-	}
-	if gen != posted.Generation {
-		return true, nil
-	}
-	return fleetRevisionsChangedKey(db, devID, key, orig.PostedRevision)
-}
 
 // fleetCountChangedSince counts, for a preview, the original lines whose key changed since they were
-// applied. It asks the same two questions as fleetChangedSince, but in batches: the generation heads and
+// applied. It asks the same two questions as the posting transaction, but in batches: the generation heads and
 // the latest revision of every device in one read per chunk, and the revision walk only for a device that
 // minted a revision after the original's. A device with no newer revision and the same generation is
 // unchanged without a walk, which is the common case for an undo soon after the change.
@@ -592,7 +665,7 @@ func fleetCountChangedSince(db *gorm.DB, key string, lines []FleetOperationLine)
 			if (!minted && !l.PostedRevision.Valid) || (minted && l.PostedRevision.Valid && top <= l.PostedRevision.Int64) {
 				continue // no revision after the original's: nothing to walk
 			}
-			moved, err := fleetRevisionsChangedKey(db, uint(dev), key, l.PostedRevision)
+			moved, err := fleetRevisionsChangedKey(db, uint(dev), key, l.PostedRevision, 0)
 			if err != nil {
 				return 0, err
 			}
@@ -607,10 +680,11 @@ func fleetCountChangedSince(db *gorm.DB, key string, lines []FleetOperationLine)
 // fleetRevisionWalkChunk bounds how many revision documents one read of the walk holds.
 const fleetRevisionWalkChunk = 100
 
-// fleetRevisionsChangedKey walks the device's revisions from the original's (its baseline) to the latest
-// and reports whether any of them changed the key relative to its predecessor. An original that minted no
-// revision because the device had none counts every later appearance of the key as a change.
-func fleetRevisionsChangedKey(db *gorm.DB, devID uint, key string, from sql.NullInt64) (bool, error) {
+// fleetRevisionsChangedKey walks the device's revisions from the original's (its baseline) to the latest,
+// or to the last one below before when before is not 0, and reports whether any of them changed the key
+// relative to its predecessor. An original that minted no revision because the device had none counts
+// every later appearance of the key as a change.
+func fleetRevisionsChangedKey(db *gorm.DB, devID uint, key string, from sql.NullInt64, before int64) (bool, error) {
 	after := int64(0)
 	var prev *string
 	started := !from.Valid
@@ -619,8 +693,11 @@ func fleetRevisionsChangedKey(db *gorm.DB, devID uint, key string, from sql.Null
 	}
 	for {
 		var revs []DeviceConfigurationRevision
-		if err := db.Select("revision", "document").Where("device_id = ? AND revision > ?", devID, after).
-			Order("revision").Limit(fleetRevisionWalkChunk).Find(&revs).Error; err != nil {
+		q := db.Select("revision", "document").Where("device_id = ? AND revision > ?", devID, after)
+		if before > 0 {
+			q = q.Where("revision < ?", before)
+		}
+		if err := q.Order("revision").Limit(fleetRevisionWalkChunk).Find(&revs).Error; err != nil {
 			return false, err
 		}
 		if len(revs) == 0 {

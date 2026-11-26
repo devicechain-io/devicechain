@@ -230,6 +230,7 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 			target.ValueType, target.Value = intent.ValueType, intent.Value
 		}
 		overridden := false
+		var reversing *fleetReversalPost
 		if intent.Reverse || line.ReversesLineId.Valid {
 			rev, err := fleetReversalOnTx(tx, &op, &line, devID, intent)
 			if err != nil {
@@ -239,7 +240,7 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 				decided = rev.decided
 				return errPostDecided
 			}
-			target, overridden = rev.target, rev.changed
+			target, overridden, reversing = rev.target, rev.changed, rev
 		}
 		// 7. Before-image, effect, recompute: the primitive's own path, under the lock this transaction holds.
 		priorGen, _, err := attributeGeneration(tx, devID, string(AttributeScopeShared), intent.Key)
@@ -271,6 +272,18 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 		}
 		if err != nil {
 			return err
+		}
+		if reversing != nil && !overridden {
+			// Changed-since, second half: the revision walk, after the effect and under the configuration lock.
+			moved, err := fleetReversalRevisionsOnTx(postCtx, tx, devID, intent.Key, reversing.original, minted)
+			if err != nil {
+				return err
+			}
+			if moved && !line.OverrideChanged {
+				decided = &fleetDecision{FleetPostingRefused, FleetLineChangedSince, fleetChangedSinceDetail}
+				return errPostDecided // the effect rolls back with the transaction
+			}
+			overridden = moved
 		}
 		revision := sql.NullInt64{}
 		if minted != nil {

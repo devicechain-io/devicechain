@@ -118,7 +118,7 @@ func (api *Api) RetainFleetOperations(ctx context.Context, now time.Time) error 
 						return err
 					}
 				}
-				if err := fleetPurgeEvidenceChunk(tx, op.ID); err != nil {
+				if err := fleetPurgeEvidenceChunk(tx, &op); err != nil {
 					return err
 				}
 				var remaining int64
@@ -154,8 +154,12 @@ func (api *Api) RetainFleetOperations(ctx context.Context, now time.Time) error 
 	return errors.Join(failures...)
 }
 
-func fleetPurgeEvidenceChunk(tx *gorm.DB, id uint) error {
+func fleetPurgeEvidenceChunk(tx *gorm.DB, op *FleetOperation) error {
+	id := op.ID
 	lines := tx.Model(&FleetOperationLine{}).Select("id").Where("operation_id = ?", id).Order("id").Limit(fleetMaintenanceChunk)
+	if err := fleetRecordPurgedContrasOnTx(tx, op, lines); err != nil {
+		return err
+	}
 	if err := tx.Where("id IN (?)", lines).Delete(&FleetOperationLine{}).Error; err != nil {
 		return err
 	}
