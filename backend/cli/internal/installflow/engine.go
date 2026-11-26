@@ -62,6 +62,16 @@ type Runtime struct {
 	// presenter that draws its own screen passes writers that feed the hub's
 	// log ring. The engine never writes to os.Stdout or os.Stderr itself.
 	Console Console
+	// ObserveTools asks the engine to run a tool in its machine-readable mode where
+	// that is the only way to observe its progress (OpenTofu's apply -json), and to
+	// report what it observes as measured progress.
+	//
+	// 🔴 IT CHANGES THE TOOL'S OWN TEXT ON Console. In that mode the console gets
+	// the lines the engine renders from the tool's messages, not the tool's human
+	// output, so a presenter that must reproduce today's bytes (the plain one)
+	// leaves it off. Readiness gates are reported either way: they change nothing
+	// a presenter prints.
+	ObserveTools bool
 }
 
 // Console is the pair of writers an engine's human-readable output goes to,
