@@ -10265,9 +10265,9 @@ input BulkChangeSearchCriteria {
   pageNumber: Int!
   """Preview. Rows per page."""
   pageSize: Int!
-  """Preview. Only operations in this dispatch state."""
+  """Preview. Only operations in this dispatch state, one of the BulkChangeDispatch values. Any other value is refused."""
   dispatch: String
-  """Preview. Only operations in this evidence state."""
+  """Preview. Only operations in this evidence state, one of the BulkChangeEvidence values. Any other value is refused."""
   evidence: String
   """Preview. Only operations of this kind."""
   kind: String
@@ -10279,12 +10279,14 @@ input BulkChangeLineSearchCriteria {
   pageNumber: Int!
   """Preview. Rows per page."""
   pageSize: Int!
-  """Preview. Only lines in this posting state."""
+  """Preview. Only lines in this posting state, one of the BulkChangeLinePosting values. Any other value is refused."""
   posting: String
-  """Preview. Only lines with this settlement."""
+  """Preview. Only lines with this settlement, one of the BulkChangeLineSettlement values. Any other value is refused."""
   settlement: String
   """Preview. Only lines with this code."""
   code: String
+  """Preview. Only lines after this ordinal. To read every line of a running operation, ask for page 1 after the last ordinal read until a page is empty: a page number skips lines when the driver or settlement moves lines out of the filter between pages."""
+  afterOrdinal: Int
 }
 
 """Preview. A change to the limits an operation runs under when it is resumed. Anything looser than the approved contract is refused."""

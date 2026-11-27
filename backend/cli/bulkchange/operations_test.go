@@ -262,7 +262,7 @@ func TestLinesPagingFiltersAndCSVQuoting(t *testing.T) {
 		}
 		pages++
 		criteria := vars["criteria"].(map[string]any)
-		if criteria["pageNumber"] != float64(pages) || criteria["posting"] != "POSTED" || criteria["settlement"] != "FAILED" {
+		if criteria["pageNumber"] != float64(1) || (pages == 1) != (criteria["afterOrdinal"] == nil) || pages > 1 && criteria["afterOrdinal"] != float64(pages-1) || criteria["posting"] != "POSTED" || criteria["settlement"] != "FAILED" {
 			t.Errorf("lost paging/filter: %v", criteria)
 		}
 		return data("lines", map[string]any{"results": []Line{{Ordinal: pages, TargetToken: &token, Posting: "POSTED", Detail: &detail}}, "pagination": map[string]any{"pageStart": pages, "pageEnd": pages, "totalRecords": 2}})
@@ -367,6 +367,61 @@ func TestResumePreviewRefusalsNeverDispatch(t *testing.T) {
 		})
 		if _, err := a.Control(t.Context(), "resume", "t", "", nil); err == nil || calls != 1 {
 			t.Fatalf("unsafe preview succeeded: %v calls=%d", err, calls)
+		}
+	}
+}
+
+// The driver posts PLANNED lines in ordinal order while the listing reads, so the filtered set loses
+// its lowest members between pages. Every line that matched the filter the whole time must come back.
+func TestLinesPagesOnTheLastOrdinalWhileTheFilteredSetShrinks(t *testing.T) {
+	const total, posted = 2500, 300
+	planned := map[int]bool{}
+	for o := 1; o <= total; o++ {
+		planned[o] = true
+	}
+	pages := 0
+	a := testAPI(t, bulkChangeTestSDL(t), func(query string, vars map[string]any) any {
+		if query == statusQuery {
+			return data("change", Change{Token: "t"})
+		}
+		if pages > 0 {
+			// Between two pages the driver posts the lowest PLANNED lines.
+			for o, n := 1, 0; o <= total && n < posted; o++ {
+				if planned[o] {
+					delete(planned, o)
+					n++
+				}
+			}
+		}
+		pages++
+		criteria := vars["criteria"].(map[string]any)
+		after := 0
+		if v, ok := criteria["afterOrdinal"].(float64); ok {
+			after = int(v)
+		}
+		var matching []Line
+		for o := after + 1; o <= total; o++ {
+			if planned[o] {
+				matching = append(matching, Line{Ordinal: o, Posting: "PLANNED"})
+			}
+		}
+		number, size := int(criteria["pageNumber"].(float64)), int(criteria["pageSize"].(float64))
+		start := min((number-1)*size, len(matching))
+		end := min(start+size, len(matching))
+		return data("lines", map[string]any{"results": matching[start:end],
+			"pagination": map[string]any{"pageStart": start + 1, "pageEnd": end, "totalRecords": len(matching)}})
+	})
+	lines, err := a.Lines(t.Context(), "t", "PLANNED", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int]bool{}
+	for _, l := range lines {
+		got[l.Ordinal] = true
+	}
+	for o := range planned {
+		if !got[o] {
+			t.Fatalf("line %d was PLANNED throughout but never listed (%d lines in %d pages)", o, len(lines), pages)
 		}
 	}
 }
