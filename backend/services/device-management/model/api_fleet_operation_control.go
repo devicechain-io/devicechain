@@ -392,12 +392,22 @@ func (api *Api) fleetAdmitDispatching(ctx context.Context, tx *gorm.DB, tenant s
 
 // Count line state, irrespective of the header's dispatch/evidence: aborted operations
 // can still be awaiting evidence. Only the candidate's remaining plans add new exposure.
+//
+// Two counts, of disjoint sets (POSTED, and the candidate's PLANNED), each written so an index
+// answers it: the open lines are exactly the predicate of the partial index
+// ix_fleet_operation_lines_evidence_open (keyed by tenant), and the candidate's plans are its
+// (operation_id) range. As one OR'd predicate no index served the AMBIGUOUS arm, so the count read
+// every retained line under the admission locks. The literals are the index's predicate, spelled
+// as it is, so the planner can prove the index applies.
 func fleetEvidenceOpenCount(tx *gorm.DB, op *FleetOperation) (int64, error) {
-	var n int64
-	err := tx.Model(&FleetOperationLine{}).Where(`((posting = ? AND (settlement IS NULL OR settlement = ?) AND code <> ?)
-		OR (operation_id = ? AND posting = ?))`, FleetPostingPosted, string(ledger.SettlementAmbiguous), "TARGET_ERASED",
-		op.ID, FleetPostingPlanned).Count(&n).Error
-	return n, err
+	var open, planned int64
+	if err := tx.Model(&FleetOperationLine{}).
+		Where("posting = 'POSTED' AND (settlement IS NULL OR settlement = 'AMBIGUOUS') AND code <> 'TARGET_ERASED'").
+		Count(&open).Error; err != nil {
+		return 0, err
+	}
+	err := tx.Model(&FleetOperationLine{}).Where("operation_id = ? AND posting = ?", op.ID, FleetPostingPlanned).Count(&planned).Error
+	return open + planned, err
 }
 
 // PauseFleetOperation moves a RUNNING operation to PAUSED. Once it returns, no line of the operation

@@ -580,6 +580,7 @@ CREATE INDEX ix_entity_attributes_facet_lookup ON "device-management".entity_att
 CREATE INDEX ix_entity_attributes_facet_value ON "device-management".entity_attributes USING btree (tenant_id, entity_type, scope, attr_key, value) WHERE (deleted_at IS NULL);
 CREATE INDEX ix_entity_attributes_list_order ON "device-management".entity_attributes USING btree (tenant_id, created_at DESC, id DESC) WHERE (deleted_at IS NULL);
 CREATE INDEX ix_entity_relationships_list_order ON "device-management".entity_relationships USING btree (tenant_id, created_at DESC, token) WHERE (deleted_at IS NULL);
+CREATE INDEX ix_fleet_operation_lines_evidence_open ON "device-management".fleet_operation_lines USING btree (tenant_id) WHERE (((posting)::text = 'POSTED'::text) AND ((settlement IS NULL) OR ((settlement)::text = 'AMBIGUOUS'::text)) AND ((code)::text <> 'TARGET_ERASED'::text));
 CREATE INDEX ix_fleet_operation_lines_tenant_awaiting ON "device-management".fleet_operation_lines USING btree (tenant_id, id) WHERE (((posting)::text = 'POSTED'::text) AND (evidence_revision IS NULL) AND (redacted_at IS NULL));
 CREATE INDEX ix_fleet_operation_lines_unsettled ON "device-management".fleet_operation_lines USING btree (operation_id) WHERE (((posting)::text = 'POSTED'::text) AND (evidence_revision IS NULL) AND (redacted_at IS NULL) AND (settlement IS NULL));
 CREATE INDEX ix_geo_fences_list_order ON "device-management".geo_fences USING btree (tenant_id, created_at DESC, token) WHERE (deleted_at IS NULL);
@@ -1898,6 +1899,7 @@ CREATE TABLE "device-management".fleet_operations (
  created_by character varying(320),
  state_changed_by character varying(320),
  state_changed_at timestamp with time zone,
+ purged_line_count integer DEFAULT 0 NOT NULL,
  CONSTRAINT chk_fleet_operations_dispatch CHECK (((dispatch)::text = ANY ((ARRAY['PLANNING'::character varying, 'READY'::character varying, 'RUNNING'::character varying, 'PAUSED'::character varying, 'DISPATCHED'::character varying, 'ABORTED'::character varying, 'DRAFT'::character varying])::text[]))),
  CONSTRAINT chk_fleet_operations_driver_protocol CHECK ((driver_protocol >= 1)),
  CONSTRAINT chk_fleet_operations_evidence CHECK (((evidence)::text = ANY ((ARRAY['OPEN'::character varying, 'CLOSED'::character varying])::text[])))

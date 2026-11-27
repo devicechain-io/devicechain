@@ -75,6 +75,11 @@ type FleetOperation struct {
 
 	PostedLineCount   int32 `gorm:"not null;default:0"`
 	ReversedLineCount int32 `gorm:"not null;default:0"`
+	// PurgedLineCount is how many of the operation's target_count lines retention has deleted, in
+	// the transaction that deleted them, so the lines an operation still holds are target_count
+	// minus it, read from the header. Admission counts retained lines that way. A previous-release
+	// pod's purge does not add to it, which only overstates what the operation holds.
+	PurgedLineCount int32 `gorm:"not null;default:0"`
 
 	CreatedBy      sql.NullString `gorm:"size:320"`
 	StateChangedBy sql.NullString `gorm:"size:320"`

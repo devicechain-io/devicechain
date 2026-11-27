@@ -90,5 +90,7 @@ var (
 		NewRuleProvenanceSchema(),
 		NewFleetLineTenantAwaitingIndexSchema(),
 		NewFleetLineUnsettledIndexSchema(),
+		NewFleetOperationPurgedLineCountSchema(),
+		NewFleetLineEvidenceOpenIndexSchema(),
 	}
 )

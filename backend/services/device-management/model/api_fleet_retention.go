@@ -195,6 +195,14 @@ func fleetPurgeEvidenceChunk(tx *gorm.DB, op *FleetOperation, counts fleetRowCou
 		return res.Error
 	}
 	counts.add("lines", res.RowsAffected)
+	// In the same transaction as the delete: admission reads the lines an operation still holds as
+	// target_count - purged_line_count, so the two must never disagree.
+	if res.RowsAffected != 0 {
+		if err := tx.Model(&FleetOperation{ID: id}).
+			UpdateColumn("purged_line_count", gorm.Expr("purged_line_count + ?", res.RowsAffected)).Error; err != nil {
+			return err
+		}
+	}
 	var events []uint
 	if err := tx.Model(&FleetOperationEvent{}).Where("operation_id = ? AND (line_id IS NOT NULL OR kind IN ('RESOLUTION','VERDICT','CONTRADICTING_EVIDENCE','OVERRIDE_CHANGED','REDACTED'))", id).
 		Scopes(fleetEventLockOrder).Limit(fleetMaintenanceChunk).Pluck("id", &events).Error; err != nil {
