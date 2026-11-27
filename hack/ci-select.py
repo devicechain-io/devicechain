@@ -241,7 +241,7 @@ READERS = [
         "deploy/helm/devicechain/templates/gateway.yaml",
     ], [], "processor/broker_assertion_test.go:218, integration_marks_test.go:159, connect_snippet_golden_test.go:288-289"),
     ("backend/services/event-sources", "integration", ["backend/services/device-management/graphql/**"], [], "integration/backend_test.go:32"),
-    ("backend/services/mcp", "server", [SDL], [], "server/documents_test.go:35, alarm_suppression_test.go:27, command_cause_test.go:25"),
+    ("backend/services/mcp", "server", [SDL], [], "server/documents_test.go:35, alarm_suppression_test.go:27, command_cause_test.go:25, tools_device_rolling_test.go:27"),
     ("backend/services/notification-management", "processor", ["backend/services/device-management/graphql/**"], [], "processor/alarm_lookup_wire_test.go:25"),
     # Each peer client's recorded documents, validated against the SDL its target serves
     # (documents_test.go validateDocuments: ../../<target>/graphql).
