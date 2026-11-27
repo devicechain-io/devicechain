@@ -1,0 +1,161 @@
+{
+  "compilerBuild": "core-intent/1",
+  "specs": [
+    {
+      "name": "long, dwell explicit",
+      "input": "{\"target\":{\"groupToken\":\"quay-lamps\",\"groupVersion\":3},\"point\":{\"configKey\":\"dim\"},\"value\":{\"valueType\":\"LONG\",\"value\":\"40\"},\"class\":\"SCHEDULE\",\"ceiling\":{\"maxDevices\":2000},\"reconcile\":{\"minIntervalSeconds\":60,\"maxLinesPerReconcile\":500,\"maxActuationsPerDevicePerDay\":4,\"manualDwellSeconds\":3600}}",
+      "canonical": "{\"ceiling\":{\"maxDevices\":2000},\"class\":\"SCHEDULE\",\"point\":{\"configKey\":\"dim\"},\"reconcile\":{\"manualDwellSeconds\":3600,\"maxActuationsPerDevicePerDay\":4,\"maxLinesPerReconcile\":500,\"minIntervalSeconds\":60},\"target\":{\"groupToken\":\"quay-lamps\",\"groupVersion\":3},\"value\":{\"value\":\"40\",\"valueType\":\"LONG\"}}",
+      "specDigest": "sha256:0a692f457595ab1d7c543c99811f05acae1a014565a5b55676afefb2cac53a60"
+    },
+    {
+      "name": "the same spec: dwell defaulted, keys reordered, whitespace, unset false",
+      "input": "{ \"reconcile\": {\"maxActuationsPerDevicePerDay\": 4, \"maxLinesPerReconcile\": 500, \"minIntervalSeconds\": 60},\n \"class\": \"SCHEDULE\", \"ceiling\": {\"maxDevices\": 2000},\n \"value\": {\"value\": \"40\", \"valueType\": \"LONG\", \"unset\": false}, \"point\": {\"configKey\": \"dim\"}, \"target\": {\"groupVersion\": 3, \"groupToken\": \"quay-lamps\"} }",
+      "canonical": "{\"ceiling\":{\"maxDevices\":2000},\"class\":\"SCHEDULE\",\"point\":{\"configKey\":\"dim\"},\"reconcile\":{\"manualDwellSeconds\":3600,\"maxActuationsPerDevicePerDay\":4,\"maxLinesPerReconcile\":500,\"minIntervalSeconds\":60},\"target\":{\"groupToken\":\"quay-lamps\",\"groupVersion\":3},\"value\":{\"value\":\"40\",\"valueType\":\"LONG\"}}",
+      "specDigest": "sha256:0a692f457595ab1d7c543c99811f05acae1a014565a5b55676afefb2cac53a60"
+    },
+    {
+      "name": "unset, dwell zero",
+      "input": "{\"target\":{\"groupToken\":\"quay-lamps\",\"groupVersion\":3},\"point\":{\"configKey\":\"dim\"},\"value\":{\"unset\":true},\"class\":\"SCHEDULE\",\"ceiling\":{\"maxDevices\":2000},\"reconcile\":{\"minIntervalSeconds\":60,\"maxLinesPerReconcile\":500,\"maxActuationsPerDevicePerDay\":4,\"manualDwellSeconds\":0}}",
+      "canonical": "{\"ceiling\":{\"maxDevices\":2000},\"class\":\"SCHEDULE\",\"point\":{\"configKey\":\"dim\"},\"reconcile\":{\"manualDwellSeconds\":0,\"maxActuationsPerDevicePerDay\":4,\"maxLinesPerReconcile\":500,\"minIntervalSeconds\":60},\"target\":{\"groupToken\":\"quay-lamps\",\"groupVersion\":3},\"value\":{\"unset\":true}}",
+      "specDigest": "sha256:07d779ee8c2ee9d21e01a808c98b3da1460c708050ac32791b2d21f30a8f40e0"
+    },
+    {
+      "name": "string with escapes, control characters and non-ASCII; every limit at its maximum",
+      "input": "{\"target\":{\"groupToken\":\"Signs_01\",\"groupVersion\":1},\"point\":{\"configKey\":\"banner\"},\"value\":{\"valueType\":\"STRING\",\"value\":\"quay \\\"east\\\"\\\\\\n\\u00e9 \\u2603 \\ud83d\\ude00 <&>\\u0007\\u001f\\/\"},\"class\":\"OPTIMIZATION\",\"ceiling\":{\"maxDevices\":100000},\"reconcile\":{\"minIntervalSeconds\":86400,\"maxLinesPerReconcile\":10000,\"maxActuationsPerDevicePerDay\":1440,\"manualDwellSeconds\":86400}}",
+      "canonical": "{\"ceiling\":{\"maxDevices\":100000},\"class\":\"OPTIMIZATION\",\"point\":{\"configKey\":\"banner\"},\"reconcile\":{\"manualDwellSeconds\":86400,\"maxActuationsPerDevicePerDay\":1440,\"maxLinesPerReconcile\":10000,\"minIntervalSeconds\":86400},\"target\":{\"groupToken\":\"Signs_01\",\"groupVersion\":1},\"value\":{\"value\":\"quay \\\"east\\\"\\\\\\u000aé ☃ 😀 <&>\\u0007\\u001f/\",\"valueType\":\"STRING\"}}",
+      "specDigest": "sha256:be6d90ab8b658717c769b8f2b6704423a89522a87a026fe671a954562bbd0928"
+    },
+    {
+      "name": "json value kept as exact text",
+      "input": "{\"target\":{\"groupToken\":\"g\",\"groupVersion\":2147483647},\"point\":{\"configKey\":\"profile\"},\"value\":{\"valueType\":\"JSON\",\"value\":\"{\\\"b\\\": 1, \\\"a\\\": [true, null]}\"},\"class\":\"SCHEDULE\",\"ceiling\":{\"maxDevices\":1},\"reconcile\":{\"minIntervalSeconds\":61,\"maxLinesPerReconcile\":1,\"maxActuationsPerDevicePerDay\":1}}",
+      "canonical": "{\"ceiling\":{\"maxDevices\":1},\"class\":\"SCHEDULE\",\"point\":{\"configKey\":\"profile\"},\"reconcile\":{\"manualDwellSeconds\":3600,\"maxActuationsPerDevicePerDay\":1,\"maxLinesPerReconcile\":1,\"minIntervalSeconds\":61},\"target\":{\"groupToken\":\"g\",\"groupVersion\":2147483647},\"value\":{\"value\":\"{\\\"b\\\": 1, \\\"a\\\": [true, null]}\",\"valueType\":\"JSON\"}}",
+      "specDigest": "sha256:bcacf6bb82520d8677ddd963d2bb1572dc2563798e64527ea2710049f235e885"
+    },
+    {
+      "name": "double kept as exact text",
+      "input": "{\"target\":{\"groupToken\":\"g\",\"groupVersion\":7},\"point\":{\"configKey\":\"setpoint\"},\"value\":{\"valueType\":\"DOUBLE\",\"value\":\"21.50\"},\"class\":\"OPTIMIZATION\",\"ceiling\":{\"maxDevices\":50},\"reconcile\":{\"minIntervalSeconds\":300,\"maxLinesPerReconcile\":50,\"maxActuationsPerDevicePerDay\":24}}",
+      "canonical": "{\"ceiling\":{\"maxDevices\":50},\"class\":\"OPTIMIZATION\",\"point\":{\"configKey\":\"setpoint\"},\"reconcile\":{\"manualDwellSeconds\":3600,\"maxActuationsPerDevicePerDay\":24,\"maxLinesPerReconcile\":50,\"minIntervalSeconds\":300},\"target\":{\"groupToken\":\"g\",\"groupVersion\":7},\"value\":{\"value\":\"21.50\",\"valueType\":\"DOUBLE\"}}",
+      "specDigest": "sha256:758e89f4c5ce0935da524ab50b99104357c407fbca9e0744bf8f5234bda114b7"
+    },
+    {
+      "name": "boolean",
+      "input": "{\"target\":{\"groupToken\":\"g\",\"groupVersion\":7},\"point\":{\"configKey\":\"enabled\"},\"value\":{\"valueType\":\"BOOLEAN\",\"value\":\"true\"},\"class\":\"SCHEDULE\",\"ceiling\":{\"maxDevices\":50},\"reconcile\":{\"minIntervalSeconds\":300,\"maxLinesPerReconcile\":50,\"maxActuationsPerDevicePerDay\":24}}",
+      "canonical": "{\"ceiling\":{\"maxDevices\":50},\"class\":\"SCHEDULE\",\"point\":{\"configKey\":\"enabled\"},\"reconcile\":{\"manualDwellSeconds\":3600,\"maxActuationsPerDevicePerDay\":24,\"maxLinesPerReconcile\":50,\"minIntervalSeconds\":300},\"target\":{\"groupToken\":\"g\",\"groupVersion\":7},\"value\":{\"value\":\"true\",\"valueType\":\"BOOLEAN\"}}",
+      "specDigest": "sha256:41cc666c9838ec05506763c836cf4098752fadc2f14060229763377a5d7c4d0d"
+    },
+    {
+      "name": "empty string value",
+      "input": "{\"target\":{\"groupToken\":\"g\",\"groupVersion\":7},\"point\":{\"configKey\":\"note\"},\"value\":{\"valueType\":\"STRING\",\"value\":\"\"},\"class\":\"SCHEDULE\",\"ceiling\":{\"maxDevices\":50},\"reconcile\":{\"minIntervalSeconds\":300,\"maxLinesPerReconcile\":50,\"maxActuationsPerDevicePerDay\":24}}",
+      "canonical": "{\"ceiling\":{\"maxDevices\":50},\"class\":\"SCHEDULE\",\"point\":{\"configKey\":\"note\"},\"reconcile\":{\"manualDwellSeconds\":3600,\"maxActuationsPerDevicePerDay\":24,\"maxLinesPerReconcile\":50,\"minIntervalSeconds\":300},\"target\":{\"groupToken\":\"g\",\"groupVersion\":7},\"value\":{\"value\":\"\",\"valueType\":\"STRING\"}}",
+      "specDigest": "sha256:34ccf86d47ce68fe218137dadb89d468929b2b57f51c74b0d7fcac153ab81409"
+    }
+  ],
+  "valueDigests": [
+    {
+      "valueType": "LONG",
+      "value": "40",
+      "digest": "sha256:b3b50fceac38355d8742e70ec5e937e317c5d7a484b69d5e8eb7a716aca4bc68"
+    },
+    {
+      "valueType": "STRING",
+      "value": "40",
+      "digest": "sha256:e8f4c4431eefd52b8157ee997c4ee85e4afafb210a080063061dab8dc9c8edf2"
+    },
+    {
+      "valueType": "LONG",
+      "value": "040",
+      "digest": "sha256:f8724e77c4945d4d958eb41d4a8f4e37726cd7cc615d731369d9e34398e69107"
+    },
+    {
+      "valueType": "LONG",
+      "value": "41",
+      "digest": "sha256:0118a247549d12fda59fd0674623f1dab11138df28d72dc8f59e12c8c2359b6d"
+    },
+    {
+      "valueType": "STRING",
+      "value": "",
+      "digest": "sha256:7fbe4a462c804f6d4c6a0598e794f5fcedaa01c0f45133f39d167ab284a2db36"
+    },
+    {
+      "valueType": "JSON",
+      "value": "{\"a\":1}",
+      "digest": "sha256:2f73ba41840e9cbbe25ed46d9f4783a1d3e8f2e7071a42de1b5f4f62ecb03880"
+    },
+    {
+      "valueType": "STRING",
+      "value": "é☃\n:x",
+      "digest": "sha256:3983caf9f724136481ffb2e62b46436d15119f2e3b023bc59d937e3cf22e73c9"
+    },
+    {
+      "valueType": "BOOLEAN",
+      "value": "true",
+      "digest": "sha256:56c32a662c17bddb8d13ac21b9e6c21796f89cdd5655b9a7caf99860d662b221"
+    },
+    {
+      "valueType": "DOUBLE",
+      "value": "21.50",
+      "digest": "sha256:104aea978a8856808506da904b277884b66229fd98f9a5454f1960c55e55afaf"
+    }
+  ],
+  "observations": [
+    {
+      "name": "empty target",
+      "rows": [],
+      "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "undeclared, declared and absent, in sync, declared as another type",
+      "rows": [
+        {
+          "id": 3,
+          "token": "lamp-3",
+          "declared": null,
+          "present": false,
+          "valueType": "",
+          "valueDigest": ""
+        },
+        {
+          "id": 7,
+          "token": "lamp-7",
+          "declared": "LONG",
+          "present": false,
+          "valueType": "",
+          "valueDigest": ""
+        },
+        {
+          "id": 9,
+          "token": "lamp-9",
+          "declared": "LONG",
+          "present": true,
+          "valueType": "LONG",
+          "valueDigest": "sha256:b3b50fceac38355d8742e70ec5e937e317c5d7a484b69d5e8eb7a716aca4bc68"
+        },
+        {
+          "id": 12,
+          "token": "lamp-12",
+          "declared": "STRING",
+          "present": true,
+          "valueType": "LONG",
+          "valueDigest": "sha256:0118a247549d12fda59fd0674623f1dab11138df28d72dc8f59e12c8c2359b6d"
+        }
+      ],
+      "digest": "sha256:77c49eafe75d6c2db567b540979a2c5bf32b5fa02631ffdd722e849225e3a0d8"
+    }
+  ],
+  "inputs": [
+    {
+      "specDigest": "sha256:0a692f457595ab1d7c543c99811f05acae1a014565a5b55676afefb2cac53a60",
+      "observationDigest": "sha256:77c49eafe75d6c2db567b540979a2c5bf32b5fa02631ffdd722e849225e3a0d8",
+      "instantBucket": 0,
+      "compilerBuild": "core-intent/1",
+      "digest": "sha256:4c189c197f82e45b4c6d546d9ffe7b306964f3b22eb5e1b3715719a8644707b6"
+    },
+    {
+      "specDigest": "sha256:0a692f457595ab1d7c543c99811f05acae1a014565a5b55676afefb2cac53a60",
+      "observationDigest": "sha256:77c49eafe75d6c2db567b540979a2c5bf32b5fa02631ffdd722e849225e3a0d8",
+      "instantBucket": 1,
+      "compilerBuild": "core-intent/1",
+      "digest": "sha256:8f2aca735d6343c220677059249536891cf926671de98377e37bbe5d62af05c0"
+    }
+  ]
+}
