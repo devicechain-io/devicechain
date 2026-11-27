@@ -292,6 +292,7 @@ const sidebars: SidebarsConfig = {
           collapsed: false,
           items: [
             'deployment/bootstrap',
+            'deployment/install-terminal-ui',
             'deployment/production-hardening',
             'deployment/kubernetes-operator',
             'deployment/cluster-lock',

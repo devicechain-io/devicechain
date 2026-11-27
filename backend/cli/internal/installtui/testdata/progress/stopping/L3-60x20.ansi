@@ -1,0 +1,20 @@
+ \x1b[1mDeviceChain\x1b[m · Installing · kind-devicechain
+ Overall  \x1b[38;5;78m██████████\x1b[m\x1b[38;5;109m░░░░░░░░░░\x1b[m  3/6 stages
+ \x1b[38;5;109mElapsed 06:45 · Remaining: unknown · last observation 5s …\x1b[m
+ 
+ \x1b[38;5;78mDONE\x1b[m  Resolve target / cluster      \x1b[38;5;78m████████\x1b[m  done
+ \x1b[38;5;78mDONE\x1b[m  Identity, refusals and claim  \x1b[38;5;78m████████\x1b[m  done
+ \x1b[38;5;78mDONE\x1b[m  Credentials and operator      \x1b[38;5;78m████████\x1b[m  done
+ \x1b[38;5;38mRUN \x1b[m  Cluster prerequisites         \x1b[38;5;38m█████\x1b[m\x1b[38;5;109m░░░\x1b[m  41/63 actio…
+ \x1b[38;5;109mWAIT\x1b[m  Base identity and record      \x1b[38;5;109m────────\x1b[m
+ \x1b[38;5;109mWAIT\x1b[m  Relational store ready        \x1b[38;5;109m────────\x1b[m
+ 
+ \x1b[38;5;221mInterrupt received. Waiting for the operation to stop saf…\x1b[m
+ Press Ctrl+C again to exit immediately without waiting.
+ ▸ Logs \x1b[38;5;109m(collapsed · 312 lines kept · l to open)\x1b[m
+ 
+ 
+ 
+ 
+ 
+ \x1b[38;5;109ml\x1b[m logs  \x1b[38;5;109mCtrl+C again\x1b[m force exit

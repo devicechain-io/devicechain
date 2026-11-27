@@ -1,0 +1,20 @@
+ \x1b[1mDeviceChain\x1b[m - Installing - kind-devicechain
+ Overall  ##########..........  3/6 stages
+ Elapsed 06:45 - Remaining: unknown - last observation 5...
+ 
+ DONE  Resolve target / cluster      ########  done
+ DONE  Identity, refusals and claim  ########  done
+ DONE  Credentials and operator      ########  done
+ RUN   Cluster prerequisites         #####...  41/63 act...
+ WAIT  Base identity and record      --------
+ WAIT  Relational store ready        --------
+ 
+ Interrupt received. Waiting for the operation to stop s...
+ Press Ctrl+C again to exit immediately without waiting.
+ > Logs (collapsed - 312 lines kept - l to open)
+ 
+ 
+ 
+ 
+ 
+ l logs  Ctrl+C again force exit

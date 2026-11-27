@@ -522,6 +522,7 @@ class PackageGraph:
 
     def __init__(self, ws, root=ROOT):
         self.ws = ws
+        self.root = root
         self.pkgs = {}
         self.missing = set()  # workspace imports with no package in the tree, from the last closure()
         bypath = sorted(ws.modpaths.items(), key=lambda kv: -len(kv[0]))
@@ -616,6 +617,8 @@ class Selection:
         self.migrations_why = "runs: everything runs"
         self.fleet_runner = True
         self.fleet_runner_why = "runs: everything runs"
+        self.tui_windows = True
+        self.tui_windows_why = "runs: everything runs"
         self.draft = False
         # The race step's scope on a pull request: {module: set of package dirs to race}, a module
         # missing from it racing nothing; None races every leg in full. See race_select.
@@ -664,6 +667,100 @@ FLEET_RUNNER_INPUTS = [
     "go.work.sum",
     ".gitignore",
 ]
+
+# The `tui-windows` job: the install terminal UI's packages and the cmd package (its entry
+# selection and the ConPTY smoke test), run natively on windows-latest. It runs when a changed file
+# reaches a package the TUI roots below compile THAT IS IN backend/cli, or is one of the
+# TUI_WINDOWS_INPUTS (the install command's own files in cmd, its preflight, Execute's signal
+# handling in root.go, the install characterisation goldens), or is a Go file in backend/cli that
+# only a Windows build compiles (windows_only).
+#
+# 🔴 WINDOWS-ONLY FILES ALWAYS RUN IT. A file named *_windows.go, or one whose //go:build line
+# selects windows, is compiled by no Linux test: only the Windows vet type-checks it, and only this
+# job runs it. cmd/preflight_freebytes_windows.go reading zero free bytes would pass every Linux
+# leg and the Windows vet, so a change to any such file in backend/cli runs the job, whichever
+# package holds it.
+#
+# 🔴 WHY ONLY backend/cli'S SIDE OF THE CLOSURE. The roots also compile ~20 core packages (and a few
+# of k8s and deploy), and a change to one of those runs every backend/cli Go leg, whose
+# `go vet (windows)` step already type-checks the whole module and its tests for GOOS=windows.
+# What this job adds is RUNNING on a Windows console, and the console behaviour it tests (the
+# probe, the console modes, the stdin gate, Ctrl+C) lives in backend/cli. A Windows-only runtime
+# break reached through a core change surfaces on main's full run instead, which always runs this
+# job: the same tradeoff the race step's direct-importer scope makes. Widening it is dropping the
+# module filter in tui_windows_verdict.
+TUI_WINDOWS_MODULE = "backend/cli"
+TUI_WINDOWS_ROOTS = [
+    ("backend/cli/internal/installtui", True),
+    ("backend/cli/internal/installflow", True),
+    ("backend/cli/internal/installplain", False),
+    ("backend/cli/internal/installchoice", False),
+]
+TUI_WINDOWS_INPUTS = [
+    "backend/cli/cmd/install*",
+    "backend/cli/cmd/preflight*",
+    "backend/cli/cmd/root.go",
+    "backend/cli/cmd/testdata/install_golden/**",
+]
+_WINDOWS_FILE = re.compile(r"_windows(_[a-z0-9]+)?(_test)?\.go$")
+_BUILD_LINE = re.compile(r"^//go:build (.+)$", re.M)
+_SELECTS_WINDOWS = re.compile(r"(?<![!\w])windows\b")
+
+
+def windows_only(path, root=ROOT):
+    """Is `path` a Go file that a Windows build compiles and a Linux one does not: named for windows
+    (the go command's GOOS file-name suffix), or with a //go:build line that selects windows? A
+    deleted file is decided by its name alone."""
+    if not path.endswith(".go"):
+        return False
+    if _WINDOWS_FILE.search(os.path.basename(path)):
+        return True
+    try:
+        with open(os.path.join(root, path), encoding="utf-8", errors="replace") as fh:
+            head = fh.read(8192)
+    except OSError:
+        return False
+    m = _BUILD_LINE.search(head)
+    return bool(m and _SELECTS_WINDOWS.search(m.group(1)))
+
+
+def tui_windows_verdict(s, files, graph):
+    """Sets s.tui_windows. A full selection always runs the job; otherwise a changed file must reach
+    a backend/cli package the TUI roots compile, or be one of TUI_WINDOWS_INPUTS."""
+    if s.full:
+        s.tui_windows, s.tui_windows_why = True, "runs: everything runs"
+        return
+    for f in files:
+        if match(f, TUI_WINDOWS_INPUTS):
+            s.tui_windows, s.tui_windows_why = True, "runs: %s is an input of the install command" % f
+            return
+        if f.startswith(TUI_WINDOWS_MODULE + "/") and windows_only(f, graph.root if graph is not None else ROOT):
+            s.tui_windows, s.tui_windows_why = True, "runs: %s is compiled only for Windows" % f
+            return
+    if graph is None:
+        inside = [f for f in files if f.startswith(TUI_WINDOWS_MODULE + "/")]
+        s.tui_windows = bool(inside)
+        if inside:
+            s.tui_windows_why = "runs: no package graph to decide from, and %s is in %s" % (inside[0], TUI_WINDOWS_MODULE)
+        else:
+            s.tui_windows_why = "skipped: no changed file is in %s" % TUI_WINDOWS_MODULE
+        return
+    try:
+        closure = {p for p in graph.closure(TUI_WINDOWS_ROOTS)
+                   if p == TUI_WINDOWS_MODULE or p.startswith(TUI_WINDOWS_MODULE + "/")}
+    except RuntimeError as e:  # a root with no package: moved or deleted, so cannot tell
+        s.tui_windows, s.tui_windows_why = True, "runs: %s" % e
+        return
+    if graph.missing:
+        s.tui_windows, s.tui_windows_why = True, "runs: the TUI roots import %s, which has no Go file in this tree" % sorted(graph.missing)[0]
+        return
+    for f in files:
+        if graph.hits(f, closure):
+            s.tui_windows, s.tui_windows_why = True, "runs: %s is in a package the terminal UI compiles" % f
+            return
+    s.tui_windows = False
+    s.tui_windows_why = ("skipped: no changed file reaches the %d %s packages the terminal UI compiles, or the install command"
+                         % (len(closure), TUI_WINDOWS_MODULE))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -972,6 +1069,7 @@ def select(ws, changed_files, graph=None):
         if m in whole:
             del s.readers[m]
     migrations_verdict(s, files, graph)
+    tui_windows_verdict(s, files, graph)
     race_select(ws, s, files, graph)
     return s
 
@@ -1276,6 +1374,7 @@ def report(ws, s, go, integ, integration_plan, smoke=(), smoke_all=(), out=sys.s
     p("frontend: " + s.frontend_why)
     p("migrations: " + s.migrations_why)
     p("fleet-runner: " + s.fleet_runner_why)
+    p("tui-windows: " + s.tui_windows_why)
 
 
 def full_selection(ws, why):
@@ -1331,7 +1430,10 @@ def cmd_plan():
     report(ws, s, go, integ, integration_plan, smoke, smoke_all)
     if s.full and not s.draft and not s.migrations:
         raise RuntimeError("a full run skipped the migrations jobs")
+    if s.full and not s.draft and not s.tui_windows:
+        raise RuntimeError("a full run skipped the tui-windows job")
     print(json.dumps({"go": go, "integration": integ, "smoke": smoke, "frontend": s.frontend, "migrations": s.migrations, "fleet_runner": s.fleet_runner,
+                      "tui_windows": s.tui_windows,
                       "full": s.full, "draft": s.draft}, separators=(",", ":")))
 
 
@@ -1340,6 +1442,7 @@ def mark_draft(s):
     s.draft = True
     s.migrations, s.migrations_why = False, "skipped: the pull request is a draft (runs when it is marked ready)"
     s.fleet_runner, s.fleet_runner_why = False, "skipped: the pull request is a draft (runs when it is marked ready)"
+    s.tui_windows, s.tui_windows_why = False, "skipped: the pull request is a draft (runs when it is marked ready)"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1381,6 +1484,20 @@ def cmd_check():
     for module, _, _ in SMOKE_INPUTS:
         if module != "*" and module not in ws.dirs:
             errs.append("SMOKE_INPUTS names %s, which go.work does not declare" % module)
+    # The tui-windows job's roots and inputs still name what is in the tree: a moved package would
+    # make every selection fail over to "run everything", and a glob that matches nothing would
+    # silently stop running the job for the files it was written for.
+    if TUI_WINDOWS_MODULE not in ws.dirs:
+        errs.append("TUI_WINDOWS_MODULE %s is not a workspace module" % TUI_WINDOWS_MODULE)
+    for d, _ in TUI_WINDOWS_ROOTS:
+        full = os.path.join(ROOT, d)
+        if not os.path.isdir(full) or not any(n.endswith(".go") for n in os.listdir(full)):
+            errs.append("TUI_WINDOWS_ROOTS names %s, which holds no Go package" % d)
+    tracked = subprocess.run(["git", "-C", ROOT, "ls-files", "backend/cli/cmd"],
+                             capture_output=True, text=True, check=True).stdout.split()
+    for g in TUI_WINDOWS_INPUTS:
+        if not any(match(f, [g]) for f in tracked):
+            errs.append("TUI_WINDOWS_INPUTS glob %s matches no tracked file" % g)
 
     def allowed(module, pkg):
         if (module, pkg) in declared:
@@ -1588,6 +1705,20 @@ def self_test():
         expect(not select(ws, ["backend/core/x.go"]).fleet_runner, "a core Go change that is not go.mod/go.sum skips the fleet runner")
         expect(select(ws, ["backend/core/go.mod"]).fleet_runner, "the image copies core's go.mod: it runs the fleet runner")
         expect(select(ws, ["deploy/fleet/gke-pg/main.tf"]).fleet_runner, "a fleet root change runs the fleet runner")
+        print("==> tui-windows (no package graph)")
+        expect(select(ws, ["backend/cli/cmd/install_ui.go"]).tui_windows, "the install command's own file runs tui-windows")
+        expect(select(ws, ["backend/cli/cmd/testdata/install_golden/help-install.txt"]).tui_windows, "an install golden runs tui-windows")
+        expect(select(ws, ["backend/cli/x.go"]).tui_windows, "with no package graph, a Go change runs tui-windows")
+        expect(select(ws, [".github/workflows/ci.yml"]).tui_windows, "a full selection runs tui-windows")
+        expect(not select(ws, ["docs/x.md"]).tui_windows, "a docs change skips tui-windows")
+        expect(select(ws, ["backend/cli/cmd/preflight_cloud.go"]).tui_windows, "the install preflight runs tui-windows")
+        expect(windows_only("backend/cli/bootstrap/procstate_windows.go") and windows_only("x/y_windows_test.go")
+               and windows_only("x/y_windows_arm64.go"), "a *_windows.go name is Windows-only")
+        expect(not windows_only("x/windows.go") and not windows_only("x/y_unix.go") and not windows_only("x/y_windows.txt"),
+               "...and no other name is, by its name")
+        drafted = select(ws, ["backend/cli/cmd/install_ui.go"])
+        mark_draft(drafted)
+        expect(not drafted.tui_windows, "a draft skips tui-windows")
         print("==> frontend")
         expect(select(ws, ["frontend/apps/x.ts"]).frontend, "a frontend change runs frontend")
         expect(select(ws, ["backend/services/svc-a/graphql/schema.graphql"]).frontend, "a schema change runs frontend")
@@ -1619,6 +1750,9 @@ def self_test():
             "backend/services/svc-a/x.go": 'package svca\n\n/* import "example.com/core/messaging" */\n',
             "backend/tools/tool/main.go": 'package main\n\nimport "example.com/core/rdb/sub"\n\nfunc main() {}\n',
             "backend/cli/cli.go": 'package cli\n',
+            # windows build lines (read by tui-windows only; nothing imports them)
+            "backend/core/messaging/tagged.go": '//go:build windows && amd64\n\npackage messaging\n',
+            "backend/core/messaging/untagged.go": '//go:build !windows\n\npackage messaging\n',
         }
         with tempfile.TemporaryDirectory() as tmp:
             for rel, body in tree.items():
@@ -1643,6 +1777,25 @@ def self_test():
                 expect(not mig("backend/core/messaging/m.go"), "a package nothing imports (or imports in a comment) does NOT run them")
                 expect(not mig("docs/x.md", "frontend/a.ts"), "docs and frontend do NOT run them")
                 expect(select(ws, ["backend/core/leaf/l.go"]).migrations, "with no package graph, they run")
+                # tui-windows over the same graph: the roots' closure, cut to one module.
+                global TUI_WINDOWS_ROOTS, TUI_WINDOWS_MODULE
+                saved_tui = TUI_WINDOWS_ROOTS, TUI_WINDOWS_MODULE
+                TUI_WINDOWS_ROOTS, TUI_WINDOWS_MODULE = [("backend/core/rdb", True)], "backend/core"
+                try:
+                    tui = lambda *fs: select(ws, list(fs), g).tui_windows
+                    expect(tui("backend/core/leaf/l.go"), "a package the TUI roots reach transitively runs tui-windows")
+                    expect(tui("backend/core/rdb/testdata/fixture.sql"), "a fixture under a TUI root runs tui-windows")
+                    expect(not tui("backend/core/deep/d.go"), "a non-root's test import does NOT run tui-windows")
+                    expect(not tui("docs/x.md", "frontend/a.ts"), "docs and frontend do NOT run tui-windows")
+                    # Windows-only files of the module run it from any package, by name or build line.
+                    expect(tui("backend/core/messaging/m_windows.go"), "a *_windows.go file in the module runs tui-windows")
+                    expect(tui("backend/core/messaging/tagged.go"), "a file whose build line selects windows runs tui-windows")
+                    expect(not tui("backend/core/messaging/untagged.go"), "a file built everywhere BUT windows does NOT")
+                    expect(not tui("backend/services/svc-a/y_windows.go"), "a *_windows.go file outside the module does NOT")
+                    TUI_WINDOWS_MODULE = "backend/tools/tool"
+                    expect(not tui("backend/core/leaf/l.go"), "a package outside the TUI module does NOT run tui-windows")
+                finally:
+                    TUI_WINDOWS_ROOTS, TUI_WINDOWS_MODULE = saved_tui
                 # READERS of a package whose tests the jobs RUN count; of one they only compile, not.
                 READERS.append(("backend/core", "rdb/sub", ["backend/services/*/model/*.go"], ["**/*_test.go"], "t"))
                 READERS.append(("backend/cli", ".", ["frontend/**"], [], "t"))

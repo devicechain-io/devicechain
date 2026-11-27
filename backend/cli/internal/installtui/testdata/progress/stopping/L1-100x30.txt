@@ -1,0 +1,30 @@
+╭─ DeviceChain · Installing · kind-devicechain ────────────────────────────────────────────────────╮
+│ Overall  ███████████████░░░░░░░░░░░░░░░  3/6 stages                                              │
+│ Elapsed 06:45 · Remaining: unknown · last observation 5s ago                                     │
+│                                                                                                  │
+│ DONE  Resolve target / cluster        ████████████████  done                                     │
+│ DONE  Identity, refusals and claim    ████████████████  done                                     │
+│ DONE  Credentials and operator        ████████████████  done                                     │
+│ RUN   Cluster prerequisites           ██████████░░░░░░  41/63 actions                            │
+│ WAIT  Base identity and record        ────────────────                                           │
+│ WAIT  Relational store ready          ────────────────                                           │
+│                                                                                                  │
+│ Interrupt received. Waiting for the operation to stop safely. Nothing is being rolled back.      │
+│ Press Ctrl+C again to exit immediately without waiting.                                          │
+│ ▾ Logs · sanitized · following                                                                   │
+│ 10:05:01 k8s     line 0300 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ 10:05:02 tofu    line 0301 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ 10:05:03 tofu    line 0302 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ 10:05:04 tofu    line 0303 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ 10:05:05 tofu    line 0304 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ 10:05:06 tofu    line 0305 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ 10:05:07 tofu    line 0306 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ 10:05:08 k8s     line 0307 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ 10:05:09 tofu    line 0308 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ 10:05:10 tofu    line 0309 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ 10:05:11 tofu    line 0310 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ 10:05:12 tofu    line 0311 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ … 300 earlier lines kept · 0 aged out                                                            │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ l logs  PgUp/PgDn scroll  Ctrl+C again force exit                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

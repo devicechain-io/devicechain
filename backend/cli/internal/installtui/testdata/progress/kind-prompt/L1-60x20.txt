@@ -1,0 +1,20 @@
+ DeviceChain · Installing · kind-devicechain
+ Overall  ░░░░░░░░░░░░░░░░░░░░  0/6 stages
+ Elapsed 00:06 · Remaining: unknown · last observation 1s …
+ 
+ RUN   Resolve target / cluster      working 
+ WAIT  Identity, refusals and claim  ────────
+ WAIT  Credentials and operator      ────────
+ WAIT  Cluster prerequisites         ────────
+ WAIT  Base identity and record      ────────
+ WAIT  Relational store ready        ────────
+ 
+ No kind cluster "devicechain" found. Create it now? [y/N]
+ 
+ ▸ Logs (collapsed · 312 lines kept · l to open)
+ 
+ 
+ 
+ 
+ 
+ y/n answer  l logs  Ctrl+C stop

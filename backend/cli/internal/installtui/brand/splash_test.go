@@ -6,6 +6,7 @@ package brand
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -405,24 +406,52 @@ func TestArtForMatchesEvaluate(t *testing.T) {
 	}
 }
 
+// splashLevels are the capability ladder's rungs, as a terminal reaches each one.
+var splashLevels = []struct {
+	name   string
+	level  terminal.Level
+	change func(*terminal.Inputs)
+}{
+	{"l4", terminal.L4, nil},
+	{"l3", terminal.L3, func(in *terminal.Inputs) { in.Profile = colorprofile.ANSI256 }},
+	{"l2", terminal.L2, func(in *terminal.Inputs) { in.Profile = colorprofile.ANSI }},
+	{"l1", terminal.L1, func(in *terminal.Inputs) { in.Env["NO_COLOR"] = "1" }},
+}
+
+// TestSplashGoldens draws the splash's last frame at every level of the capability ladder
+// and every size of the golden matrix, plus 80x22, the smallest terminal that still
+// shows the compact mark. The .txt golden is the frame with its escapes stripped.
 func TestSplashGoldens(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		w, h   int
-		change func(*terminal.Inputs)
-	}{
-		{"l4-120x40", 120, 40, nil},
-		{"l3-100x30", 100, 30, func(in *terminal.Inputs) { in.Profile = colorprofile.ANSI256 }},
-		{"l4-80x22", 80, 22, nil},
-		{"l2-80x24", 80, 24, func(in *terminal.Inputs) { in.Profile = colorprofile.ANSI }},
-		{"l1-80x24", 80, 24, func(in *terminal.Inputs) { in.Env["NO_COLOR"] = "1" }},
-		{"l4-60x20", 60, 20, nil},
-	} {
-		var change []func(*terminal.Inputs)
-		if tc.change != nil {
-			change = append(change, tc.change)
+	type cell struct{ level, w, h int }
+	var cells []cell
+	for i := range splashLevels {
+		for _, sz := range [][2]int{{120, 40}, {100, 30}, {80, 24}, {60, 20}} {
+			cells = append(cells, cell{i, sz[0], sz[1]})
 		}
-		view := splashAt(caps(tc.w, tc.h, change...), Duration).View() + "\n"
-		golden(t, "splash-"+tc.name+".ansi", view)
+	}
+	cells = append(cells, cell{0, 80, 22})
+	for _, c := range cells {
+		lv := splashLevels[c.level]
+		name := fmt.Sprintf("splash-%s-%dx%d", lv.name, c.w, c.h)
+		t.Run(name, func(t *testing.T) {
+			var change []func(*terminal.Inputs)
+			if lv.change != nil {
+				change = append(change, lv.change)
+			}
+			cp := caps(c.w, c.h, change...)
+			if cp.Level != lv.level {
+				t.Fatalf("the inputs reach %v, not %v", cp.Level, lv.level)
+			}
+			view := splashAt(cp, Duration).View() + "\n"
+			golden(t, name+".ansi", view)
+			golden(t, name+".txt", stripSGR(view))
+			if lv.level == terminal.L1 && stripSGR(view) != view {
+				t.Errorf("%s drew escape sequences", lv.name)
+			}
+		})
 	}
 }
+
+var sgrSequence = regexp.MustCompile("\x1b" + `[[][0-9;?]*[A-Za-z]`)
+
+func stripSGR(s string) string { return sgrSequence.ReplaceAllString(s, "") }
