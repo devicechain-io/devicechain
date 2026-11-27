@@ -66,7 +66,11 @@ func (p *logPane) pageDown(src logSource) {
 func (p *logPane) followTail() { p.follow = true }
 
 // render draws the pane in exactly height rows (or one, collapsed) of width cells.
-func (p *logPane) render(src logSource, t theme, cols, height int, loc *time.Location) []string {
+//
+// line is the composed-line check (model.line): every log row is checked whole, its
+// time and source included, and drawn with its text withheld when it may not be drawn
+// as composed.
+func (p *logPane) render(src logSource, t theme, cols, height int, loc *time.Location, line func(s, fallback string) string) []string {
 	if src == nil {
 		return nil
 	}
@@ -88,7 +92,7 @@ func (p *logPane) render(src logSource, t theme, cols, height int, loc *time.Loc
 	}
 	out := []string{fmt.Sprintf("%s Logs %s", t.g.expanded, t.dim.Render(t.g.dot+" sanitized "+t.g.dot+" "+mode))}
 	for _, l := range win.Lines {
-		out = append(out, logRow(l, t, cols, loc))
+		out = append(out, logRow(l, t, cols, loc, line))
 	}
 	for len(out) < rows+1 {
 		out = append(out, "")
@@ -102,14 +106,22 @@ func (p *logPane) render(src logSource, t theme, cols, height int, loc *time.Loc
 	return out
 }
 
-func logRow(l installflow.LogEntry, t theme, cols int, loc *time.Location) string {
+func logRow(l installflow.LogEntry, t theme, cols int, loc *time.Location, check func(s, fallback string) string) string {
 	stamp := l.Time.In(loc).Format("15:04:05")
 	src := truncate(l.Source, 7, "")
 	text := strings.ReplaceAll(l.Text.String(), "\t", " ")
 	rest := cols - width(stamp) - 1 - 7 - 1
-	line := truncate(text, rest, t.g.ellipsis)
-	if l.Level == installflow.LogWarn || l.Level == installflow.LogError {
-		line = t.warn.Render(line)
+	text = truncate(text, rest, t.g.ellipsis)
+	prefix := stamp + " " + pad(src, 7) + " "
+	switch check(prefix+text, prefix+withheld) {
+	case prefix + text:
+	case prefix + withheld:
+		text = withheld
+	default:
+		return withheld
 	}
-	return t.dim.Render(stamp) + " " + pad(src, 7) + " " + line
+	if l.Level == installflow.LogWarn || l.Level == installflow.LogError {
+		text = t.warn.Render(text)
+	}
+	return t.dim.Render(stamp) + " " + pad(src, 7) + " " + text
 }

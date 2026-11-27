@@ -69,7 +69,11 @@ func testHub(t *testing.T, lines int) *installflow.Hub {
 
 // newTestModel is the screen with a fixed clock, UTC log times and no redraw beat.
 func newTestModel(caps terminal.Capabilities, logs logSource, now time.Time) model {
-	m := newModel(caps, &interrupter{cancel: func() {}, force: func() {}}, func() {}, logs)
+	var redact func(string) string
+	if r, ok := logs.(interface{ Redact(string) string }); ok {
+		redact = r.Redact
+	}
+	m := newModel(caps, &interrupter{cancel: func() {}, force: func() {}}, func() {}, logs, redact)
 	m.now = func() time.Time { return now }
 	m.loc, m.every = time.UTC, 0
 	return m

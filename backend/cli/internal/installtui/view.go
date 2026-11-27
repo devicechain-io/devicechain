@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/installtui/result"
 	"github.com/devicechain-io/dcctl/internal/installtui/terminal"
 )
 
@@ -200,17 +201,33 @@ func (m model) progressLines(f frame) []string {
 		out = append(out, t.dim.Render("Starting"+t.g.ellipsis))
 	}
 	for _, g := range gs {
-		bar, label := rowBar(t, g, f.barW, m.tick)
-		labelW := f.inner - 4 - 2 - f.nameW - 2 - f.barW - 2
-		row := stateWord(t, g) + "  " + pad(truncate(g.name, f.nameW, t.g.ellipsis), f.nameW) + "  " + bar
-		if label != "" && labelW > 0 {
-			row += "  " + truncate(label, labelW, t.g.ellipsis)
-		}
-		out = append(out, row)
+		out = append(out, m.row(f, g))
 	}
 	out = append(out, "")
 	out = append(out, m.nowBlock(f, done, total)...)
 	return out
+}
+
+// row is one stage row. Its label carries the engine's unit word, so the row is checked
+// whole, as text, and drawn without the label when the label is what makes it unsafe.
+func (m model) row(f frame, g groupView) string {
+	compose := func(t theme, label bool) string {
+		bar, words := rowBar(t, g, f.barW, m.tick)
+		labelW := f.inner - 4 - 2 - f.nameW - 2 - f.barW - 2
+		row := stateWord(t, g) + "  " + pad(truncate(g.name, f.nameW, t.g.ellipsis), f.nameW) + "  " + bar
+		if label && words != "" && labelW > 0 {
+			row += "  " + truncate(words, labelW, t.g.ellipsis)
+		}
+		return row
+	}
+	plain := m.theme.plain()
+	switch full, bare := compose(plain, true), compose(plain, false); m.line(full, bare) {
+	case full:
+		return compose(m.theme, true)
+	case bare:
+		return compose(m.theme, false)
+	}
+	return withheld
 }
 
 // nowBlock is the two lines under the rows: what is running and its numbers, or what
@@ -220,7 +237,8 @@ func (m model) nowBlock(f frame, done, total int) []string {
 	fit := func(s string) string { return truncate(s, f.inner, t.g.ellipsis) }
 	switch {
 	case m.prompt != nil:
-		return []string{t.bold.Render(fit(questionText(m.prompt.q) + " [y/N]")), ""}
+		q := m.line(fit(questionWords(m.prompt.q, false)+" [y/N]"), fit(questionWords(m.prompt.q, true)+" [y/N]"))
+		return []string{t.bold.Render(q), ""}
 	case m.stopping && m.summary == nil:
 		return []string{t.warn.Render(fit("Interrupt received. Waiting for the operation to stop safely. Nothing is being rolled back.")),
 			fit("Press Ctrl+C again to exit immediately without waiting.")}
@@ -242,7 +260,12 @@ func (m model) nowBlock(f frame, done, total int) []string {
 		}
 		return []string{"", ""}
 	}
-	head := t.dim.Render("Now") + "  " + truncate(stageName(v.id), f.inner-5, t.g.ellipsis)
+	// A stage this table does not know shows by its ID, which the engine sent: the line
+	// is checked as composed, label included.
+	head := m.line("Now  "+truncate(result.StageName(v.id), f.inner-5, t.g.ellipsis), "Now  "+withheld)
+	if rest, ok := strings.CutPrefix(head, "Now"); ok {
+		head = t.dim.Render("Now") + rest
+	}
 	var parts []string
 	if mt := v.metric; mt != nil && mt.Mode == installflow.ProgressMeasured && mt.Total != nil {
 		cur := max(min(mt.Current, *mt.Total), 0)
@@ -259,7 +282,15 @@ func (m model) nowBlock(f frame, done, total int) []string {
 	if v.attempt > 1 {
 		parts = append(parts, fmt.Sprintf("attempt %d", v.attempt))
 	}
-	return []string{head, t.dim.Render(truncate("     "+strings.Join(parts, " "+t.g.dot+" "), f.inner, t.g.ellipsis))}
+	detail := func(ps []string) string {
+		return truncate("     "+strings.Join(ps, " "+t.g.dot+" "), f.inner, t.g.ellipsis)
+	}
+	// The first part carries the engine's unit word; the fallback is the line without it.
+	fallback := detail(parts)
+	if len(parts) > 0 && v.metric != nil {
+		fallback = detail(parts[1:])
+	}
+	return []string{head, t.dim.Render(m.line(detail(parts), fallback))}
 }
 
 // footer is generated from the key map that is active now, never written by hand.
@@ -294,14 +325,20 @@ func (m model) renderProgress() string {
 	}
 	body := m.progressLines(f)
 	pane := m.pane // render records the rows it was given; the model's copy is set in Update
-	body = append(body, pane.render(m.logs, t, f.inner, paneHeight(f, len(body), m.pane.open), m.loc)...)
+	body = append(body, pane.render(m.logs, t, f.inner, paneHeight(f, len(body), m.pane.open), m.loc, m.line)...)
 	for len(body) < f.rows {
 		body = append(body, "")
 	}
 	footer := m.footer(f)
 
 	if !f.border {
-		head := t.bold.Render("DeviceChain") + " " + t.g.dot + " " + truncate(m.title(), f.inner-14, t.g.ellipsis)
+		compose := func(target string) string {
+			return "DeviceChain " + t.g.dot + " " + truncate(m.titleFor(target), f.inner-14, t.g.ellipsis)
+		}
+		head := m.line(compose(m.progress.target), compose(withheld))
+		if rest, ok := strings.CutPrefix(head, "DeviceChain"); ok {
+			head = t.bold.Render("DeviceChain") + rest
+		}
 		lines := append([]string{head}, body...)
 		lines = append(lines, footer)
 		for i := range lines {
@@ -310,9 +347,12 @@ func (m model) renderProgress() string {
 		return strings.Join(clip(lines, f.h), "\n")
 	}
 	g := t.g
-	title := truncate(" DeviceChain "+g.dot+" "+m.title()+" ", f.w-4, g.ellipsis)
-	top := g.tl + g.h + title + strings.Repeat(g.h, max(f.w-3-width(title), 0)) + g.tr
-	lines := []string{top}
+	// The top border is plain text: it is checked whole, border and label included.
+	top := func(target string) string {
+		title := truncate(" DeviceChain "+g.dot+" "+m.titleFor(target)+" ", f.w-4, g.ellipsis)
+		return g.tl + g.h + title + strings.Repeat(g.h, max(f.w-3-width(title), 0)) + g.tr
+	}
+	lines := []string{m.line(top(m.progress.target), top(withheld))}
 	for _, l := range body {
 		lines = append(lines, g.v+" "+pad(l, f.inner)+" "+g.v)
 	}
@@ -351,7 +391,17 @@ func (m model) renderMinimal(f frame) string {
 	for _, g := range gs {
 		if g.state == groupRunning || g.state == groupFailed || g.state == groupStopped {
 			_, label := rowBar(t, g, 0, 0)
-			lines = append(lines, stateWord(t, g)+" "+truncate(g.name+" "+label, max(f.w-5, 1), t.g.ellipsis))
+			compose := func(t theme, label string) string {
+				return stateWord(t, g) + " " + truncate(g.name+" "+label, max(f.w-5, 1), t.g.ellipsis)
+			}
+			switch full, bare := compose(t.plain(), label), compose(t.plain(), ""); m.line(full, bare) {
+			case full:
+				lines = append(lines, compose(t, label))
+			case bare:
+				lines = append(lines, compose(t, ""))
+			default:
+				lines = append(lines, withheld)
+			}
 		}
 	}
 	now := m.nowBlock(f, done, total)
@@ -361,9 +411,11 @@ func (m model) renderMinimal(f frame) string {
 	return strings.Join(clip(lines, f.h), "\n")
 }
 
-func (m model) title() string {
-	if m.progress.target != "" {
-		return "Installing " + m.theme.g.dot + " " + m.progress.target
+// titleFor is the screen's title naming target, the run.started target context. It is
+// caller-supplied text, so the line it is composed into is checked whole (see line).
+func (m model) titleFor(target string) string {
+	if target != "" {
+		return "Installing " + m.theme.g.dot + " " + target
 	}
 	return "Installing"
 }

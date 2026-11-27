@@ -30,31 +30,6 @@ var displayGroups = []displayGroup{
 	{"Relational store ready", []installflow.StepID{installflow.StepInstallRDBReady}},
 }
 
-// stageNames is what the "Now" line calls each of the fourteen stages.
-var stageNames = map[installflow.StepID]string{
-	installflow.StepInstallInputs:        "Resolve the request",
-	installflow.StepInstallPreflight:     "Preflight checks",
-	installflow.StepInstallCluster:       "Resolve the target cluster",
-	installflow.StepInstallClaim:         "Claim the cluster",
-	installflow.StepInstallInspect:       "Inspect the cluster",
-	installflow.StepInstallCredentials:   "Resolve credentials",
-	installflow.StepInstallPrepare:       "Prepare the cluster settings",
-	installflow.StepInstallWriteIntent:   "Record the install intent",
-	installflow.StepInstallOperator:      "Install the operator",
-	installflow.StepInstallPrerequisites: "Apply the cluster prerequisites",
-	installflow.StepInstallDatabaseLogin: "Open the database session",
-	installflow.StepInstallRecord:        "Record the install",
-	installflow.StepInstallRDBReady:      "Wait for the relational store",
-	installflow.StepInstallSummary:       "Finalizing",
-}
-
-func stageName(id installflow.StepID) string {
-	if n, ok := stageNames[id]; ok {
-		return n
-	}
-	return string(id) // a stage this table does not know still shows, by its ID
-}
-
 // stepPhase is where one stage's LATEST attempt is.
 type stepPhase uint8
 

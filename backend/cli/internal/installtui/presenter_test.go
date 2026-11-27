@@ -442,7 +442,7 @@ func TestAPanicWritingTheScreenIsAFailedRenderer(t *testing.T) {
 		<-next
 		return succeeded, endRun(rt)
 	}), installflow.Request{Operation: installflow.OperationInstall, AssumeYes: true})
-	waitFor(t, "the run", &out.syncBuffer, screenShows(&out.syncBuffer, "running    install.cluster"))
+	waitFor(t, "the run", &out.syncBuffer, screenShows(&out.syncBuffer, "Resolve the target cluster"))
 	out.panicking.Store(true)
 	next <- struct{}{}
 	waitFor(t, "the fallback", errs, screenShows(errs, "continuing with plain output"))
@@ -526,7 +526,10 @@ func TestTheEnginesErrorIsRedacted(t *testing.T) {
 // whatever it says goes to the log pane, redacted, instead of over the screen. And it
 // may not read stdin beside the program: the process's stdin is the null device.
 func TestTheProcessStreamsBelongToTheScreenWhileItIsUp(t *testing.T) {
-	h := newHarness(t, tuiCaps(true))
+	caps := tuiCaps(true)
+	// A full-size screen, where the log pane is open without a key.
+	caps.Width, caps.Height, caps.SizeKnown, caps.Layout = 120, 40, true, terminal.Full
+	h := newHarness(t, caps)
 	h.p.OwnProcessStreams = true
 	realStdin, realStderr := os.Stdin, os.Stderr
 	var sawStdin atomic.Value

@@ -46,6 +46,9 @@ type model struct {
 	// start lets the engine begin. It is idempotent.
 	start func()
 	logs  logSource
+	// redact is the hub's redaction (Hub.Redact), applied to every composed line before
+	// it is drawn (see line). Nil applies the sanitiser alone.
+	redact func(string) string
 
 	theme    theme
 	keys     keyMap
@@ -66,8 +69,8 @@ type model struct {
 	summary  *installflow.Summary
 }
 
-func newModel(caps terminal.Capabilities, intr *interrupter, start func(), logs logSource) model {
-	return model{caps: caps, intr: intr, start: start, logs: logs, splash: caps.Splash != terminal.NoArt,
+func newModel(caps terminal.Capabilities, intr *interrupter, start func(), logs logSource, redact func(string) string) model {
+	return model{caps: caps, intr: intr, start: start, logs: logs, redact: redact, splash: caps.Splash != terminal.NoArt,
 		theme: newTheme(caps), keys: newKeyMap(), progress: newProgressState(),
 		// The pane opens on its own only where there is room for it beside the rows.
 		pane:  newLogPane(caps.Layout == terminal.Full),
@@ -211,10 +214,17 @@ func (m model) render() string {
 
 // questionText is the wording of each question the screen can ask, the same words the
 // plain prompt uses. A code with no wording still shows its code, never an empty line.
-func questionText(q installflow.Question) string {
+func questionText(q installflow.Question) string { return questionWords(q, false) }
+
+// questionWords is questionText, with the question's value replaced by the withheld
+// marker when withhold is set: the fallback for a line that may not be drawn as composed.
+func questionWords(q installflow.Question, withhold bool) string {
 	if q.Question == installflow.QuestionCreateKindCluster {
 		for _, p := range q.Params {
 			if p.Name == "cluster" {
+				if withhold {
+					return "No kind cluster " + withheld + " found. Create it now?"
+				}
 				return fmt.Sprintf("No kind cluster %q found. Create it now?", p.Value.String())
 			}
 		}

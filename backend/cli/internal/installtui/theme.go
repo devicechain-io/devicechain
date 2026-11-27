@@ -52,7 +52,10 @@ type theme struct {
 	bold    lipgloss.Style
 }
 
-// Brand tokens (the review mockups' terminal palette).
+// Brand tokens (the review mockups' terminal palette): the same values as the result
+// screens' (result/theme.go).
+//
+// TODO: draw with result.NewTheme once #3205 exports it, rather than these copies.
 const (
 	colorOK     = "#5fd39a"
 	colorWarn   = "#f5c451"
@@ -99,6 +102,14 @@ func newTheme(caps terminal.Capabilities) theme {
 			t.g = unicodeGlyphs
 		}
 	}
+	return t
+}
+
+// plain is t with every style removed and the same glyphs and motion: what a line
+// drawn in t says, as text, for the composed-line check (see line).
+func (t theme) plain() theme {
+	p := lipgloss.NewStyle()
+	t.ok, t.warn, t.fail, t.acc, t.dim, t.bold = p, p, p, p, p, p
 	return t
 }
 
