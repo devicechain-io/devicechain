@@ -38,9 +38,16 @@ type bridge struct {
 	// secrets is set when the program has a form for secret questions (an instance
 	// journey's passphrase form). Without one, a secret question is never sent to it.
 	secrets bool
+	// reveals, when set, is the run's reveal sink, switched to plain output with the rest.
+	reveals *fallbackReveals
 }
 
-func (b *bridge) fallBack() { b.plain.Store(true) }
+func (b *bridge) fallBack() {
+	b.plain.Store(true)
+	if b.reveals != nil {
+		b.reveals.fallBack()
+	}
+}
 
 // approve records the review's approval of creating the kind cluster named. It
 // answers the run's question for that cluster once, and nothing else.

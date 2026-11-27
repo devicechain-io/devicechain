@@ -297,8 +297,19 @@ func (m model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if k.String() == "ctrl+c" && m.continues && m.summary != nil && !m.caps.ProgressOnly {
 		// The run is over and another journey would follow it: Ctrl+C is the operator
 		// declining it. It is counted as the interrupt it is (the caller learns of it and
-		// opens nothing more), and the program ends; there is nothing left to stop.
-		m.intr.interrupt()
+		// opens nothing more), and the program ends; there is nothing left to stop. It is
+		// counted only if nothing was before it: an interrupt during the run, or a signal,
+		// has already said so, and a second count would force the process out.
+		m.intr.interruptOnce()
+		return m, tea.Quit
+	}
+	if k.String() == "ctrl+c" && m.summary != nil && !m.caps.ProgressOnly {
+		// The run is over and its verdict is on screen: Ctrl+C is the exit key, as Enter
+		// is. 🔴 IT IS NOT COUNTED AN INTERRUPT. Counted, a second press (or one after an
+		// interrupt during the run, or a signal) would force the process out with 1, or
+		// with setup's forced status, before the exit summary is written: a succeeded run
+		// would exit as if it had been abandoned, and "leaving never changes dcctl's exit
+		// status" would be false.
 		return m, tea.Quit
 	}
 	if k.String() == "ctrl+c" {
