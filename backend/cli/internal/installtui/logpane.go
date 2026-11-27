@@ -67,7 +67,7 @@ func (p *logPane) followTail() { p.follow = true }
 
 // render draws the pane in exactly height rows (or one, collapsed) of width cells.
 //
-// line is the composed-line check (model.line): every log row is checked whole, its
+// line is result.Input.Line: every log row is checked whole, its
 // time and source included, and drawn with its text withheld when it may not be drawn
 // as composed.
 func (p *logPane) render(src logSource, t theme, cols, height int, loc *time.Location, line func(s, fallback string) string) []string {
@@ -113,12 +113,12 @@ func logRow(l installflow.LogEntry, t theme, cols int, loc *time.Location, check
 	rest := cols - width(stamp) - 1 - 7 - 1
 	text = truncate(text, rest, t.g.ellipsis)
 	prefix := stamp + " " + pad(src, 7) + " "
-	switch check(prefix+text, prefix+withheld) {
+	switch checked := check(prefix+text, prefix+withheld); checked {
 	case prefix + text:
 	case prefix + withheld:
 		text = withheld
 	default:
-		return withheld
+		return checked
 	}
 	if l.Level == installflow.LogWarn || l.Level == installflow.LogError {
 		text = t.warn.Render(text)

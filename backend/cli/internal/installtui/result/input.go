@@ -182,7 +182,7 @@ func (in Input) shown(s string) string {
 	return t.String()
 }
 
-// line is a COMPOSED line as it may be drawn or printed: itself when the hub's
+// Line is a COMPOSED line as it may be drawn or printed: itself when the hub's
 // redaction leaves it alone, otherwise fallback (the line with its value
 // withheld) when that is left alone, otherwise the bare marker as redaction
 // leaves it, otherwise nothing.
@@ -196,7 +196,11 @@ func (in Input) shown(s string) string {
 // 🔴 NOTHING LEAVES UNCHECKED, THE MARKER INCLUDED. A registered "[withheld]" is a
 // value like any other, so the last resort is the marker after redaction, and a
 // redaction that does not settle even on that leaves the line empty.
-func (in Input) line(s, fallback string) string {
+//
+// Callers must sanitise the parts before composing. Check after any truncation
+// and before styling so the check covers the plain text that will be drawn.
+// Without a redactor the composed line is unchanged.
+func (in Input) Line(s, fallback string) string {
 	if in.Redact == nil {
 		return s
 	}

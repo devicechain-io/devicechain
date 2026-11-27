@@ -57,6 +57,14 @@ func TestComposedLinesCannotRebuildASecret(t *testing.T) {
 					env(at(time.Second), "rnd3Stage7xQ", 1, installflow.StepStarted{})}
 			},
 			leak: "rnd3Stage7xQ", want: "Now  [withheld]"},
+		{name: "now detail", secret: "     3 of 9 rnd3Detail7xQ", w: 120, h: 40,
+			envs: func() []installflow.Envelope {
+				return []installflow.Envelope{started("kind-devicechain"),
+					env(at(time.Second), installflow.StepInstallRDBReady, 1, installflow.StepStarted{}),
+					env(at(2*time.Second), installflow.StepInstallRDBReady, 1, installflow.StepProgress{
+						Mode: installflow.ProgressMeasured, Current: 3, Total: total(9), Unit: "rnd3Detail7xQ"})}
+			},
+			leak: "3 of 9 rnd3Detail7xQ", want: "     waited 2s"},
 		{name: "question", secret: `cluster "rnd3Ask7xQ" found`, w: 120, h: 40,
 			envs: func() []installflow.Envelope { return []installflow.Envelope{started("kind-devicechain")} },
 			prompt: &installflow.Question{ID: "q1", Question: installflow.QuestionCreateKindCluster,
@@ -88,45 +96,48 @@ func TestComposedLinesCannotRebuildASecret(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			h := secretHub(t, c.secret)
-			if c.logs != nil {
-				c.logs(h)
-			}
-			m := newTestModel(levelCaps(terminal.L2, c.w, c.h), h, at(3*time.Second))
-			for _, e := range c.envs() {
-				next, _ := m.Update(eventMsg{env: e})
-				m = next.(model)
-			}
-			if c.prompt != nil {
-				next, _ := m.Update(promptMsg{q: *c.prompt, reply: make(chan installflow.Response, 1)})
-				m = next.(model)
-			}
-			view := stripANSI(m.render())
-			if strings.Contains(view, c.leak) {
-				t.Fatalf("the line was drawn as composed, %q on screen:\n%s", c.leak, view)
-			}
-			if !strings.Contains(view, c.want) {
-				t.Fatalf("want the line drawn with its value withheld, %q, in:\n%s", c.want, view)
+			for _, mode := range []string{"clean fallback", "redacted marker"} {
+				t.Run(mode, func(t *testing.T) {
+					marker := mode == "redacted marker"
+					h := secretHub(t, c.secret)
+					if marker {
+						// Reject the fallback too, including rows whose fallback drops the
+						// label rather than inserting a marker. The last resort must be
+						// result's redacted marker, never a new unchecked placeholder.
+						for _, s := range []string{c.want, withheld} {
+							if err := h.AddSecret(s); err != nil {
+								t.Fatal(err)
+							}
+						}
+					}
+					if c.logs != nil {
+						c.logs(h)
+					}
+					m := newTestModel(levelCaps(terminal.L2, c.w, c.h), h, at(3*time.Second))
+					for _, e := range c.envs() {
+						next, _ := m.Update(eventMsg{env: e})
+						m = next.(model)
+					}
+					if c.prompt != nil {
+						next, _ := m.Update(promptMsg{q: *c.prompt, reply: make(chan installflow.Response, 1)})
+						m = next.(model)
+					}
+					view := stripANSI(m.render())
+					if strings.Contains(view, c.leak) {
+						t.Fatalf("the line was drawn as composed, %q on screen:\n%s", c.leak, view)
+					}
+					want := c.want
+					if marker {
+						want = h.Redact(withheld)
+						if want == withheld || strings.Contains(view, withheld) || strings.Contains(view, c.want) {
+							t.Fatalf("an unchecked fallback or marker was drawn:\n%s", view)
+						}
+					}
+					if !strings.Contains(view, want) {
+						t.Fatalf("want the checked line %q in:\n%s", want, view)
+					}
+				})
 			}
 		})
-	}
-}
-
-// The counterweight: a line no secret touches is drawn exactly as composed, and a
-// fallback that is itself unsafe is never drawn, only the bare marker.
-func TestALineFallsBackOnlyToACleanLine(t *testing.T) {
-	m := newTestModel(levelCaps(terminal.L2, 120, 40), secretHub(t, "rnd3Both7xQ"), t0)
-	if got := m.line("Installing - kind-devicechain", "x"); got != "Installing - kind-devicechain" {
-		t.Fatalf("a clean line was changed: %q", got)
-	}
-	if got := m.line("Label rnd3Both7xQ", "Label [withheld]"); got != "Label [withheld]" {
-		t.Fatalf("want the clean fallback, got %q", got)
-	}
-	if got := m.line("rnd3Both7xQ one", "rnd3Both7xQ two"); got != withheld {
-		t.Fatalf("an unsafe fallback was drawn: %q", got)
-	}
-	// What the sanitiser would change is not drawn as composed either.
-	if got := m.line("Label \x1b[31mred", "Label [withheld]"); got != "Label [withheld]" {
-		t.Fatalf("a line the sanitiser changes was drawn: %q", got)
 	}
 }

@@ -25,7 +25,7 @@ func WriteExitSummary(w io.Writer, in Input) error {
 	// Every line is re-checked as it is composed, label and padding included:
 	// joining safe values can complete a registered one.
 	put := func(s, fallback string) {
-		b.WriteString(in.line(s, fallback))
+		b.WriteString(in.Line(s, fallback))
 		b.WriteByte('\n')
 	}
 	line := func(label, value string) {
