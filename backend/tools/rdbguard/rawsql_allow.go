@@ -228,6 +228,14 @@ var rawSQLAllowList = []siteEntry{
 			"formatted-in text is the models' quoted table names and package constants.",
 	},
 	{
+		Path: "backend/services/device-management/model/api_fleet_settlement.go", Func: "fleetDueTenants", Count: 1,
+		Why: "the bulk-change deadline pass's tenant discovery, under the system context Api.settlementTenants " +
+			"declares: a recursive walk of the deadline index that returns tenant ids only, never row content. Each " +
+			"due probe and its operation lookup are bound to the walked tenant (d.tenant_id = walk.tenant_id, " +
+			"o.tenant_id = d.tenant_id). Only the models' quoted table names and the protocol predicate constant are " +
+			"formatted in.",
+	},
+	{
 		Path: "backend/services/device-management/model/api_fleet_settlement.go", Func: "Api.FleetReportCaptureComplete", Count: 1,
 		Why: "counts one operation's lines whose target's report capture is incomplete: binds l.tenant_id from the " +
 			"request context and joins the configuration state on tenant_id = l.tenant_id. Only the models' quoted " +

@@ -88,5 +88,6 @@ var (
 		NewDeviceAttributeTryLockSchema(),
 		NewEffectGenerationsSchema(),
 		NewRuleProvenanceSchema(),
+		NewFleetLineTenantAwaitingIndexSchema(),
 	}
 )
