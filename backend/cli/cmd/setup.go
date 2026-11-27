@@ -116,13 +116,18 @@ func runSetupLocal(cmd *cobra.Command, _ []string) error {
 	// 🔴 GUIDED ONLY, AND FAIL CLOSED. Without an interactive terminal there is nobody to
 	// approve either stage, and setup has no flag that approves for them: it refuses,
 	// before anything is touched.
+	//
+	// The console's restore is deferred BEFORE the probe, as the install does: the one
+	// case the probe leaves a console mode changed (the VT flag took and the original mode
+	// could not be put back) is a terminal it judged ineligible, which is exactly the
+	// refusal below.
+	defer restoreProbedConsole()
 	in := probeInstallTerminal()
 	in.UI, in.NoSplash = terminal.TUI, setupNoSplash
 	caps := terminal.Evaluate(in)
 	if !caps.TUI || caps.ProgressOnly {
 		return refusedBeforeStart(errSetupNeedsTerminal)
 	}
-	defer restoreProbedConsole()
 
 	provider, err := bootstrap.Get("local")
 	if err != nil {

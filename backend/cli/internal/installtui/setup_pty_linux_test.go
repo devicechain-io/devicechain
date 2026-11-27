@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/internal/installflow/testkit"
 	"github.com/devicechain-io/dcctl/internal/installtui/terminal"
@@ -32,6 +34,9 @@ const setupPTYChildEnv = "DCCTL_SETUP_PTY_CHILD"
 // setupPassphrase is what the parent types for the escrow passphrase. It is a canary:
 // it must never be drawn, printed or left in the scrollback.
 var setupPassphrase = canaryValue("escrow-passphrase")
+
+// setupSeed is the one-time value the instance-fallback scenario's run discloses.
+var setupSeed = canaryValue("superuser-seed")
 
 func startSetupPTYChild(t *testing.T, scenario string) *ptyRun {
 	t.Helper()
@@ -194,6 +199,60 @@ func TestSetupPTYADoubleCtrlCAfterTheInstanceApprovalExitsFour(t *testing.T) {
 	assertRestored(t, r.out.String(), "interrupted again")
 }
 
+// 🔴 CTRL+C ON A FAILED INSTANCE'S VERDICT LEAVES IT, as Enter does: exit 4, and setup
+// says the cluster stays installed and how to create the instance. It is not an interrupt
+// of a run that is already over, which a second press would turn into a forced exit
+// before that guidance is printed.
+func TestSetupPTYCtrlCOnAFailedInstanceVerdictKeepsTheGuidance(t *testing.T) {
+	r := startSetupPTYChild(t, "instance-fails")
+	r.throughCluster()
+	r.toInstanceReview()
+	settled()
+	r.press("\t\r")
+	waitFor(t, "the verdict", r.out, screenShows(r.out, "Bootstrap failed."))
+	r.press("\x03")
+	if code := r.wait(); code != SetupExitInstanceFailed {
+		t.Fatalf("exit %d; terminal:\n%q", code, r.out.String())
+	}
+	out := r.out.String()
+	if strings.Contains(out, "interrupted again") || !strings.Contains(out, "Fix the cause, then create the instance with:") {
+		t.Fatalf("the guidance after a failed instance was not printed:\n%q", out)
+	}
+	assertRestored(t, out, "dcctl bootstrap local acme --cluster=devicechain")
+}
+
+// 🔴 A SCREEN THAT STOPS DURING THE INSTANCE RUN LOSES NEITHER THE PASSPHRASE QUESTION NOR
+// THE ONE-TIME PASSWORD. The process's stdin is the null device while the engine runs, so
+// the plain prompt reads the terminal itself, with echo off; and the disclosure the screen
+// was holding for its first-login screen is shown in plain output, since no screen will
+// ever take it.
+func TestSetupPTYAFallbackDuringTheInstanceRunStillAsksAndShows(t *testing.T) {
+	r := startSetupPTYChild(t, "instance-fallback")
+	r.throughCluster()
+	r.toInstanceReview()
+	settled()
+	r.press("\t\r")
+	waitFor(t, "the plain passphrase prompt", r.out, screenShows(r.out, "  Passphrase: "))
+	time.Sleep(200 * time.Millisecond)
+	r.press(setupPassphrase + "\r")
+	if code := r.wait(); code != SetupExitSucceeded {
+		t.Fatalf("exit %d; terminal:\n%q", code, r.out.String())
+	}
+	if m := r.markers(); m != "cluster ran\ninstance ran\nasked\nanswered\n" {
+		t.Fatalf("the engines saw %q", m)
+	}
+	out := r.out.String()
+	if !strings.Contains(out, "continuing with plain output") {
+		t.Fatalf("the screen did not fall back:\n%q", out)
+	}
+	if !strings.Contains(out, "password: "+setupSeed) || !strings.Contains(out, "shown here, once") {
+		t.Fatalf("the one-time password was not shown after the fallback:\n%q", out)
+	}
+	if strings.Contains(out, setupPassphrase) {
+		t.Fatalf("the passphrase was echoed:\n%q", out)
+	}
+}
+
 // Ctrl+C before the cluster's approval exits 2: nothing was changed.
 func TestSetupPTYCtrlCBeforeTheClusterApprovalExitsTwo(t *testing.T) {
 	r := startSetupPTYChild(t, "success")
@@ -306,6 +365,13 @@ func TestSetupPTYChild(t *testing.T) {
 			return rt.Events.Emit(installflow.Event{Step: id, Attempt: 1,
 				Payload: installflow.StepFinished{Outcome: installflow.StepSucceeded}})
 		}
+		if scenario == "instance-fallback" {
+			// Offered while the screen is up: it waits in the inbox for the first-login
+			// screen, which the screen will never reach.
+			rt.Reveals.Offer(installflow.RevealOffer{Subject: installflow.RevealSuperuserSeed,
+				Reveal:    installflow.NewReveal([]byte(setupSeed)),
+				PlainLine: func(w io.Writer, v []byte) { fmt.Fprintf(w, "password: %s\n", v) }})
+		}
 		if err := step(installflow.StepBootstrapEscrow, func() error {
 			if scenario == "instance-fails" {
 				return nil
@@ -362,6 +428,23 @@ func TestSetupPTYChild(t *testing.T) {
 			}
 			return BootstrapContinueCommand(p.Instance, p.Escrow, []string{"--cluster=devicechain"})
 		},
+	}
+	if scenario == "instance-fallback" {
+		// As dcctl setup local runs: the process's streams are taken while each engine runs.
+		// The instance stage's screen stops when the passphrase question reaches it.
+		s.OwnProcessStreams = true
+		s.run = func(ctx context.Context, p Presenter, e installflow.Engine, req installflow.Request,
+			preflight installflow.PreflightRunner) error {
+			if req.Operation == installflow.OperationBootstrap {
+				p.options = []tea.ProgramOption{tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
+					if _, ok := msg.(SecretQuestion); ok {
+						return tea.QuitMsg{}
+					}
+					return msg
+				})}
+			}
+			return p.Run(ctx, e, req, preflight)
+		}
 	}
 	res := s.Run(context.Background())
 	if res.Err != nil {

@@ -10,6 +10,9 @@ import (
 	"sync"
 
 	"github.com/muesli/cancelreader"
+	"golang.org/x/term"
+
+	"github.com/devicechain-io/dcctl/internal/installflow"
 )
 
 // stdinGate is the one reader of stdin for the life of a run.
@@ -158,6 +161,51 @@ func (g *stdinGate) plainRead(p []byte) (int, error) {
 	}
 	g.mu.Unlock()
 	return g.r.Read(p)
+}
+
+// errNoHiddenRead is a secret question after a fallback that cannot be asked safely.
+var errNoHiddenRead = fmt.Errorf("%w: after the terminal UI stopped, a secret is read only from the terminal, "+
+	"with nothing typed to the screen still unread; re-run with --ui=plain to answer it", installflow.ErrPromptUnavailable)
+
+// plainReadHidden is the plain prompt's read of a secret: one line from the terminal the
+// program was given, with echo off.
+//
+// 🔴 IT NEVER READS os.Stdin. While the engine runs, os.Stdin is the null device (see
+// processStreams), so a hidden read of the process's stdin fails, and a person at the
+// terminal could not answer. The terminal is the gate's own file, read under the gate's
+// lock. It fails closed, never asking, where an answer could be wrong or seen: a console
+// the program may still be reading (refused), a stdin that is not a terminal, or keys typed
+// to the screen that the program had read and not used, which may be half a passphrase
+// and are wiped.
+func (g *stdinGate) plainReadHidden() ([]byte, error) {
+	if err := g.refusal(); err != nil {
+		return nil, err
+	}
+	g.readMu.Lock()
+	defer g.readMu.Unlock()
+	g.mu.Lock()
+	typed := len(g.stash) > 0
+	clear(g.stash)
+	g.stash = nil
+	g.mu.Unlock()
+	if typed {
+		return nil, errNoHiddenRead
+	}
+	read, ok := terminalHiddenRead(g.r)
+	if !ok {
+		return nil, errNoHiddenRead
+	}
+	return read()
+}
+
+// terminalHiddenRead is the read of one line with echo off from r's terminal, when r is
+// one. Tests replace it.
+var terminalHiddenRead = func(r io.Reader) (func() ([]byte, error), bool) {
+	f, ok := r.(*os.File)
+	if !ok || !term.IsTerminal(int(f.Fd())) {
+		return nil, false
+	}
+	return func() ([]byte, error) { return term.ReadPassword(int(f.Fd())) }, true
 }
 
 // handOver ends the program's reading and returns the plain prompt's reader.
