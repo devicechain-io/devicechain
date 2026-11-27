@@ -5,7 +5,6 @@ package installtui
 
 import (
 	"context"
-	"math"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -21,7 +20,7 @@ import (
 // The review settles at once in these tests, so that pump is not held up by it. A test
 // about the settle itself delivers (or withholds) the settle message by hand.
 func init() {
-	reviewSettle = 0
+	reviewSettle, settlePoll = 0, 0
 	preScenarios = append(preScenarios, reviewScenarios...)
 }
 
@@ -495,61 +494,70 @@ func TestTheApprovalAnswersForTheResolvedClusterName(t *testing.T) {
 	}
 }
 
-// 🔴 THE INSTALL REVIEW (APPROVAL 1) HAS THE SAME PROTECTION: a stalled renderer and a
-// burst typed ahead never arm it. Nothing arms the review before a frame of it has been
-// written, and a key after that restarts the quiet period, so a timer that fires after a
-// typed-ahead key arms nothing.
-func TestATypedAheadBurstNeverArmsTheInstallReviewAfterAStall(t *testing.T) {
+// 🔴 THE INSTALL REVIEW (APPROVAL 1) HAS THE SAME PROTECTION: keys read during a stall
+// never approve it, a key read while it settles holds it off, and keys pressed while the
+// terminal is too small to show it count too.
+func TestKeysReadDuringAStallNeverApproveTheInstall(t *testing.T) {
+	withSettle(t, 500*time.Millisecond)
+	keys := newFakeKeys()
 	p, _ := reviewPrerun()
+	p.rv.clock = keys.clock
 	toChoices(t, p)
 	focusOn(t, p, chContinue)
-	var held []tea.Cmd
-	hold := func(cmd tea.Cmd, _ prerunOutcome) {
+	keys.read()
+	tick, _ := p.update(keyOf("enter")) // Continue: the review is entered
+	if p.screen != screenReview {
+		t.Fatal("not on the review")
+	}
+	keys.advance(100 * time.Millisecond)
+	keys.read() // Tab, Enter read during the stall
+	keys.advance(2 * time.Second)
+	pump(p, tick) // the loop resumes: the tick first
+	if !p.rv.armed {
+		t.Fatal("the review did not settle after a long quiet stall")
+	}
+	for _, k := range []string{"tab", "enter"} { // the queued keys
+		cmd, out := p.update(keyOf(k))
+		if out != stay {
+			t.Fatalf("a key read during the stall gave %v", out)
+		}
 		if cmd != nil {
-			held = append(held, cmd)
+			tick = cmd
 		}
 	}
-	deliver := func(cmds []tea.Cmd) {
-		for _, c := range cmds {
-			for _, m := range messages(c) {
-				p.update(m)
-			}
-		}
+	if p.approval != nil || p.rv.armed {
+		t.Fatalf("keys read during a stall: approval %v, armed %v", p.approval, p.rv.armed)
 	}
-	key := func(names ...string) {
-		for _, n := range names {
-			hold(p.update(keyOf(n)))
-		}
-	}
-	hold(p.update(keyOf("enter"))) // Continue: the review, not yet written to the terminal
-	key("tab", "enter")            // typed during the stall
-	deliver(held)                  // whatever timer there is fires
-	held = nil
-	key("tab", "enter")
-	if p.rv.armed || p.approval != nil {
-		t.Fatalf("keys during the stall: armed %v, approval %v", p.rv.armed, p.approval)
-	}
-	p.render()
-	hold(p.update(frameShownMsg{seq: math.MaxUint64})) // the frame is written
-	first := held
-	held = nil
-	key("tab") // the burst, delivered after the frame
-	deliver(first)
+	// A key read while it settles holds it off.
+	keys.advance(300 * time.Millisecond)
+	keys.read()
+	keys.advance(300 * time.Millisecond)
+	next, _ := p.update(messages(tick)[0])
 	if p.rv.armed {
-		t.Fatal("a quiet period a key interrupted armed the review")
+		t.Fatal("the review armed 300 ms after a key")
 	}
-	key("tab", "enter")
-	if p.approval != nil {
-		t.Fatal("a burst typed ahead approved the install")
+	// Too small, keys pressed, large again: still not until quiet.
+	p.resize(30, 8)
+	keys.read()
+	p.update(keyOf("tab"))
+	p.resize(200, 40)
+	keys.advance(200 * time.Millisecond)
+	next, _ = p.update(messages(next)[0])
+	if p.rv.armed {
+		t.Fatal("the review armed 200 ms after a key pressed while it was too small")
 	}
-	deliver(held[len(held)-1:]) // quiet at last
+	keys.advance(time.Second)
+	p.update(messages(next)[0])
 	if !p.rv.armed || p.rv.focus != reviewBack {
-		t.Fatalf("after a quiet period: armed %v, focus %d", p.rv.armed, p.rv.focus)
+		t.Fatalf("a quiet user: armed %v, focus %d", p.rv.armed, p.rv.focus)
 	}
+	keys.advance(time.Second)
+	keys.read()
 	if _, out := p.update(keyOf("tab")); out != stay {
 		t.Fatal("Tab acted")
 	}
+	keys.read()
 	if _, out := p.update(keyOf("enter")); out != proceed || p.approval == nil {
-		t.Fatalf("Approve after the quiet period: %v", out)
+		t.Fatalf("Approve by a quiet user: %v", out)
 	}
 }

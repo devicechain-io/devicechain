@@ -48,6 +48,12 @@ type stdinGate struct {
 	// with the program's input and closed once no read of it can be under way.
 	cr      cancelreader.CancelReader
 	stopped bool // the program reads nothing more
+
+	// input, when set, is stamped with every read that brings the program input: the
+	// settling screens' measure of when the keyboard was last used (see settleGate). It
+	// is stamped here, on the reader's own goroutine, so input read while the event loop
+	// is blocked still counts.
+	input *inputClock
 }
 
 func newStdinGate(r io.Reader) *stdinGate { return &stdinGate{r: r} }
@@ -70,6 +76,9 @@ func (g *stdinGate) programRead(p []byte) (int, error) {
 		return 0, err
 	}
 	n, err := src.Read(p)
+	if n > 0 {
+		g.input.stamp()
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.handedOver {

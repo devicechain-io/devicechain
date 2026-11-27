@@ -103,6 +103,7 @@ type stage struct {
 // interrupt exits beforeApproval or afterApproval, never 1 for a stage it does not mean.
 func (st *stage) presenter(p Presenter, beforeApproval, afterApproval int) Presenter {
 	p.OnApproved = func() { st.approved.Store(true) }
+	p.ProgramErrorFails = true
 	p.OnInterrupt = func() { st.interrupted.Store(true) }
 	p.ForcedExitCode = func(approved bool) int {
 		if approved {

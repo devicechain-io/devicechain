@@ -7,9 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -101,13 +101,6 @@ func (d *instDriver) keys(names ...string) {
 	}
 }
 
-// show draws the screen and reports its frame written, as the screen writer does.
-func (d *instDriver) show() {
-	d.t.Helper()
-	d.m.render()
-	d.send(frameShownMsg{seq: math.MaxUint64})
-}
-
 // release delivers the settle messages held so far, oldest first.
 func (d *instDriver) release() {
 	held := d.held
@@ -117,11 +110,9 @@ func (d *instDriver) release() {
 	}
 }
 
-// settle shows the screen on now and lets its quiet period end with no key typed.
-func (d *instDriver) settle() {
-	d.show()
-	d.release()
-}
+// settle lets the screen on now settle: its quiet period ends with no key typed (the
+// tests' settle period is zero unless a test sets one).
+func (d *instDriver) settle() { d.release() }
 
 func (d *instDriver) screen() string { return bsStrip(d.m.render()) }
 
@@ -403,47 +394,121 @@ func TestSetupScreenGoldens(t *testing.T) {
 	}
 }
 
-// 🔴 A STALLED TERMINAL CANNOT APPROVE THE INSTANCE FOR KEYS TYPED AHEAD. While the
-// renderer is stalled nothing of the review has been written, so no quiet period runs and
-// every key is dropped; once its frame is written, a key typed ahead and delivered then
-// restarts the quiet period, so a timer that fires after it arms nothing. Only a key
-// pressed after the screen was written and the keyboard went quiet acts.
-func TestATypedAheadBurstNeverArmsTheInstanceReviewAfterAStall(t *testing.T) {
+// instDriverOn is newInstDriver with the instance screens on fake keys and a real
+// settle period, the hand-over already passed and the review entered at the clock's now.
+func instDriverOn(t *testing.T, keys *fakeKeys) *instDriver {
+	t.Helper()
+	withSettle(t, 500*time.Millisecond)
 	d := newInstDriver(t, instCaps(), instScreens(goodPlan))
-	d.toReview()
-	// The stall: the review is entered but no frame of it has been written. Keys typed now
-	// are dropped, and any timer that fires arms nothing.
-	d.keys("tab", "enter")
-	d.release()
-	d.keys("tab", "enter")
-	if len(d.chose) != 0 || d.m.inst.gate.armed {
-		t.Fatalf("keys typed during the stall: chose %d, armed %v", len(d.chose), d.m.inst.gate.armed)
+	d.m.inst.gate.clock = keys.clock
+	keys.advance(time.Second)
+	d.release()     // the hand-over settles: quiet since it was entered
+	keys.read()     // Enter, read from the terminal...
+	d.keys("enter") // ...and handled: Continue to the instance
+	keys.advance(time.Second)
+	d.toChoicesDone()
+	return d
+}
+
+// toChoicesDone drives the instance and escrow choices to the review, unsettled.
+func (d *instDriver) toChoicesDone() {
+	d.t.Helper()
+	d.keys("a", "c", "m", "e")
+	for i := 0; i < 20 && d.m.inst.flow.phase == phaseInstance; i++ {
+		if d.m.inst.flow.inst.focus == fieldContinue {
+			d.keys("enter")
+			continue
+		}
+		d.keys("tab")
 	}
-	// The frame is written; the burst typed ahead is delivered after it, and then the
-	// first quiet period's timer fires.
-	d.show()
-	first := d.held
-	d.held = nil
-	d.keys("tab")
-	for _, m := range first {
-		d.send(m)
+	d.toReviewFromEscrow()
+}
+
+// 🔴 KEYS READ DURING A STALL NEVER APPROVE THE INSTANCE. The event loop is blocked (a
+// renderer stalled on the terminal), so the review's settle tick and the keys typed
+// meanwhile wait in the queue; the reader still stamps the keys as it reads them. When
+// the loop resumes the tick arms the review (the stall was long and quiet since), and the
+// queued Tab and Enter are then handled: no input has been read since the arming, so they
+// were typed before it, and are dropped. A key pressed after that, once quiet, approves.
+func TestKeysReadDuringAStallNeverApproveTheInstance(t *testing.T) {
+	keys := newFakeKeys()
+	d := instDriverOn(t, keys)
+	// The stall: the review was entered, then Tab and Enter were read while the loop was
+	// blocked, and the loop stayed blocked for two seconds.
+	keys.advance(100 * time.Millisecond)
+	keys.read()
+	keys.advance(2 * time.Second)
+	d.release() // the loop resumes: the tick is handled first
+	if !d.m.inst.gate.armed {
+		t.Fatal("the review did not settle after a long quiet stall")
 	}
-	if d.m.inst.gate.armed {
-		t.Fatal("a quiet period a key interrupted armed the review")
-	}
-	d.keys("tab", "enter")
+	d.keys("tab", "enter") // the keys read during the stall, handled now
 	if len(d.chose) != 0 {
-		t.Fatal("a burst typed ahead approved the instance")
+		t.Fatal("keys read during a stall approved the instance")
 	}
-	// Quiet at last: the latest period ends with no key, and only now a key counts.
-	last := d.held[len(d.held)-1]
-	d.held = nil
-	d.send(last)
-	if !d.m.inst.gate.armed || d.m.inst.focus != reviewBack {
-		t.Fatalf("after a quiet period: armed %v, focus %d", d.m.inst.gate.armed, d.m.inst.focus)
+	if d.m.inst.gate.armed || d.m.inst.focus != reviewBack {
+		t.Fatalf("a stale key left the review armed %v, focus %d", d.m.inst.gate.armed, d.m.inst.focus)
 	}
-	d.keys("tab", "enter")
+	// A quiet user: the review settles again, and a key pressed now approves.
+	keys.advance(time.Second)
+	d.release()
+	keys.advance(time.Second)
+	keys.read()
+	d.keys("tab")
+	keys.read()
+	d.keys("enter")
 	if len(d.chose) != 1 {
-		t.Fatalf("Approve after the quiet period: chose %d", len(d.chose))
+		t.Fatalf("a quiet user's Approve: chose %d", len(d.chose))
+	}
+}
+
+// Keys read during the settle period push it forward: a tick that comes less than the
+// settle period after the last key read does not arm the review, a later one does. A
+// stale tick that arrives late arms nothing and does not stop the current one.
+func TestTheInstanceReviewSettlesOnlyOnceTheKeyboardIsQuiet(t *testing.T) {
+	keys := newFakeKeys()
+	d := instDriverOn(t, keys)
+	keys.advance(400 * time.Millisecond)
+	keys.read() // typed while the review settles
+	d.keys("tab")
+	keys.advance(200 * time.Millisecond)
+	stale := settleMsg{gen: d.m.inst.gate.gen, token: d.m.inst.gate.token - 1}
+	d.release() // 600 ms since the review, 200 ms since the key
+	if d.m.inst.gate.armed {
+		t.Fatal("the review armed 200 ms after a key")
+	}
+	keys.advance(time.Second)
+	d.send(stale) // a stale tick, late: nothing
+	if d.m.inst.gate.armed {
+		t.Fatal("a stale tick armed the review")
+	}
+	d.release() // the current ask: quiet now
+	if !d.m.inst.gate.armed {
+		t.Fatal("a late stale tick left the review unable to settle")
+	}
+}
+
+// Keys pressed while the terminal is too small to show the review are dropped before the
+// review sees them, but the reader has stamped them: once the terminal is large again the
+// review settles only after a key-free period.
+func TestKeysWhileTheTerminalIsTooSmallStillDelaySettling(t *testing.T) {
+	keys := newFakeKeys()
+	d := instDriverOn(t, keys)
+	d.send(tea.WindowSizeMsg{Width: 30, Height: 8})
+	for i := 0; i < 4; i++ {
+		keys.advance(300 * time.Millisecond)
+		keys.read()
+		d.keys("tab", "enter")
+	}
+	d.send(tea.WindowSizeMsg{Width: 100, Height: 40})
+	keys.advance(200 * time.Millisecond)
+	d.release()
+	if d.m.inst.gate.armed {
+		t.Fatal("the review armed 200 ms after the last key pressed while it was too small")
+	}
+	keys.advance(time.Second)
+	d.release()
+	if !d.m.inst.gate.armed || len(d.chose) != 0 {
+		t.Fatalf("after a quiet period: armed %v, chose %d", d.m.inst.gate.armed, len(d.chose))
 	}
 }

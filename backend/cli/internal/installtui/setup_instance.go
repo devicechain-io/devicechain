@@ -93,8 +93,8 @@ type instancePhase struct {
 	flow  *BootstrapFlow
 	theme bsTheme
 	stage instStage
-	// gate arms each visit to the hand-over and the review: only after a frame of it
-	// was written and the keyboard then stayed quiet (see settleGate).
+	// gate arms each visit to the hand-over and the review: only once the visit and the
+	// keyboard have both been quiet for the settle period (see settleGate).
 	gate  settleGate
 	focus int
 	// plan is the run the review shows; planErr is why there is none.
@@ -121,7 +121,7 @@ func (p *instancePhase) start() tea.Cmd {
 }
 
 // visit shows the hand-over or the review afresh: unarmed, with focus on def, and
-// taking no key until a frame of it has been shown and the keyboard has gone quiet.
+// taking no key until it has settled (see settleGate).
 func (p *instancePhase) visit(stage instStage, def int) tea.Cmd {
 	p.stage, p.focus = stage, def
 	return p.gate.enter()
@@ -142,14 +142,9 @@ func (p *instancePhase) canApprove() bool {
 // decide anything: proceed is Approve on a settled review, leave is Exit.
 func (p *instancePhase) update(msg tea.Msg) (tea.Cmd, prerunOutcome) {
 	switch msg := msg.(type) {
-	case frameShownMsg:
-		if p.stage == instHandover || p.stage == instReview {
-			return p.gate.frameShown(msg), stay
-		}
-		return nil, stay
 	case settleMsg:
 		if p.stage == instHandover || p.stage == instReview {
-			p.gate.settled(msg)
+			return p.gate.settled(msg), stay
 		}
 		return nil, stay
 	case ScreenBack:
@@ -277,9 +272,6 @@ func (p *instancePhase) screen() bsScreen {
 func (p *instancePhase) render() string {
 	if p.stage == instChoices {
 		return p.flow.Render()
-	}
-	if p.shown() {
-		p.gate.drew() // on this frame whole: its quiet period may start once it is written
 	}
 	return p.theme.frame(p.flow.header(), p.screen())
 }

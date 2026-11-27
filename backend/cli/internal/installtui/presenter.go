@@ -53,6 +53,13 @@ type Presenter struct {
 	OnApproved func()
 	// OnInterrupt, when set, is called on the first interrupt (Ctrl+C or a signal).
 	OnInterrupt func()
+	// ProgramErrorFails makes the program's own failure a failure of the run: a panic
+	// Bubble Tea recovered in the screens (tea.ErrProgramPanic), or any program error once
+	// the run had finished. dcctl setup local sets it, so that screens that never showed
+	// their result (an escrow receipt, a one-time password) are not counted a success.
+	// Without it (dcctl install) the run's own result stands and a renderer failure falls
+	// back to plain output, as it always has.
+	ProgramErrorFails bool
 
 	// Test seams. Zero values are the real process: signal.Notify for SIGINT and
 	// SIGTERM, os.Exit, and no extra program options.
@@ -169,9 +176,13 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	// The instance journey: its screens, its passphrase form, and the inbox its one-time
 	// disclosures wait in for the first-login screen. Whatever they still hold is cleared
 	// on every way out of Run.
-	// The screens that settle before they take a key learn from the screen writer when a
-	// frame of theirs has actually been written (see settleGate).
-	clock := &frameClock{}
+	// The screens that settle before they take a key read when input last arrived from
+	// the stdin gate's reader, which stamps it even while the event loop is blocked (see
+	// settleGate). On a Windows console Bubble Tea reads past the gate, and the screens
+	// stamp keys as they handle them.
+	readsPastGate := p.consoleBypassesGate || consoleReadsPastGate(p.Stdin)
+	keyClock := newInputClock(!readsPastGate)
+	gate.input = keyClock
 	var inst *instancePhase
 	var reveals installflow.RevealSink
 	if p.Bootstrap != nil {
@@ -179,7 +190,7 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 		setup := p.Bootstrap.Setup
 		setup.Caps, setup.Reveals = p.Caps, inbox
 		inst = newInstancePhase(p.Bootstrap, setup)
-		inst.gate.clock = clock
+		inst.gate.clock = keyClock
 		defer inst.flow.Close()
 		reveals = inbox
 		b.secrets = true
@@ -208,9 +219,7 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	// A screen that stops accepting writes is a failed renderer. Bubble Tea discards its
 	// write errors, so they are caught here: the program is stopped and the run falls back.
 	var screenFailed atomic.Bool
-	screen := &latchWriter{w: p.Stdout, clock: clock, report: func(m frameShownMsg) {
-		go prog.Send(m) // from the renderer's write: never block it on the event loop
-	}, failed: func() {
+	screen := &latchWriter{w: p.Stdout, failed: func() {
 		if screenFailed.CompareAndSwap(false, true) {
 			go prog.Kill() // this write is the renderer's, which the shutdown waits for
 		}
@@ -233,7 +242,7 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 		if !p.Caps.ProgressOnly {
 			// The checks on screen run under the run's context, so an interrupt reaches them.
 			mo.pre = newPrerun(runCtx, p.Caps, p.Wizard, preflight, hub.Redact)
-			mo.pre.rv.clock = clock
+			mo.pre.rv.clock = keyClock
 			mo.choose = choose
 			pre = mo.pre
 		}
@@ -345,6 +354,12 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	}
 
 	_, finished := hub.Final()
+	// A program error once the run had finished, or a panic in the screens at any point:
+	// under ProgramErrorFails, the run's result is not what the operator was shown.
+	var programFailure error
+	if p.ProgramErrorFails && perr != nil && (finished || errors.Is(perr, tea.ErrProgramPanic)) {
+		programFailure = perr
+	}
 	if perr != nil || !finished {
 		// The screen is gone. If the run is not over, the same run carries on in plain
 		// output; it is never started again. A panic in the engine also lands here (its
@@ -417,6 +432,12 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	}
 	// The command prints this error after the screen has closed, and a tool's
 	// diagnostics are often appended to it: it is redacted, as an event is.
+	if programFailure != nil {
+		if res.err != nil {
+			return hub.RedactError(fmt.Errorf("%w (and the terminal UI failed: %w)", res.err, programFailure))
+		}
+		return hub.RedactError(fmt.Errorf("the terminal UI failed, so the run's result was not shown: %w", programFailure))
+	}
 	if res.err == nil && !res.sum.Succeeded() {
 		return hub.RedactError(errIncomplete)
 	}
@@ -500,15 +521,9 @@ func (l *latchWriter) Write(p []byte) (n int, err error) {
 			l.failed()
 		}
 	}()
-	var start uint64
-	if l.clock != nil {
-		start = l.clock.drawn.Load()
-	}
 	n, err = l.w.Write(p)
 	if err != nil {
 		l.failed()
-	} else if l.report != nil {
-		l.clock.wrote(start, l.report)
 	}
 	return n, err
 }
@@ -516,10 +531,6 @@ func (l *latchWriter) Write(p []byte) (n int, err error) {
 type latchWriter struct {
 	w      io.Writer
 	failed func()
-	// clock and report, when set, tell a settling screen that a frame begun after its
-	// draw was written (frameClock.wrote).
-	clock  *frameClock
-	report func(frameShownMsg)
 }
 
 func isClosed(c chan struct{}) bool {

@@ -225,7 +225,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd, _ := m.pre.update(msg)
 			return m, cmd
 		}
-	case settleMsg, frameShownMsg:
+	case settleMsg:
 		// The settling of the screen whose Enter leads on: the instance journey's, or
 		// the install review's.
 		switch {

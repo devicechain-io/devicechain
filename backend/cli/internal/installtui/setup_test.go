@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/internal/installtui/terminal"
 )
@@ -391,4 +393,50 @@ func TestTheForcedExitUsesTheCallersCode(t *testing.T) {
 	}
 	// After an approval, the code is the caller's for an approved stage: the PTY test
 	// TestSetupPTYADoubleCtrlCAfterTheInstanceApprovalExitsFour drives that end to end.
+}
+
+// 🔴 A PANIC IN THE SCREENS IS NOT A SUCCESS UNDER SETUP. Bubble Tea recovers a panic in
+// the model (a success screen's Facts, say) and returns ErrProgramPanic; the run itself
+// had succeeded. Under setup (ProgramErrorFails) that is the stage's failure, since the
+// result was never shown; install keeps its own behaviour, the run's result.
+func TestAPanicInTheScreensAfterTheRunFailsTheStageUnderSetup(t *testing.T) {
+	for _, fails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ProgramErrorFails=%v", fails), func(t *testing.T) {
+			h := newHarness(t, tuiCaps(true))
+			h.p.ProgramErrorFails = fails
+			h.p.options = []tea.ProgramOption{tea.WithFilter(func(_ tea.Model, msg tea.Msg) tea.Msg {
+				if e, ok := msg.(eventMsg); ok {
+					if _, ok := e.env.Payload.(installflow.Summary); ok {
+						panic("the success screen exploded")
+					}
+				}
+				return msg
+			})}
+			done := h.run(engineFunc(func(_ context.Context, rt installflow.Runtime) (installflow.Summary, error) {
+				if err := startRun(rt); err != nil {
+					return installflow.Summary{}, err
+				}
+				return succeeded, endRun(rt)
+			}), installflow.Request{Operation: installflow.OperationInstall, AssumeYes: true})
+			err := h.result(done)
+			switch {
+			case fails && !errors.Is(err, tea.ErrProgramPanic):
+				t.Fatalf("under setup a panic in the screens returned %v", err)
+			case !fails && err != nil:
+				t.Fatalf("install's behaviour changed: %v", err)
+			}
+		})
+	}
+}
+
+// Setup's presenters fail a stage on a program error.
+func TestSetupsPresentersFailOnAProgramError(t *testing.T) {
+	rec := &stageRecorder{results: []error{nil, nil}}
+	var out bytes.Buffer
+	setupUnderTest(rec, &out, func() *BootstrapScreens { return &BootstrapScreens{} }).Run(context.Background())
+	for i, p := range rec.presenters {
+		if !p.ProgramErrorFails {
+			t.Fatalf("stage %d does not fail on a program error", i)
+		}
+	}
 }

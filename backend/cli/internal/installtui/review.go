@@ -37,9 +37,9 @@ const (
 
 // reviewState is the review screen.
 type reviewState struct {
-	// settleGate arms each visit to the screen: only after a frame of it was written
-	// and the keyboard then stayed quiet (see settleGate). Nothing left over from an
-	// earlier visit arms a later one.
+	// settleGate arms each visit to the screen: only once the visit and the keyboard
+	// have both been quiet for the settle period (see settleGate). Nothing left over from
+	// an earlier visit arms a later one.
 	settleGate
 	focus int
 	// offset is the first line of the plan shown, when it does not fit.

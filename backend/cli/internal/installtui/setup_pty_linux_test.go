@@ -251,7 +251,7 @@ func TestSetupPTYChild(t *testing.T) {
 	if scenario == "" {
 		return
 	}
-	reviewSettle = 500 * time.Millisecond // the real settle: the parent waits it out
+	reviewSettle, settlePoll = 500*time.Millisecond, 50*time.Millisecond // the real settle: the parent waits it out
 	mark := func(s string) {
 		f, err := os.OpenFile(os.Getenv(ptyMarkerEnv), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err == nil {

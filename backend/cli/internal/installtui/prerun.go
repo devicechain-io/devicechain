@@ -137,14 +137,9 @@ func (p *prerun) update(msg tea.Msg) (tea.Cmd, prerunOutcome) {
 	switch msg := msg.(type) {
 	case checkMsg:
 		return p.checkResult(msg), stay
-	case frameShownMsg:
-		if p.screen == screenReview {
-			return p.rv.frameShown(msg), stay
-		}
-		return nil, stay
 	case settleMsg:
 		if p.screen == screenReview {
-			p.rv.settled(msg)
+			return p.rv.settled(msg), stay
 		}
 		return nil, stay
 	case tea.KeyPressMsg:
@@ -318,7 +313,6 @@ func (p *prerun) render() string {
 		body = p.choicesLines(f.inner, f.rows)
 	case p.screen == screenReview:
 		body = p.reviewLines(f.inner, f.rows)
-		p.rv.drew() // the review is on this frame: its quiet period may start once it is written
 	default:
 		body = p.preflightLines(f.inner, f.rows)
 	}
