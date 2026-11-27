@@ -66,6 +66,8 @@ const (
 	// hostSmall has every tool and a 2-CPU, 4GiB engine: refused for a full-size local
 	// install, warned about for a compact one.
 	hostSmall
+	// hostUnknownCPU has ample memory, but Docker reports no CPU count.
+	hostUnknownCPU
 )
 
 // goldenEngine says what runs when the command reaches bootstrap.Install.
@@ -138,6 +140,12 @@ var installScenarios = []installScenario{
 	{name: "refuse-ui-unknown", args: []string{"install", "local", "--ui", "fancy"}},
 
 	// Preflight.
+	{name: "preflight-unknown-cpu", args: []string{"install", "local"},
+		host: hostUnknownCPU, engine: engineFakeOK},
+	{name: "preflight-unknown-cpu-compact", args: []string{"install", "local", "--compact"},
+		host: hostUnknownCPU, engine: engineFakeOK},
+	// The standalone doctor shares the child harness and pins its own output.
+	{name: "dcctl-preflight-unknown-cpu", args: []string{"preflight", "local"}, host: hostUnknownCPU},
 	{name: "preflight-fail-undersized-docker", args: []string{"install", "local"}, host: hostSmall},
 	{name: "preflight-warn-compact-small-docker", args: []string{"install", "local", "--compact"},
 		host: hostSmall, engine: engineFakeOK},
@@ -551,6 +559,9 @@ func fakeGoldenHost(sc installScenario) {
 	cpus, mem := "8", fmt.Sprint(16*installGoldenGiB)
 	if sc.host == hostSmall {
 		cpus, mem = "2", fmt.Sprint(4*installGoldenGiB)
+	}
+	if sc.host == hostUnknownCPU {
+		cpus = ""
 	}
 	runCmd = func(name string, args ...string) string {
 		switch strings.Join(append([]string{name}, args...), " ") {

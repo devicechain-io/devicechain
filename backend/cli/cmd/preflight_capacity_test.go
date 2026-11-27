@@ -4,11 +4,14 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
+	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/installplain"
 )
 
 func TestInstallDockerCapacity(t *testing.T) {
@@ -33,8 +36,10 @@ func TestInstallDockerCapacity(t *testing.T) {
 		{"7.6GiB warns", "8", "8160437862", nil, 0, 1},
 		{"Docker Desktop 8 GB warns", "8", "8267812045", nil, 0, 1},
 		{"8GiB passes", "8", "8589934592", nil, 0, 0},
-		{"unreadable", "", "not-a-number", nil, 0, 0},
-		{"unreadable CPU", "not-a-number", "", nil, 0, 0},
+		{"unreadable", "", "not-a-number", nil, 0, 1},
+		{"unreadable CPU", "not-a-number", "", nil, 0, 1},
+		{"zero CPU", "0", "17179869184", nil, 0, 1},
+		{"compact unknown CPU", "", "17179869184", []string{"--compact"}, 0, 1},
 		{"existing cluster", "2", "4294967296", []string{"--kube-context=prod", "--build=false"}, 0, 0},
 		{"build for existing cluster", "2", "4294967296", []string{"--kube-context=prod"}, 0, 4},
 	} {
@@ -93,10 +98,51 @@ func TestInstallDockerCapacity(t *testing.T) {
 			if failures != tc.fails || checked.warns != tc.warns {
 				t.Errorf("capacity failures=%d warnings=%d, want %d/%d\n%s", failures, checked.warns, tc.fails, tc.warns, output)
 			}
-			if tc.fails+tc.warns > 0 && !strings.Contains(output, "--compact") {
-				t.Errorf("capacity guidance must name --compact:\n%s", output)
+			if tc.fails > 0 || tc.warns > 0 && !strings.Contains(output, "UNKNOWN engine CPUs:") {
+				if !strings.Contains(output, "--compact") {
+					t.Errorf("capacity guidance must name --compact:\n%s", output)
+				}
 			}
 		})
+	}
+}
+
+func TestUnknownDockerCPUIsVisibleAndAdvisory(t *testing.T) {
+	for _, cpus := range []string{"", "not-a-number", "0", "-1", "999999999999999999999999999999999999"} {
+		for _, fullSize := range []bool{false, true} {
+			t.Run(fmt.Sprintf("cpus=%q/fullSize=%v", cpus, fullSize), func(t *testing.T) {
+				fakeDockerCapacity(t, cpus, "17179869184")
+				var observations []installflow.PreflightObservation
+				d := &doctor{observe: func(o installflow.PreflightObservation) {
+					observations = append(observations, o)
+				}}
+				d.checkDocker(doctorOpts{FullSizeInstall: fullSize})
+				d.summary()
+				if d.fails != 0 || d.warns != 1 {
+					t.Fatalf("unknown CPU must be advisory, never pass or fail: fails=%d warns=%d", d.fails, d.warns)
+				}
+				var cpuRows int
+				section := installflow.MessageCode("")
+				for _, o := range observations {
+					if o.Observation == installflow.ObserveSection {
+						section = o.Section
+					}
+					if strings.HasPrefix(o.Text.String(), "engine CPUs:") {
+						cpuRows++
+						if section != installplain.SectionDockerEngine || o.Verdict != installflow.CheckUnknown || o.Fix.IsZero() {
+							t.Errorf("CPU row must be UNKNOWN in Docker engine with a fix: %+v", o)
+						}
+					}
+				}
+				if cpuRows != 1 {
+					t.Fatalf("got %d CPU rows, want exactly one UNKNOWN", cpuRows)
+				}
+				summary := observations[len(observations)-1]
+				if summary.Observation != installflow.ObserveSummary || summary.Fails != 0 || summary.Warns != 1 {
+					t.Fatalf("unknown CPU lost from summary: %+v", summary)
+				}
+			})
+		}
 	}
 }
 

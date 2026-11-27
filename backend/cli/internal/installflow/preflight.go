@@ -35,9 +35,9 @@ const (
 	CheckInfo CheckVerdict = "info"
 	CheckWarn CheckVerdict = "warn"
 	CheckFail CheckVerdict = "fail"
-	// The three below are reserved for the presenters that show them; today's
-	// doctor never reaches a verdict it cannot name, so it emits none of them.
-	CheckUnknown    CheckVerdict = "unknown"
+	// CheckUnknown reports a check whose value could not be determined.
+	CheckUnknown CheckVerdict = "unknown"
+	// These two are reserved for the presenters that show them.
 	CheckNotNeeded  CheckVerdict = "not_needed"
 	CheckNotChecked CheckVerdict = "not_checked"
 )
