@@ -135,8 +135,8 @@ func (f *cloudFakes) RoundTrip(r *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
 }
 
-func (f *cloudFakes) probes(server string) func(context.Context, cloudTarget) (cloudProbes, error) {
-	return func(context.Context, cloudTarget) (cloudProbes, error) {
+func (f *cloudFakes) probes(server string) cloudProbeFunc {
+	return func(_, _ context.Context, _ cloudTarget) (cloudProbes, error) {
 		return cloudProbes{server: server, kube: f.kube, creds: f.creds, http: cloudHTTPClient(f), tofuRegistry: "registry.opentofu.org",
 			lookupHost: func(ctx context.Context, host string) ([]string, error) {
 				if f.hang {
@@ -273,6 +273,67 @@ func TestCloudDiagnosticsAPushRegistryIsAVerdict(t *testing.T) {
 	}
 }
 
+// 🔴 THE LOCAL BUILD REGISTRY IS ASKED THE WAY THE INSTALL USES IT. --build with no
+// --registry pushes to the plain-HTTP registry the install starts on this machine
+// (bootstrap.LocalRegistry). It is asked over http://, with its port in the row; it
+// passes only when a registry answers there, reads NOT NEEDED while nothing listens
+// (the install starts it), and anything else is a verdict, never a PASS.
+func TestCloudDiagnosticsTheLocalBuildRegistryIsAskedOverHTTP(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		registry string
+		err      error
+		status   int
+		want     installflow.CheckVerdict
+		text     string
+	}{
+		{"answers", bootstrap.LocalRegistry, nil, 0, installflow.CheckPass, "local build registry localhost:5000 answers"},
+		{"not started yet", bootstrap.LocalRegistry, &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED},
+			0, installflow.CheckNotNeeded, "local build registry localhost:5000: not running yet"},
+		{"something else on the port", bootstrap.LocalRegistry, nil, http.StatusNotFound, installflow.CheckWarn,
+			"local build registry localhost:5000 answered HTTP 404"},
+		{"unreachable", bootstrap.LocalRegistry, errors.New(canaryErr), 0, installflow.CheckUnknown,
+			"local build registry localhost:5000: could not be reached"},
+		{"another loopback port", "127.0.0.1:5001/dev", nil, 0, installflow.CheckPass, "local build registry 127.0.0.1:5001 answers"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCloudFakes(t)
+			host := registryHost(tc.registry)
+			hostname := strings.Split(host, ":")[0]
+			if tc.err != nil {
+				f.httpErr[hostname] = tc.err
+			}
+			if tc.status != 0 {
+				f.status[hostname] = tc.status
+			}
+			var rows []installflow.PreflightObservation
+			r := cloudDiagnosticsRunner(cloudTarget{KubeContext: "prod", ImageRegistry: tc.registry, Build: true}, f.probes(testServer))
+			_, _ = r.RunPreflight(context.Background(), func(o installflow.PreflightObservation) { rows = append(rows, o) })
+			if r := row(t, rows, tc.text); r.Verdict != tc.want {
+				t.Errorf("the local build registry reads %s, want %s", r.Verdict, tc.want)
+			}
+			asked := false
+			for _, m := range f.methods {
+				asked = asked || m == "HEAD http://"+host+"/v2/"
+				if strings.Contains(m, "https://"+host) {
+					t.Errorf("the local build registry was asked over HTTPS: %s", m)
+				}
+			}
+			if !asked {
+				t.Errorf("the local build registry was not asked over HTTP: %q", f.methods)
+			}
+		})
+	}
+	// A loopback registry the install does not build into is the nodes' to pull from, as before.
+	f := newCloudFakes(t)
+	var rows []installflow.PreflightObservation
+	r := cloudDiagnosticsRunner(cloudTarget{KubeContext: "prod", ImageRegistry: bootstrap.LocalRegistry}, f.probes(testServer))
+	_, _ = r.RunPreflight(context.Background(), func(o installflow.PreflightObservation) { rows = append(rows, o) })
+	if r := row(t, rows, "image registry localhost"); r.Verdict != installflow.CheckInfo {
+		t.Errorf("a pull-only loopback registry reads %s", r.Verdict)
+	}
+}
+
 // 🔴 THE NAMED MUTANT: an error reported as PASS. Every way each probe can fail reads
 // WARN, UNKNOWN or NOT CHECKED, quotes none of the error, and never fails the run.
 func TestCloudDiagnosticsErrorsAreNeverPass(t *testing.T) {
@@ -366,8 +427,8 @@ func TestCloudDiagnosticsUnverifiedTLSWarns(t *testing.T) {
 		{testServer, true, "does not verify"},
 	} {
 		f := newCloudFakes(t)
-		probes := func(ctx context.Context, c cloudTarget) (cloudProbes, error) {
-			p, err := f.probes(tc.server)(ctx, c)
+		probes := func(ctx, life context.Context, c cloudTarget) (cloudProbes, error) {
+			p, err := f.probes(tc.server)(ctx, life, c)
 			p.insecure = tc.insecure
 			return p, err
 		}
@@ -389,8 +450,8 @@ func TestCloudDiagnosticsNameRowsThatAreNotChecks(t *testing.T) {
 	if r := row(t, rows, "API server name"); r.Verdict != installflow.CheckNotNeeded {
 		t.Errorf("an IP server reads %s", r.Verdict)
 	}
-	probes := func(ctx context.Context, c cloudTarget) (cloudProbes, error) {
-		p, err := f.probes(testServer)(ctx, c)
+	probes := func(ctx, life context.Context, c cloudTarget) (cloudProbes, error) {
+		p, err := f.probes(testServer)(ctx, life, c)
 		p.proxied = true
 		return p, err
 	}
@@ -405,7 +466,7 @@ func TestCloudDiagnosticsNameRowsThatAreNotChecks(t *testing.T) {
 // A context that cannot be loaded is one UNKNOWN row, not a failure and not an error.
 func TestCloudDiagnosticsUnloadableContextIsUnknown(t *testing.T) {
 	var rows []installflow.PreflightObservation
-	res, err := cloudDiagnosticsRunner(prodTarget, func(context.Context, cloudTarget) (cloudProbes, error) {
+	res, err := cloudDiagnosticsRunner(prodTarget, func(_, _ context.Context, _ cloudTarget) (cloudProbes, error) {
 		return cloudProbes{}, errors.New(canaryErr)
 	}).RunPreflight(context.Background(), func(o installflow.PreflightObservation) {
 		if o.Observation == installflow.ObserveCheck {

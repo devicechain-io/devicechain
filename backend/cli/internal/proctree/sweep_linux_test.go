@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -142,5 +143,83 @@ func TestRunWithReportsAnIncompleteSweep(t *testing.T) {
 	}
 	if err := RunWith(context.Background(), exec.Command("true"), Options{}); err != nil {
 		t.Fatalf("without a sweep, RunWith returned %v", err)
+	}
+}
+
+// The escape helper: this test binary, re-run. As "leader" it starts an "escaped" copy
+// of itself in a session of its own (out of the command's process group, so the group
+// kill cannot reach it) and exits once that copy has written its pid; as "escaped" it
+// writes its pid and stalls. Both keep the environment they were given, mark and all.
+const (
+	escapeRoleEnv = "DCCTL_PROCTREE_ESCAPE_ROLE"
+	escapePidEnv  = "DCCTL_PROCTREE_ESCAPE_PID"
+)
+
+func TestEscapeHelper(t *testing.T) {
+	switch os.Getenv(escapeRoleEnv) {
+	case "leader":
+		c := exec.Command(os.Args[0], "-test.run=^TestEscapeHelper$", "-test.count=1")
+		c.Env = append(os.Environ(), escapeRoleEnv+"=escaped")
+		c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if err := c.Start(); err != nil {
+			os.Exit(3)
+		}
+		pidFile := os.Getenv(escapePidEnv)
+		for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			if _, err := os.Stat(pidFile); err == nil {
+				os.Exit(0)
+			}
+		}
+		os.Exit(4)
+	case "escaped":
+		pidFile := os.Getenv(escapePidEnv)
+		if os.WriteFile(pidFile+".tmp", []byte(strconv.Itoa(os.Getpid())), 0o600) == nil {
+			_ = os.Rename(pidFile+".tmp", pidFile)
+		}
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	}
+}
+
+// 🔴 A LARGE ENVIRONMENT DOES NOT HIDE AN ESCAPED DESCENDANT. The command is given an
+// environment larger than the sweep reads of any process; a descendant that left the
+// group (a session of its own) and kept running is still found by its mark and ended,
+// and the sweep reports itself complete only because it was.
+func TestASweepFindsAnEscapedDescendantBehindALargeEnvironment(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "escaped")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestEscapeHelper$", "-test.count=1")
+	cmd.Env = append(os.Environ(),
+		"DCCTL_PROCTREE_PAD="+strings.Repeat("p", environCap+environCap/2), // under MAX_ARG_STRLEN
+		escapeRoleEnv+"=leader", escapePidEnv+"="+pidFile)
+	if err := RunWith(context.Background(), cmd, Options{NewSession: true, EndTreeOnExit: true, Sweep: true}); err != nil {
+		t.Fatalf("RunWith returned %v", err)
+	}
+	b, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("the escaped descendant never reported: %v", err)
+	}
+	pid, err := strconv.Atoi(string(b))
+	if err != nil {
+		t.Fatalf("the escaped descendant reported %q", b)
+	}
+	gone := func() bool {
+		s, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+		if err != nil {
+			return true
+		}
+		i := strings.LastIndexByte(string(s), ')')
+		return i >= 0 && i+2 < len(s) && (s[i+2] == 'Z' || s[i+2] == 'X')
+	}
+	t.Cleanup(func() {
+		if !gone() {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+	// The sweep signalled it before RunWith returned; the kernel may take a moment to
+	// finish it off.
+	for deadline := time.Now().Add(5 * time.Second); !gone(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("an escaped descendant behind a large environment outlived the sweep")
+		}
 	}
 }

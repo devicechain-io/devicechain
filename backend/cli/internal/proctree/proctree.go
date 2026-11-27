@@ -28,10 +28,11 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
-// Run is RunWith with no options: what the doctor's commands get.
+// Run is RunWith with no options.
 func Run(ctx context.Context, cmd *exec.Cmd) error { return RunWith(ctx, cmd, Options{}) }
 
 // Options are what RunWith does beyond Run, for a command that is not trusted to behave:
@@ -72,15 +73,31 @@ const sweepEnv = "DCCTL_PROCTREE_RUN"
 
 // mark gives cmd this run's sweep mark and returns it ("KEY=value"), or "" when the
 // mark cannot be made, in which case nothing is swept.
+//
+// 🔴 THE MARK IS THE FIRST ENTRY OF THE ENVIRONMENT. The sweep reads only the first
+// environCap bytes of each process's environment, so a mark placed after the rest of it
+// would be out of reach of every process whose environment is larger than that (an
+// exec plugin given a big KUBERNETES_EXEC_INFO, a CI runner's inherited environment):
+// the sweep would see no process at all and still report it had looked at every one.
+// Any entry for the mark's variable already there (dcctl run under another sweep) is
+// dropped, since exec keeps the LAST value of a duplicated variable, where it stands.
 func mark(cmd *exec.Cmd) string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return ""
 	}
 	m := sweepEnv + "=" + hex.EncodeToString(b)
-	if cmd.Env == nil {
-		cmd.Env = os.Environ()
+	env := cmd.Env
+	if env == nil {
+		env = os.Environ()
 	}
-	cmd.Env = append(cmd.Env, m)
+	marked := make([]string, 1, len(env)+1)
+	marked[0] = m
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, sweepEnv+"=") {
+			marked = append(marked, kv)
+		}
+	}
+	cmd.Env = marked
 	return m
 }

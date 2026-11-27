@@ -16,9 +16,12 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
-// procTreeReport is the pgid role: "proctree: <pid> <pgid> <stdin is the null device>".
+// procTreeReport is the pgid role: "proctree: <pid> <pgid> <stdin is the null device>
+// <session id> <whether /dev/tty opens>".
 func procTreeReport() {
 	null := false
 	if in, err := os.Stdin.Stat(); err == nil {
@@ -26,7 +29,13 @@ func procTreeReport() {
 			null = os.SameFile(in, dev)
 		}
 	}
-	fmt.Printf("%s %d %d %t\n", procTreeLine, os.Getpid(), syscall.Getpgrp(), null)
+	sid, _ := unix.Getsid(0)
+	tty := false
+	if f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0); err == nil {
+		tty = true
+		_ = f.Close()
+	}
+	fmt.Printf("%s %d %d %t %d %t\n", procTreeLine, os.Getpid(), syscall.Getpgrp(), null, sid, tty)
 }
 
 // watchExit reports whether pid has exited. A zombie has: it runs nothing, and only
@@ -56,19 +65,26 @@ func watchExit(t *testing.T, pid int) func() bool {
 	return gone
 }
 
-func runPgidHelper(t *testing.T, run func() string) (pid, pgid int, nullStdin bool) {
+// pgidReport is what the pgid role reported of itself.
+type pgidReport struct {
+	pid, pgid, sid int
+	nullStdin, tty bool
+}
+
+func runPgidHelper(t *testing.T, run func() string) pgidReport {
 	t.Helper()
 	t.Setenv(procTreeRoleEnv, "pgid")
 	f := parseProcTreeReport(t, run())
-	if len(f) != 3 {
+	if len(f) != 5 {
 		t.Fatalf("the helper reported %q", f)
 	}
 	pid, err1 := strconv.Atoi(f[0])
 	pgid, err2 := strconv.Atoi(f[1])
-	if err1 != nil || err2 != nil {
+	sid, err3 := strconv.Atoi(f[3])
+	if err1 != nil || err2 != nil || err3 != nil {
 		t.Fatalf("the helper reported %q", f)
 	}
-	return pid, pgid, f[2] == "true"
+	return pgidReport{pid: pid, pgid: pgid, sid: sid, nullStdin: f[2] == "true", tty: f[4] == "true"}
 }
 
 // A screen command leads a process group of its own, which is what lets its whole tree
@@ -76,14 +92,31 @@ func runPgidHelper(t *testing.T, run func() string) (pid, pgid int, nullStdin bo
 // group takes nothing from it (a background group that read the terminal would be
 // stopped).
 func TestAScreenCommandLeadsAProcessGroupOfItsOwn(t *testing.T) {
-	pid, pgid, null := runPgidHelper(t, func() string {
+	r := runPgidHelper(t, func() string {
 		return runContext(context.Background(), os.Args[0], procTreeArgs...)
 	})
-	if pgid != pid || pgid == syscall.Getpgrp() {
-		t.Fatalf("the command (pid %d) ran in process group %d; dcctl's is %d", pid, pgid, syscall.Getpgrp())
+	if r.pgid != r.pid || r.pgid == syscall.Getpgrp() {
+		t.Fatalf("the command (pid %d) ran in process group %d; dcctl's is %d", r.pid, r.pgid, syscall.Getpgrp())
 	}
-	if !null {
+	if !r.nullStdin {
 		t.Fatal("the command's stdin is not the null device: it could read the terminal the screen owns")
+	}
+}
+
+// 🔴 A SCREEN COMMAND CAN NEVER PROMPT. kubectl's exec credential plugin asking for an
+// MFA code opens /dev/tty itself; in a background group of dcctl's session it would be
+// stopped there by SIGTTOU, and the check would wait on it for ever. The command leads a
+// session of its own, so it has no controlling terminal and the open fails at once.
+func TestAScreenCommandHasNoControllingTerminal(t *testing.T) {
+	r := runPgidHelper(t, func() string {
+		return runContext(context.Background(), os.Args[0], procTreeArgs...)
+	})
+	own, _ := unix.Getsid(0)
+	if r.sid != r.pid || r.sid == own {
+		t.Fatalf("the command (pid %d) ran in session %d; dcctl's is %d", r.pid, r.sid, own)
+	}
+	if r.tty {
+		t.Fatal("the command could open /dev/tty: a credential plugin could prompt on the screen's terminal")
 	}
 }
 
@@ -92,8 +125,8 @@ func TestAScreenCommandLeadsAProcessGroupOfItsOwn(t *testing.T) {
 // on a cooked terminal signals the foreground group, so a command moved out of it would
 // no longer hear the operator's interrupt.
 func TestThePlainDoctorsCommandsStayInDcctlsProcessGroup(t *testing.T) {
-	pid, pgid, _ := runPgidHelper(t, func() string { return run(os.Args[0], procTreeArgs...) })
-	if pgid != syscall.Getpgrp() {
-		t.Fatalf("the plain command (pid %d) ran in process group %d, not dcctl's %d", pid, pgid, syscall.Getpgrp())
+	r := runPgidHelper(t, func() string { return run(os.Args[0], procTreeArgs...) })
+	if r.pgid != syscall.Getpgrp() {
+		t.Fatalf("the plain command (pid %d) ran in process group %d, not dcctl's %d", r.pid, r.pgid, syscall.Getpgrp())
 	}
 }

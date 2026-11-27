@@ -101,10 +101,15 @@ type cloudProbes struct {
 	tofuRegistry string
 }
 
+// cloudProbeFunc builds the advisory diagnostics' windows onto a target. ctx is the
+// screen's: an Exit or a Recheck ends it, and the load must end with it. life is the
+// run's, for the connections the probes open (see cloudDiagnosticsRunner).
+type cloudProbeFunc func(ctx, life context.Context, t cloudTarget) (cloudProbes, error)
+
 // cloudDiagnosticsRunner is the advisory diagnostics as a preflight runner, built for
 // one target. probes is called once per run, so a Recheck reads the kubeconfig again.
 // Its result never carries a failure.
-func cloudDiagnosticsRunner(t cloudTarget, probes func(context.Context, cloudTarget) (cloudProbes, error)) installflow.PreflightRunner {
+func cloudDiagnosticsRunner(t cloudTarget, probes cloudProbeFunc) installflow.PreflightRunner {
 	return installflow.PreflightFunc(func(ctx context.Context, observe func(installflow.PreflightObservation)) (installflow.PreflightResult, error) {
 		// Bound to the screen's context, like the doctor the screen runs.
 		d := &doctor{observe: observe, ctx: ctx}
@@ -118,9 +123,13 @@ func cloudDiagnosticsRunner(t cloudTarget, probes func(context.Context, cloudTar
 		// join. An Exit ends the run promptly, so it ends life promptly too.
 		life, end := context.WithCancel(context.WithoutCancel(ctx))
 		defer end()
-		p, err := probes(life, t)
+		p, err := probes(ctx, life, t)
 		var irregular notRegularFileError
 		switch {
+		case err != nil && ctx.Err() != nil:
+			// An Exit or a Recheck ended the run while the kubeconfig was loading.
+			d.notChecked("the advisory cluster checks stopped before --kube-context "+t.KubeContext+" had loaded", "")
+			return installflow.PreflightResult{Warns: d.warns}, nil
 		case errors.As(err, &irregular):
 			d.notChecked("the advisory cluster checks did not read "+filepath.Base(irregular.path)+": it is not a regular file",
 				"point the context at regular files, then Recheck")
@@ -463,6 +472,10 @@ type cloudRegistry struct {
 	// fromNodes: the cluster's nodes, not this machine, fetch from it, so reaching it
 	// from here is a fact, not a verdict.
 	fromNodes bool
+	// localBuild: the plain-HTTP registry on this machine that a --build install starts
+	// itself and pushes what it builds to. Asked over http://; not running yet is
+	// expected, not a fault.
+	localBuild bool
 }
 
 // The Helm chart repositories the cluster root installs from, each with the component
@@ -520,9 +533,31 @@ func (t cloudTarget) registries(p cloudProbes, fe frontEnd) []cloudRegistry {
 		regs = append(regs, monitoringCharts)
 	}
 	if host := registryHost(t.ImageRegistry); host != "" {
-		regs = append(regs, cloudRegistry{what: "image registry", url: "https://" + host + "/v2/", fromNodes: !t.Build})
+		if t.Build && loopbackHost(host) {
+			// 🔴 THE LOCAL BUILD REGISTRY SPEAKS PLAIN HTTP. --build pushes to a registry
+			// container the install starts on this machine (localhost:5000 unless
+			// --registry names another loopback address), and it has no TLS: asked over
+			// https:// it could never answer, before the install or after it.
+			regs = append(regs, cloudRegistry{what: "local build registry", url: "http://" + host + "/v2/", localBuild: true})
+		} else {
+			regs = append(regs, cloudRegistry{what: "image registry", url: "https://" + host + "/v2/", fromNodes: !t.Build})
+		}
 	}
 	return regs
+}
+
+// loopbackHost reports whether a registry host ("localhost:5000", "127.0.0.1:5000",
+// "[::1]:5000") names this machine.
+func loopbackHost(host string) bool {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // registryHost is the host part of an image registry reference ("ghcr.io/org" is ghcr.io).
@@ -573,6 +608,10 @@ func (d *doctor) checkRegistries(ctx context.Context, t cloudTarget, p cloudProb
 			fix = "the cluster's nodes pull images from " + host + "; check that they can reach it"
 		}
 		err := errs[i]
+		if r.localBuild {
+			d.localBuildRegistry(r, codes[i], err)
+			continue
+		}
 		switch {
 		case proxied[i]:
 			d.notChecked(what+": "+proxyNotUsed, "")
@@ -601,6 +640,31 @@ func (d *doctor) checkRegistries(ctx context.Context, t cloudTarget, p cloudProb
 	if !fe.known && !t.RemoveLegacyIngress {
 		d.notChecked("ingress-nginx chart repository: not checked, the cluster's IngressClasses could not be read, "+
 			"so whether the install keeps ingress-nginx is not known", "")
+	}
+}
+
+// localBuildRegistry is the row for the registry a --build install starts on this
+// machine. It passes only when a registry answers there over plain HTTP; nothing
+// listening is NOT NEEDED, since the install starts it, and anything else is a verdict
+// with this registry's own fix, never the HTTPS advice the remote rows give.
+func (d *doctor) localBuildRegistry(r cloudRegistry, code int, err error) {
+	host := r.url
+	if u, perr := url.Parse(r.url); perr == nil {
+		host = u.Host // with its port: which local port is the point
+	}
+	what := r.what + " " + host
+	fix := "the install pushes the images it builds to " + host + " over plain HTTP; check what answers on that port, then Recheck"
+	switch {
+	case err == nil && code == http.StatusOK:
+		d.pass(what + " answers")
+	case err == nil:
+		d.warn(fmt.Sprintf("%s answered HTTP %d, not as an image registry does", what, code), fix)
+	case classifyProbeErr(err) == probeRefused:
+		d.check(installflow.CheckNotNeeded, what+": not running yet; the install starts it", "")
+	case classifyProbeErr(err) == probeTimeout:
+		d.unknown(what+": no answer within "+cloudAPITimeout.String(), fix)
+	default:
+		d.unknown(what+": could not be reached", fix)
 	}
 }
 
@@ -963,11 +1027,16 @@ func credentialsOf(cfg *rest.Config) credKind {
 // within(): past cloudAPITimeout it reads UNKNOWN and the read is given up on. A token
 // file is read once, here; client-go's refreshing reader, which would read it again on
 // a request, is never used.
-func liveCloudProbes(life context.Context, t cloudTarget) (cloudProbes, error) {
+//
+// 🔴 THE LOAD IS BOUNDED BY THE SCREEN'S CONTEXT, NOT BY life. life outlives the
+// screen's cancel on purpose, for the probes' dials; a load bounded by it would hold an
+// Exit, or leave a replaced run loading beside a Recheck's, for the whole of
+// cloudAPITimeout. Bounded by ctx, an Exit costs at most within's join.
+func liveCloudProbes(ctx, life context.Context, t cloudTarget) (cloudProbes, error) {
 	// Taken before the bound: a load given up on keeps running, and must not read
 	// anything a later run could change.
 	load := loadRestConfig
-	return within(life, cloudAPITimeout, func(context.Context) (cloudProbes, error) {
+	return within(ctx, cloudAPITimeout, func(context.Context) (cloudProbes, error) {
 		if f := irregularKubeFile(t.KubeContext); f != "" {
 			return cloudProbes{}, notRegularFileError{path: f}
 		}
