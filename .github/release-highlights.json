@@ -58,15 +58,15 @@
     "site is a separate repository and nothing here reads its prose. Answering \"no site",
     "impact\" is a fine answer; not asking is not."
   ],
-  "version": "v1.9.0",
-  "theme": "updates roll out in cohorts, and tools check what an instance serves",
+  "version": "v1.10.0",
+  "theme": "devices take bulk changes, metrics carry text, and install can be guided",
   "breaking": false,
   "highlights": [
-    "Upgrade in place from v1.8.x with the v1.9.0 dcctl: install with your cluster settings, then upgrade each instance. The configuration keys this release adds are optional, v1.8 pods keep working while the upgrade rolls, and dcctl upgrade now refuses to skip a minor release.",
-    "Staged update rollouts: declare named canaries followed by cumulative fleet percentages, and a rollout pauses when a cohort fails or a failure-rate window trips. The console shows each cohort and promotes it, and an operator can override a halt deliberately.",
-    "dcctl and the console ask an instance which schema it serves before sending a request, and report an upgrade remedy instead of an opaque error. Each release now publishes a JSON Schema of its instance configuration.",
-    "Agents can propose a device command over MCP and a person approves it in the console before anything is sent (Preview, off by default), and a command sent by an automation records which rule fired and why.",
-    "Facet values import in batches through the API or from a CSV file in the console, relationships can be managed from dcctl, and charts over long ranges read a one-hour rollup instead of tens of thousands of rows.",
-    "A read by a re-created device's token returns only the new device's events, inbound integrations keep accepting uplinks while device-management is briefly unavailable, and broker leadership is evened out at install and shown by the HA guide."
+    "Upgrade in place from v1.9.x with the v1.10.0 dcctl: install with your cluster settings, then upgrade each instance. Before you upgrade, compare each tenant's rule-sent command rate with its outbound ceiling: a command sent by a rule now counts against it (100 a second with a burst of 200 unless the tenant has an override), and rule previews, version comparisons and dcctl test runs now share 8 slots per event-processing process.",
+    "Device bulk changes (Preview): set or remove one declared shared configuration key on up to 10,000 devices. Plan it, review it, start, pause, resume, abort or reverse it from the API or dcctl, and a device's line counts as confirmed only when the device itself reports it. Fleet operation readiness is renamed to bulk change readiness, and the old names keep working.",
+    "A metric can be declared STRING, so a device can report a mode or a state as text. The reading is stored, kept as the device's last-known value, shown in the console, delivered to dashboards, and returned to AI agents over MCP marked as device data. It is never averaged or charted as a number, and the rule editor warns when a rule names one.",
+    "dcctl install has an opt-in terminal UI (--ui=tui) that walks through preflight, the cluster choices and a review you approve before anything is installed, and dcctl setup local (Preview) carries on from it to a first instance. Without --ui, dcctl install prints, prompts and exits exactly as before.",
+    "dcctl install --output json reports an install as a stream of JSON events for automation, and dcctl now redacts credentials written into any URL it prints, including the output of the tools it runs.",
+    "The Instance resource is also served as core.devicechain.io/v1 (Preview) beside v1beta1, update artifacts larger than 64 MiB can be stored on S3, and older hour rollups are filled in the background so charts over long ranges read them."
   ]
 }

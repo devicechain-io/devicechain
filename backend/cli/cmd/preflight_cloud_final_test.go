@@ -146,8 +146,8 @@ func TestAnExitEndsAStalledHandshake(t *testing.T) {
 	}()
 	cfg := &rest.Config{Host: "https://" + ln.Addr().String(), BearerToken: "t"}
 	f := newCloudFakes(t)
-	r := cloudDiagnosticsRunner(prodTarget, func(ctx context.Context, _ cloudTarget) (cloudProbes, error) {
-		p, err := cloudProbesFrom(ctx, cfg)
+	r := cloudDiagnosticsRunner(prodTarget, func(_, life context.Context, _ cloudTarget) (cloudProbes, error) {
+		p, err := cloudProbesFrom(life, cfg)
 		p.http = cloudHTTPClient(f)
 		return p, err
 	})
@@ -211,6 +211,52 @@ func TestAKubeconfigThatNeverLoadsIsBounded(t *testing.T) {
 	}
 }
 
+// 🔴 AN EXIT DURING A HUNG LOAD ENDS THE RUN WITHIN THE JOIN, not at the load's bound:
+// the load is bounded by the screen's context, so a kubeconfig on a stalled share holds
+// an Exit (or leaves a replaced run loading beside a Recheck's) for no more than
+// probeJoinDelay, and the run says it stopped rather than that the load timed out.
+func TestAnExitDuringAHungKubeconfigLoadEndsTheRunPromptly(t *testing.T) {
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "absent"))
+	oldLoad, oldAPI, oldJoin := loadRestConfig, cloudAPITimeout, probeJoinDelay
+	t.Cleanup(func() { loadRestConfig, cloudAPITimeout, probeJoinDelay = oldLoad, oldAPI, oldJoin })
+	cloudAPITimeout, probeJoinDelay = 20*time.Second, 50*time.Millisecond
+	release := make(chan struct{})
+	defer close(release)
+	loading := make(chan struct{})
+	loadRestConfig = func(string) (*rest.Config, error) {
+		close(loading)
+		<-release // a read that never returns, and ignores everything
+		return nil, errors.New("late")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var rows []installflow.PreflightObservation
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = cloudDiagnosticsRunner(prodTarget, liveCloudProbes).RunPreflight(ctx,
+			func(o installflow.PreflightObservation) {
+				if o.Observation == installflow.ObserveCheck {
+					rows = append(rows, o)
+				}
+			})
+	}()
+	select {
+	case <-loading:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the kubeconfig load never started")
+	}
+	cancel() // the Exit
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("an Exit during a hung kubeconfig load held the run past the join")
+	}
+	if len(rows) != 1 || rows[0].Verdict != installflow.CheckNotChecked || !strings.Contains(rows[0].Text.String(), "stopped before") {
+		t.Fatalf("rows %+v", rows)
+	}
+}
+
 // A token file is read once, while loading, inside the bound: client-go's refreshing
 // reader, which reads the file again on a request, is never used.
 func TestATokenFileIsNotReadAgainOnARequest(t *testing.T) {
@@ -231,7 +277,7 @@ func TestATokenFileIsNotReadAgainOnARequest(t *testing.T) {
 	loadRestConfig = func(string) (*rest.Config, error) {
 		return &rest.Config{Host: srv.URL, BearerToken: "tok-as-loaded", BearerTokenFile: tokenFile}, nil
 	}
-	p, err := liveCloudProbes(context.Background(), prodTarget)
+	p, err := liveCloudProbes(context.Background(), context.Background(), prodTarget)
 	if err != nil {
 		t.Fatal(err)
 	}
