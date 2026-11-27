@@ -21,6 +21,13 @@ const (
 	commandLoopSends  = 120
 	commandLoopWindow = time.Minute
 	commandLoopKeys   = 65536
+	// commandLoopTenantKeys is one tenant's share of commandLoopKeys. The table is
+	// per process and serves every tenant, so without a share one tenant with a large
+	// fleet or a raised ceiling filled it and refused every other tenant's commands
+	// with command_guard_full. A quarter still covers far more distinct rule/device
+	// pairs a minute than the default command ceiling (100/s, burst 200) can admit;
+	// commandLoopKeys stays the bound on the whole table.
+	commandLoopTenantKeys = commandLoopKeys / 4
 )
 
 type commandLoopKey struct {
@@ -32,6 +39,18 @@ type commandLoopKey struct {
 type commandLoopEntry struct {
 	until time.Time
 	sends int
+	// gen identifies this window of the key, so an expiry record left by an earlier
+	// window (a refunded or expired key that was admitted again) cannot end this one.
+	gen uint64
+}
+
+// commandLoopExpiry records when one window of a key ends. Windows are opened at a
+// clock that never moves backwards (mark), all for the same length, so records are
+// appended in expiry order and the oldest is always at the head.
+type commandLoopExpiry struct {
+	key   commandLoopKey
+	until time.Time
+	gen   uint64
 }
 
 // commandLoopGuard bounds send attempts in an anchored window per tenant/logical
@@ -55,15 +74,28 @@ type commandLoopEntry struct {
 // replicas' allowances. This is containment within a term, not a cluster-wide
 // exactly-once or durable loop guarantee. The command rate gate has the same HA
 // limitation, with a separate budget of the same size as connector actions.
+//
+// CAPACITY: a key holds a slot for its window. A tenant holds at most
+// commandLoopTenantKeys slots and the table at most commandLoopKeys; a new key past
+// either is refused with command_guard_full rather than evicting a live key (churn
+// would reset a loop's allowance). An expired key is released before anything is
+// refused, so a full table only ever holds live windows, and a tenant that exhausts
+// its share refuses only its own new keys.
 type commandLoopGuard struct {
-	mu        sync.Mutex
-	keys      map[commandLoopKey]commandLoopEntry
-	mark      time.Time
-	nextSweep time.Time
+	mu   sync.Mutex
+	keys map[commandLoopKey]commandLoopEntry
+	// tenants counts each tenant's keys, for its share of the table.
+	tenants map[string]int
+	// expiry is every open window in expiry order, from head on. Records whose key was
+	// since refunded are skipped when reached and dropped when the queue is compacted.
+	expiry []commandLoopExpiry
+	head   int
+	gen    uint64
+	mark   time.Time
 }
 
 func newCommandLoopGuard() *commandLoopGuard {
-	return &commandLoopGuard{keys: make(map[commandLoopKey]commandLoopEntry)}
+	return &commandLoopGuard{keys: make(map[commandLoopKey]commandLoopEntry), tenants: make(map[string]int)}
 }
 
 func (g *commandLoopGuard) admit(tenant, rule, device string, now time.Time) string {
@@ -74,22 +106,18 @@ func (g *commandLoopGuard) admit(tenant, rule, device string, now time.Time) str
 		now = g.mark
 	}
 	g.mark = now
-	if !now.Before(g.nextSweep) {
-		for key, entry := range g.keys {
-			if !now.Before(entry.until) {
-				delete(g.keys, key)
-			}
-		}
-		g.nextSweep = now.Add(commandLoopWindow)
-	}
+	g.expire(now)
 	key := commandLoopKey{tenant: tenant, rule: stableContributorID(rule), device: device}
 	entry, found := g.keys[key]
-	if !found || !now.Before(entry.until) {
-		if !found && len(g.keys) >= commandLoopKeys {
-			// Never evict a live key to admit a new one: churn would reset loops.
+	if !found {
+		// Never evict a live key to admit a new one: churn would reset loops.
+		if g.tenants[tenant] >= commandLoopTenantKeys || len(g.keys) >= commandLoopKeys {
 			return CommandGuardFull
 		}
-		entry = commandLoopEntry{until: now.Add(commandLoopWindow)}
+		g.gen++
+		entry = commandLoopEntry{until: now.Add(commandLoopWindow), gen: g.gen}
+		g.tenants[tenant]++
+		g.expiry = append(g.expiry, commandLoopExpiry{key: key, until: entry.until, gen: entry.gen})
 	}
 	if entry.sends >= commandLoopSends {
 		return CommandLoop
@@ -97,6 +125,43 @@ func (g *commandLoopGuard) admit(tenant, rule, device string, now time.Time) str
 	entry.sends++
 	g.keys[key] = entry
 	return ""
+}
+
+// expire releases every key whose window has ended by now. Each record is visited
+// once, so the cost is amortized over the admissions that appended them.
+func (g *commandLoopGuard) expire(now time.Time) {
+	for g.head < len(g.expiry) {
+		rec := g.expiry[g.head]
+		if now.Before(rec.until) {
+			break
+		}
+		if entry, ok := g.keys[rec.key]; ok && entry.gen == rec.gen {
+			g.release(rec.key)
+		}
+		g.expiry[g.head] = commandLoopExpiry{}
+		g.head++
+	}
+	// Compact once the spent prefix outgrows what remains, or refunds have left more
+	// stale records than live ones: either way the copy is paid for by what it drops.
+	if pending := len(g.expiry) - g.head; g.head > pending || pending > 2*len(g.keys)+1024 {
+		kept := make([]commandLoopExpiry, 0, len(g.keys))
+		for _, rec := range g.expiry[g.head:] {
+			if entry, ok := g.keys[rec.key]; ok && entry.gen == rec.gen {
+				kept = append(kept, rec)
+			}
+		}
+		g.expiry, g.head = kept, 0
+	}
+}
+
+// release deletes a key and returns its tenant's slot.
+func (g *commandLoopGuard) release(key commandLoopKey) {
+	delete(g.keys, key)
+	if n := g.tenants[key.tenant]; n > 1 {
+		g.tenants[key.tenant] = n - 1
+	} else {
+		delete(g.tenants, key.tenant)
+	}
 }
 
 // refund returns the allowance admit just took for an attempt another policy then
@@ -112,7 +177,7 @@ func (g *commandLoopGuard) refund(tenant, rule, device string) {
 		return
 	}
 	if entry.sends <= 1 {
-		delete(g.keys, key)
+		g.release(key)
 		return
 	}
 	entry.sends--
