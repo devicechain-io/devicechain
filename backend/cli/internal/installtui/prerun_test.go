@@ -301,8 +301,8 @@ func TestUnknownCPURendersItsFixAndNeverTalliesAsPassed(t *testing.T) {
 				t.Fatal("unknown CPU blocked Continue")
 			}
 			tabTo(t, p, actContinue)
-			if out := press(p, "enter"); out != proceed {
-				t.Fatalf("Continue with unknown CPU gave %v", out)
+			if out := press(p, "enter"); out != stay || p.screen != screenChoices {
+				t.Fatalf("Continue with unknown CPU gave %v on screen %v, not the cluster choices", out, p.screen)
 			}
 		}
 	}
