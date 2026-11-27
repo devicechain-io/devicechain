@@ -61,6 +61,44 @@ func (api *Api) CountOrphanedDeviceAttributes(ctx context.Context) (int64, error
 	return total, err
 }
 
+// fleetOrphanProbeTimeout bounds the activation gate's probe. A variable only for a test.
+var fleetOrphanProbeTimeout = "5s"
+
+// HasOrphanedDeviceAttributes is the activation gate's question, which is whether ANY orphan
+// remains, not how many: each table is asked for one orphan (LIMIT 1), so a tenant that
+// has one answers at the first it finds instead of counting the rest. It is bounded like the count,
+// and an error (that bound included) is returned as an error, never as an answer: the caller must
+// not read "could not tell" as "orphans remain" or as "none remain".
+func (api *Api) HasOrphanedDeviceAttributes(ctx context.Context) (bool, error) {
+	var found bool
+	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if tx.Dialector.Name() == "postgres" {
+			if err := tx.Exec("SET LOCAL statement_timeout = '" + fleetOrphanProbeTimeout + "'").Error; err != nil {
+				return err
+			}
+		}
+		var hits []uint
+		if err := tx.Unscoped().Model(&EntityAttribute{}).
+			Where("entity_type = ?", "device").
+			Where("NOT EXISTS (SELECT 1 FROM devices WHERE devices.id = entity_attributes.entity_id)").
+			Limit(1).Pluck("id", &hits).Error; err != nil {
+			return err
+		}
+		if len(hits) != 0 {
+			found = true
+			return nil
+		}
+		if err := tx.Model(&AttributeGeneration{}).
+			Where("NOT EXISTS (SELECT 1 FROM devices WHERE devices.id = entity_attribute_generations.device_id)").
+			Limit(1).Pluck("id", &hits).Error; err != nil {
+			return err
+		}
+		found = len(hits) != 0
+		return nil
+	})
+	return found, err
+}
+
 // attributeOrphanSweepLockKey is the fixed session advisory lock that admits ONE replica to a
 // sweep pass at a time. It is unrelated to the per-device attribute lock's key space.
 const attributeOrphanSweepLockKey int64 = 0x6463_6f72_7068_616e // "dcorphan"

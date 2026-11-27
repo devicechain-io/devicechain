@@ -42,7 +42,11 @@ const (
 	// FleetCodeNotActivated is answered when the database does not enforce the device attribute
 	// writer protocol or the caller's tenant still has orphaned attribute rows.
 	FleetCodeNotActivated = "BULK_CHANGES_NOT_ACTIVATED"
-	FleetCodeExpired      = "OPERATION_EXPIRED"
+	// FleetCodeActivationUnverified is answered when the orphaned-attribute check could not be
+	// completed (it timed out, or the database failed): nothing is known to be wrong, and the
+	// request may be retried.
+	FleetCodeActivationUnverified = "ACTIVATION_CHECK_UNAVAILABLE"
+	FleetCodeExpired              = "OPERATION_EXPIRED"
 
 	// FleetCodeNewerThanServer refuses control that requires understanding the operation's protocol.
 	FleetCodeNewerThanServer = "OPERATION_NEWER_THAN_SERVER"
@@ -94,8 +98,14 @@ func (api *Api) fleetCheckOrphans(ctx context.Context) error {
 	if tenant, ok := core.TenantFromContext(ctx); !ok || tenant == "" {
 		return errors.New("a bulk change needs a tenant in the context")
 	}
-	orphans, err := api.CountOrphanedDeviceAttributes(ctx)
-	if err != nil || orphans > 0 {
+	orphans, err := api.HasOrphanedDeviceAttributes(ctx)
+	if err != nil {
+		// Could not tell is neither answer: not "orphans remain" (the operator would wait for a
+		// sweep that has nothing to do), and never "none remain".
+		log.Warn().Err(err).Msg("Could not check for orphaned device attribute rows before a bulk change start or resume.")
+		return fleetErr(FleetCodeActivationUnverified, "could not verify that no orphaned device attribute rows remain; retry")
+	}
+	if orphans {
 		return fleetErr(FleetCodeNotActivated, "orphaned device attribute rows remain; the sweep removes them")
 	}
 	return nil
