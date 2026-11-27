@@ -102,160 +102,12 @@ jobs:
       # ci-complete therefore fails. "false" everywhere else; ci-complete refuses any other value.
       draft: ${{ steps.select.outputs.draft }}
     steps:
-      # 🔴 fetch-depth: 0 — the upgrade-rig self-test below reads the TAG HISTORY.
-      # It checks that the rig would refuse to deploy the working tree's chart around
-      # some other release's images, and the only honest way to ask that is against
-      # real releases. On the default shallow clone it sees no tags at all and
-      # (correctly) refuses to report clean, so the job fails for want of history
-      # rather than for anything wrong with the tree. The clone is ~50 MB.
+      # 🔴 fetch-depth: 0 — "Select affected legs" diffs the pull request against its merge
+      # base, which a shallow clone does not have. (The tooling self-tests that read the tag
+      # history moved to the self-tests job, which keeps its own full clone.)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-
-      # The workspace-sum check runs in every go matrix job; prove once, here, that
-      # it can fail.
-      - name: workspace-sum check self-test
-        run: hack/check-go-work-sum.sh --self-test
-
-      # The silent-skip gate runs after `go test` in every go leg; prove once, here, that it
-      # can fail (an unlisted skip is red, a listed one green, empty or malformed output exit 2).
-      - name: silent-skip gate self-test
-        run: bash hack/check-no-silent-skips.sh --self-test
-
-      # The fleet module's real-Postgres suite runs inside hack/migration-diff.sh verify, behind
-      # the build tag fleetpg, and its count of passed TestFleetPG* tests is what proves the tag
-      # compiled anything. Prove once, here, that the count check refuses an empty suite.
-      - name: fleet real-Postgres count check self-test
-        run: bash hack/check-fleetpg-count.sh --self-test
-
-      # The release-candidate run script's exit-code, stop and liveness handling, against
-      # stub rungs. Nothing else runs it, and it is what a 60-minute run's verdict is
-      # reported through.
-      - name: release-candidate run script self-test
-        run: hack/loadtest-rc-run.sh --self-test
-
-      # The performance-round collector and analyser against stub kubectl/curl: the steady
-      # marker refusals, the missing-component and replaced-pod failures, --dry-run writing
-      # nothing, and the per-event arithmetic. Needs jq (preinstalled on the runner image).
-      - name: performance-round collector self-test
-        run: |
-          hack/perf-collect.sh --self-test
-          hack/perf-analyze.sh --self-test
-
-      # The calculated-metrics cost gate's pure checks (tier merge, counter and stored-row-shape
-      # checks, the verdict table), each against a twin that must be refused. The rest of the
-      # harness needs a cluster.
-      - name: calculated-metrics cost gate self-test
-        run: hack/calc-cost-gate.sh self-test
-
-      # The website manifest publisher, against local bare repos for both website layouts:
-      # an older tag and a wrong live version must each be refused.
-      - name: release manifest publisher self-test
-        run: hack/publish-release-manifest.sh --self-test
-
-      # The evidence-pack generator and the OpenVEX generator, each against inputs it must refuse:
-      # a stale, missing, failing, future-dated or edited rig result, an empty SBOM or VEX document,
-      # a tampered or smuggled pack member, and a govulncheck report from a scan that never completed.
-      - name: evidence pack and OpenVEX generator self-tests
-        run: |
-          hack/evidence-pack.sh --self-test
-          hack/vex-from-govulncheck.sh --self-test
-          hack/check-evidence-pack-workflow.sh --self-test
-          hack/check-evidence-pack-workflow.sh
-
-      # Proves the coverage check can fail before its green run is used as evidence.
-      - name: dependabot module-coverage self-test
-        run: hack/check-dependabot-modules.sh --self-test
-
-      # A workspace module missing from Dependabot's gomod `directories` does not go
-      # quietly stale — it BREAKS. Each module replaces core with the local ../../core,
-      # so the next bump of core leaves an unlisted module's go.mod stale relative to
-      # the core it resolves, and the `go.mod and go.sum are tidy` step in the `go`
-      # job fails for that module. The module that fails is never the one that was
-      # bumped, which is what made the original gap take four weekly PRs to read
-      # correctly. Runs here, in discover, so it fails before the whole go matrix fans
-      # out.
-      - name: dependabot covers every workspace module
-        run: hack/check-dependabot-modules.sh
-
-      # The release pipeline calls this guard from two places (the workflow's first job
-      # and build-release-manifest.sh), and it only runs on a tag — so without this the
-      # first time anyone learns it is broken is mid-release. The self-test is the part
-      # that runs on every PR; the guard itself has nothing to check until there is a tag.
-      - name: release-highlights guard self-test
-        run: hack/check-release-highlights.sh --self-test
-
-      # The release job's changelog base runs only on a tag, and a wrong base publishes a
-      # changelog that starts a minor too early (v1.5.0's started at v1.3.0). The self-test is
-      # the part that runs on every PR, before a release needs the base.
-      - name: changelog base self-test
-        run: hack/changelog-base.sh --self-test
-
-      # Every compatibility check picks its baseline in hack/api-baseline.sh, by a rule that
-      # reads tags AND branch topology (main is compared with a minor tagged on a release branch
-      # main never contains), so it is proven on planted histories, not on whatever tags exist.
-      - name: compatibility baseline self-test
-        run: hack/api-baseline.sh --self-test
-
-      # The chart stamp runs only on a tag; a broken flag mislabels a release in Artifact Hub.
-      # The self-test is the part that runs on every PR, before a release needs the stamp.
-      - name: chart prerelease stamp self-test
-        run: hack/stamp-chart-prerelease.sh --self-test
-
-      # Same reasoning as the guard above, and the same blast radius: this builds the
-      # header of the GitHub Release body, runs ONLY on a tag, and a break in it fails
-      # the `cli` job after every image has already been pushed. The self-test is the
-      # part that runs on every PR.
-      - name: release-notes header self-test
-        run: hack/build-release-notes-header.sh --self-test
-
-      # The website's download manifest (devicechain.io/releases.json) is built in the
-      # release workflow's last job, after the Release is already public — so a break here is
-      # learned as "release shipped, website not updated". Stubbed gh, no network: both
-      # products' tables carry their own checksum file's digests, and a missing archive or
-      # checksum file is refused rather than published as a shorter menu.
-      - name: release-manifest self-test
-        run: hack/build-release-manifest.sh --self-test
-
-      # The signature verifier is the user's way to check a release, and the identity regexp
-      # it derives is what makes "signed" mean "signed by OUR release workflow for THIS tag".
-      # The self-test proves that regexp matches only its own tag; the cosign-facing half is
-      # exercised on PRs by release-signing-dryrun.yml.
-      - name: release-signature verifier self-test
-        run: hack/verify-release-signatures.sh --self-test
-
-      # The govulncheck wrapper decides which findings are allowed to pass. Its
-      # allowlist is the one place in CI where a known vulnerability is waved
-      # through on purpose, so proving the checker can still fail — on an
-      # unreviewed finding AND on an exception that has gone stale — matters more
-      # here than anywhere else. Runs in discover, before the matrix fans out.
-      - name: govulncheck wrapper self-test
-        run: hack/govulncheck.sh --self-test
-
-      # The Docker Hub mirror fallback every digest-pinned image pull goes through. Stubbed
-      # docker, no network: Hub down + mirror up succeeds, both down fails loudly, no digest
-      # is refused.
-      - name: docker-pull fallback self-test
-        run: hack/docker-pull.sh --self-test
-
-      # The upgrade drill needs an hour and a kind cluster, so no part of it runs
-      # on a PR -- which makes its string handling exactly the code that rots
-      # unwatched, correct the day it was written and next exercised while a
-      # release is waiting on it. This is the part that runs every time.
-      #
-      # 🔴 The POSITIVE case is what this buys. The drill's operator check was once
-      # expected to FAIL on every real run, back when nothing moved the operator, so
-      # its red said almost nothing on its own -- a check hard-wired to fail would
-      # look identical. That gap is closed and a red there is now a regression, which
-      # makes proving the check reports AGREEMENT when the versions agree the thing
-      # that keeps its red meaningful.
-      - name: upgrade-rig self-test
-        run: hack/upgrade-rig.sh selftest
-
-      # The bulk-change P-1 harness only runs by hand on the kind A/B rig, so its decision rule
-      # (PASS, FAIL, INCONCLUSIVE, too few runs) would otherwise be read by nothing between uses.
-      - name: bulk-change P-1 harness self-test
-        run: hack/bulk-change-p1.sh --self-test
 
       - name: Discover services
         id: svc
@@ -527,6 +379,182 @@ jobs:
             echo "draft=$draft"
           } >> "$GITHUB_OUTPUT"
 
+  # ---------------------------------------------------------------------------
+  # The tooling self-tests: each script a later job (or a release, or a rig run by hand)
+  # relies on is shown to be able to FAIL before its green is believed.
+  # ---------------------------------------------------------------------------
+  # These used to be steps of `discover`, about 85 s of its 105 s, and nothing discover
+  # outputs reads any of them -- but every heavy job `needs: discover`, so each second here
+  # was a second on the critical path of every run. They are a job of their own now, in
+  # parallel with the matrix, and ci-complete needs it like every other job: a self-test
+  # that fails still fails the gate. The self-tests the PLAN depends on (the module
+  # reader, the tidy check, Go batching, the integration runner, leg selection, the
+  # dependency-review scope) stay in discover, before the plan they guard is used.
+  self-tests:
+    runs-on: ubuntu-latest
+    steps:
+      # 🔴 fetch-depth: 0 — the upgrade-rig self-test below reads the TAG HISTORY.
+      # It checks that the rig would refuse to deploy the working tree's chart around
+      # some other release's images, and the only honest way to ask that is against
+      # real releases. On the default shallow clone it sees no tags at all and
+      # (correctly) refuses to report clean, so the job fails for want of history
+      # rather than for anything wrong with the tree. The clone is ~50 MB.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      # The workspace-sum check runs in every go matrix job; prove once, here, that
+      # it can fail.
+      - name: workspace-sum check self-test
+        run: hack/check-go-work-sum.sh --self-test
+
+      # The silent-skip gate runs after `go test` in every go leg; prove once, here, that it
+      # can fail (an unlisted skip is red, a listed one green, empty or malformed output exit 2).
+      - name: silent-skip gate self-test
+        run: bash hack/check-no-silent-skips.sh --self-test
+
+      # The fleet module's real-Postgres suite runs inside hack/migration-diff.sh verify, behind
+      # the build tag fleetpg, and its count of passed TestFleetPG* tests is what proves the tag
+      # compiled anything. Prove once, here, that the count check refuses an empty suite.
+      - name: fleet real-Postgres count check self-test
+        run: bash hack/check-fleetpg-count.sh --self-test
+
+      # The release-candidate run script's exit-code, stop and liveness handling, against
+      # stub rungs. Nothing else runs it, and it is what a 60-minute run's verdict is
+      # reported through.
+      - name: release-candidate run script self-test
+        run: hack/loadtest-rc-run.sh --self-test
+
+      # The performance-round collector and analyser against stub kubectl/curl: the steady
+      # marker refusals, the missing-component and replaced-pod failures, --dry-run writing
+      # nothing, and the per-event arithmetic. Needs jq (preinstalled on the runner image).
+      - name: performance-round collector self-test
+        run: |
+          hack/perf-collect.sh --self-test
+          hack/perf-analyze.sh --self-test
+
+      # The calculated-metrics cost gate's pure checks (tier merge, counter and stored-row-shape
+      # checks, the verdict table), each against a twin that must be refused. The rest of the
+      # harness needs a cluster.
+      - name: calculated-metrics cost gate self-test
+        run: hack/calc-cost-gate.sh self-test
+
+      # The website manifest publisher, against local bare repos for both website layouts:
+      # an older tag and a wrong live version must each be refused.
+      - name: release manifest publisher self-test
+        run: hack/publish-release-manifest.sh --self-test
+
+      # The evidence-pack generator and the OpenVEX generator, each against inputs it must refuse:
+      # a stale, missing, failing, future-dated or edited rig result, an empty SBOM or VEX document,
+      # a tampered or smuggled pack member, and a govulncheck report from a scan that never completed.
+      - name: evidence pack and OpenVEX generator self-tests
+        run: |
+          hack/evidence-pack.sh --self-test
+          hack/vex-from-govulncheck.sh --self-test
+          hack/check-evidence-pack-workflow.sh --self-test
+          hack/check-evidence-pack-workflow.sh
+
+      # Proves the coverage check can fail before its green run is used as evidence.
+      - name: dependabot module-coverage self-test
+        run: hack/check-dependabot-modules.sh --self-test
+
+      # A workspace module missing from Dependabot's gomod `directories` does not go
+      # quietly stale — it BREAKS. Each module replaces core with the local ../../core,
+      # so the next bump of core leaves an unlisted module's go.mod stale relative to
+      # the core it resolves, and the `go.mod and go.sum are tidy` step in the `go`
+      # job fails for that module. The module that fails is never the one that was
+      # bumped, which is what made the original gap take four weekly PRs to read
+      # correctly. Runs here, in discover, so it fails before the whole go matrix fans
+      # out.
+      - name: dependabot covers every workspace module
+        run: hack/check-dependabot-modules.sh
+
+      # The release pipeline calls this guard from two places (the workflow's first job
+      # and build-release-manifest.sh), and it only runs on a tag — so without this the
+      # first time anyone learns it is broken is mid-release. The self-test is the part
+      # that runs on every PR; the guard itself has nothing to check until there is a tag.
+      - name: release-highlights guard self-test
+        run: hack/check-release-highlights.sh --self-test
+
+      # The release job's changelog base runs only on a tag, and a wrong base publishes a
+      # changelog that starts a minor too early (v1.5.0's started at v1.3.0). The self-test is
+      # the part that runs on every PR, before a release needs the base.
+      - name: changelog base self-test
+        run: hack/changelog-base.sh --self-test
+
+      # Every compatibility check picks its baseline in hack/api-baseline.sh, by a rule that
+      # reads tags AND branch topology (main is compared with a minor tagged on a release branch
+      # main never contains), so it is proven on planted histories, not on whatever tags exist.
+      - name: compatibility baseline self-test
+        run: hack/api-baseline.sh --self-test
+
+      # The chart stamp runs only on a tag; a broken flag mislabels a release in Artifact Hub.
+      # The self-test is the part that runs on every PR, before a release needs the stamp.
+      - name: chart prerelease stamp self-test
+        run: hack/stamp-chart-prerelease.sh --self-test
+
+      # Same reasoning as the guard above, and the same blast radius: this builds the
+      # header of the GitHub Release body, runs ONLY on a tag, and a break in it fails
+      # the `cli` job after every image has already been pushed. The self-test is the
+      # part that runs on every PR.
+      - name: release-notes header self-test
+        run: hack/build-release-notes-header.sh --self-test
+
+      # The website's download manifest (devicechain.io/releases.json) is built in the
+      # release workflow's last job, after the Release is already public — so a break here is
+      # learned as "release shipped, website not updated". Stubbed gh, no network: both
+      # products' tables carry their own checksum file's digests, and a missing archive or
+      # checksum file is refused rather than published as a shorter menu.
+      - name: release-manifest self-test
+        run: hack/build-release-manifest.sh --self-test
+
+      # The signature verifier is the user's way to check a release, and the identity regexp
+      # it derives is what makes "signed" mean "signed by OUR release workflow for THIS tag".
+      # The self-test proves that regexp matches only its own tag; the cosign-facing half is
+      # exercised on PRs by release-signing-dryrun.yml.
+      - name: release-signature verifier self-test
+        run: hack/verify-release-signatures.sh --self-test
+
+      # The govulncheck wrapper decides which findings are allowed to pass. Its
+      # allowlist is the one place in CI where a known vulnerability is waved
+      # through on purpose, so proving the checker can still fail — on an
+      # unreviewed finding AND on an exception that has gone stale — matters more
+      # here than anywhere else. Runs in discover, before the matrix fans out.
+      - name: govulncheck wrapper self-test
+        run: hack/govulncheck.sh --self-test
+
+      # The Docker Hub mirror fallback every digest-pinned image pull goes through. Stubbed
+      # docker, no network: Hub down + mirror up succeeds, both down fails loudly, no digest
+      # is refused.
+      - name: docker-pull fallback self-test
+        run: hack/docker-pull.sh --self-test
+
+      # The upgrade drill needs an hour and a kind cluster, so no part of it runs
+      # on a PR -- which makes its string handling exactly the code that rots
+      # unwatched, correct the day it was written and next exercised while a
+      # release is waiting on it. This is the part that runs every time.
+      #
+      # 🔴 The POSITIVE case is what this buys. The drill's operator check was once
+      # expected to FAIL on every real run, back when nothing moved the operator, so
+      # its red said almost nothing on its own -- a check hard-wired to fail would
+      # look identical. That gap is closed and a red there is now a regression, which
+      # makes proving the check reports AGREEMENT when the versions agree the thing
+      # that keeps its red meaningful.
+      - name: upgrade-rig self-test
+        run: hack/upgrade-rig.sh selftest
+
+      # The bulk-change P-1 harness only runs by hand on the kind A/B rig, so its decision rule
+      # (PASS, FAIL, INCONCLUSIVE, too few runs) would otherwise be read by nothing between uses.
+      - name: bulk-change P-1 harness self-test
+        run: hack/bulk-change-p1.sh --self-test
+
+      # The race detector self-test below builds and runs Go; the build cache is off for the
+      # same reason as in discover (nothing compiled here is reused by another job).
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
+        with:
+          go-version-file: go.work
+          cache: false
+
       # The race detector exits 0 when it finds nothing, which makes "no data
       # races" and "never instrumented" the same result. Dropping -race from the
       # command, a toolchain built without cgo or a missing C compiler each turn
@@ -535,7 +563,7 @@ jobs:
       # the race step's own entry point on this runner's toolchain and requires a
       # DATA RACE report — plus a
       # race-free control, since a checker that fails on everything proves
-      # nothing either. It runs here, before the matrix fans out.
+      # nothing either. ci-complete needs this job, so a detector that cannot fail blocks the merge.
       - name: race detector self-test
         run: hack/go-race.sh --self-test
 
@@ -4043,6 +4071,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - discover
+      - self-tests
       - go
       - subscriptions
       - http-routing
