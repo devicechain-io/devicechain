@@ -72,11 +72,11 @@ func execPluginHelper(mode string) int {
 		_, _ = os.Stdout.Write(b)
 		return 0
 	}
-	startSleeper := func(holdStderr bool) {
+	startSleeper := func(holdStdout bool) {
 		c := exec.Command(os.Args[0])
 		c.Env = append(os.Environ(), execPluginHelperEnv+"=sleeper")
-		if holdStderr {
-			c.Stderr = os.Stderr
+		if holdStdout {
+			c.Stdout = os.Stdout
 		}
 		if err := c.Start(); err != nil {
 			fmt.Fprintln(os.Stderr, "the sleeper did not start:", err)
@@ -113,7 +113,7 @@ func execPluginHelper(mode string) int {
 		startSleeper(false)
 		time.Sleep(time.Hour)
 		return 0
-	case "stderr-holder":
+	case "stdout-holder":
 		startSleeper(true)
 		defer stampExit()
 		return credential(pluginToken, time.Now().Add(time.Hour), "", "")
@@ -138,7 +138,11 @@ func execPluginHelper(mode string) int {
 		_, _ = io.WriteString(os.Stdout, "this is not an ExecCredential "+pluginToken)
 		return 0
 	case "fail":
-		fmt.Fprintln(os.Stderr, "error: the login at https://user:pw-s3cr3t-77@login.example/cb?code=code-s3cr3t-88 failed")
+		// What a real plugin can print when it fails: a bare token, a private key, a URL
+		// with credentials. None of it is a URL redaction can find.
+		fmt.Fprintln(os.Stderr, "error: refresh failed for token=eyJhbGciOiJSUzI1NiJ9.s3cr3t-body.sig")
+		fmt.Fprintln(os.Stderr, "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAAS-s3cr3t-key\n-----END PRIVATE KEY-----")
+		fmt.Fprintln(os.Stderr, "see https://user:pw-s3cr3t-77@login.example/cb?code=code-s3cr3t-88")
 		return 1
 	case "otherhost":
 		resp, err := http.Get(os.Getenv("DCCTL_TEST_OTHER_URL"))
@@ -346,7 +350,7 @@ func runWithPlugin(t *testing.T, cfg *rest.Config, cancelWhen func() bool) plugi
 		}
 	}
 	// 🔴 THE CREDENTIAL NEVER APPEARS, in any form: rows, fixes, the process's output.
-	for _, canary := range []string{pluginToken, "s3cr3t", "BEGIN", "PRIVATE KEY"} {
+	for _, canary := range []string{pluginToken, "s3cr3t", "BEGIN", "PRIVATE KEY", "eyJ", "MIIE"} {
 		if strings.Contains(run.output, canary) {
 			t.Errorf("the output carries %q:\n%s", canary, run.output)
 		}
@@ -459,8 +463,9 @@ func TestAnExecPluginsTokenAuthenticates(t *testing.T) {
 				t.Errorf("may create namespaces reads %s %q", r.Verdict, r.Text)
 			}
 			seen, auth := api.snapshot()
-			if len(auth) != 1+len(cloudAccessNeeds) {
-				t.Errorf("%d credentialed requests, want the self review and %d access reviews: %v", len(auth), len(cloudAccessNeeds), seen)
+			if len(auth) != 2+len(cloudAccessNeeds) {
+				t.Errorf("%d credentialed requests, want the self review, %d access reviews and the IngressClass list: %v",
+					len(auth), len(cloudAccessNeeds), seen)
 			}
 			for _, a := range auth {
 				if a != "Bearer "+pluginToken {
@@ -570,11 +575,11 @@ func TestAnExitKillsARunningPlugin(t *testing.T) {
 	assertNoProcessLeft(t, pidFile, 2)
 }
 
-// A child that keeps the plugin's stderr open does not hold the run: the plugin's own
-// exit ends it, and the child is killed with it.
-func TestAChildHoldingStderrDoesNotHoldTheRun(t *testing.T) {
+// A child that keeps the plugin's stdout open does not hold the run: the plugin's own
+// exit ends its whole tree, and the child with it.
+func TestAChildHoldingStdoutDoesNotHoldTheRun(t *testing.T) {
 	srv, _ := pluginCluster(t, false)
-	cfg, pidFile := pluginConfig(t, srv.URL, "stderr-holder")
+	cfg, pidFile := pluginConfig(t, srv.URL, "stdout-holder")
 	run := runWithPlugin(t, cfg, nil)
 	// Held, it would end commandWaitDelay after the plugin's exit, or never.
 	if after := sinceExit(t, pidFile, run.end); after >= commandWaitDelay/2 {
@@ -641,15 +646,20 @@ func TestAPluginsBadOutputIsRefused(t *testing.T) {
 	}
 }
 
-// A failing plugin's stderr is shown, capped and with every URL's credentials removed:
-// it is usually the one line that says what to do.
-func TestAFailingPluginsStderrIsShownRedacted(t *testing.T) {
+// 🔴 A PLUGIN'S STDERR IS NEVER SHOWN. What a failing plugin prints there can hold a bare
+// token or a private key, which no redaction can be relied on to find: the row is
+// dcctl's own sentence for how it failed (runWithPlugin asserts none of it appears, in a
+// row, a fix, or the process's own output).
+func TestAFailingPluginsStderrIsNeverShown(t *testing.T) {
 	srv, _ := pluginCluster(t, false)
 	cfg, _ := pluginConfig(t, srv.URL, "fail")
-	run := runWithPlugin(t, cfg, nil) // asserts no "s3cr3t" anywhere
+	run := runWithPlugin(t, cfg, nil)
 	r := authRow(t, run)
-	if !strings.Contains(r.Fix.String(), "login.example") {
-		t.Errorf("the plugin's own words are not shown: %q", r.Fix)
+	if r.Verdict != installflow.CheckUnknown || !strings.Contains(r.Text.String(), "exited with status 1") {
+		t.Errorf("authentication reads %s %q", r.Verdict, r.Text)
+	}
+	if strings.Contains(run.output, "login.example") || strings.Contains(run.output, "refresh failed") {
+		t.Errorf("the plugin's stderr is shown:\n%s", run.output)
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/devicechain-io/dcctl/internal/installplain"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -73,6 +74,8 @@ type cloudTarget struct {
 	// are the ones it downloads from (cloudTargetFor): a component the plan leaves out is
 	// not asked, and cannot WARN.
 	CertManager, CNPG, Monitoring bool
+	// RemoveLegacyIngress is --remove-legacy-ingress: the plan removes ingress-nginx.
+	RemoveLegacyIngress bool
 }
 
 // cloudProbes are the diagnostics' only windows onto the network and the cluster, so a
@@ -146,8 +149,8 @@ func (d *doctor) checkCloud(ctx context.Context, t cloudTarget, p cloudProbes) {
 	host := serverHost(p.server)
 	d.checkAPIName(ctx, p, host)
 	answered := d.checkAPIAnswers(ctx, p, host, t.KubeContext)
-	d.checkAccess(ctx, p, answered)
-	d.checkRegistries(ctx, t, p)
+	kube := d.checkAccess(ctx, p, answered)
+	d.checkRegistries(ctx, t, p, frontEndOf(ctx, kube, t))
 }
 
 // ---- API server name ----------------------------------------------------------
@@ -252,6 +255,9 @@ func (d *doctor) checkAPIAnswers(ctx context.Context, p cloudProbes, host, kubeC
 }
 
 // ---- authentication and RBAC ------------------------------------------------------
+//
+// checkAccess returns the client the checks went on to ask with (the plugin's, for an
+// exec plugin), or nil when nothing could be asked.
 
 // cloudAccess is one permission the install needs, asked of the API server through a
 // SelfSubjectAccessReview: a question, not the action.
@@ -306,7 +312,7 @@ const pluginNotRun = "not checked: this context gets its credentials from an aut
 // whoamiFix is the fix of an authentication the checks could not judge.
 const whoamiFix = "check them yourself with kubectl auth whoami and kubectl auth can-i --list"
 
-func (d *doctor) checkAccess(ctx context.Context, p cloudProbes, answered apiAnswer) {
+func (d *doctor) checkAccess(ctx context.Context, p cloudProbes, answered apiAnswer) kubernetes.Interface {
 	plugin := false // the credentials are the ones an exec plugin just gave
 	notAsked := func(why string) {
 		for _, a := range cloudAccessNeeds {
@@ -317,17 +323,17 @@ func (d *doctor) checkAccess(ctx context.Context, p cloudProbes, answered apiAns
 	case answered == apiSilent:
 		d.notChecked("authentication: not asked, the API server did not answer", "")
 		notAsked("not asked, the API server did not answer")
-		return
+		return nil
 	case answered == apiProxied:
 		d.notChecked("authentication: "+proxyNotUsed, "")
 		notAsked(proxyNotUsed)
-		return
+		return nil
 	case p.creds == credPlugin:
 		// 🔴 An auth-provider is never run (cloudKubeConfig), so there are no credentials
 		// to judge, and a review asked without them would answer for nobody.
 		d.notChecked("authentication: "+pluginNotRun, whoamiFix)
 		notAsked(pluginNotRun)
-		return
+		return nil
 	case p.creds == credExec:
 		// 🔴 The exec plugin is run now, bounded and killed with all it starts
 		// (execAuthenticator), and only its credential is judged from here on. Whatever
@@ -348,20 +354,17 @@ func (d *doctor) checkAccess(ctx context.Context, p cloudProbes, answered apiAns
 		case execNotRun:
 			d.notChecked("authentication: not checked: "+res.why, whoamiFix)
 			notAsked(noCredential)
-			return
+			return nil
 		case execMissing:
 			d.warn("authentication: "+res.why,
 				"install it (the context's installHint, or your provider's documentation, says how), then Recheck")
 			notAsked(noCredential)
-			return
+			return nil
 		default:
-			fix := "check with kubectl auth whoami against this context, then Recheck"
-			if res.said != "" {
-				fix = "the plugin said: " + res.said + "; " + fix
-			}
-			d.unknown("authentication: "+res.why, fix)
+			// 🔴 dcctl's sentence only: never anything the plugin wrote.
+			d.unknown("authentication: "+res.why, "check with kubectl auth whoami against this context, then Recheck")
 			notAsked(noCredential)
-			return
+			return nil
 		}
 	}
 	// One budget for every review: they are cheap, and a server that stalls on the first
@@ -408,13 +411,13 @@ func (d *doctor) checkAccess(ctx context.Context, p cloudProbes, answered apiAns
 			"give the context credentials for this cluster, for example with your provider's get-credentials command")
 		if unauthorized {
 			notAsked("not asked, the API server refused anonymous requests")
-			return
+			return p.kube
 		}
 	case unauthorized:
 		d.warn("authentication: the API server refused this context's credentials",
 			"refresh the context's login (for example your provider's get-credentials command), then Recheck")
 		notAsked("not asked, the credentials were refused")
-		return
+		return p.kube
 	case whoErr == nil && who.Status.UserInfo.Username == "":
 		// A review that names nobody says nothing about the credentials.
 		d.unknown("authentication: the API server's review named no user",
@@ -448,6 +451,7 @@ func (d *doctor) checkAccess(ctx context.Context, p cloudProbes, answered apiAns
 			d.warn(what+": not permitted", accessFix)
 		}
 	}
+	return p.kube
 }
 
 // ---- registries ---------------------------------------------------------------------
@@ -462,18 +466,43 @@ type cloudRegistry struct {
 }
 
 // The Helm chart repositories the cluster root installs from, each with the component
-// that uses it. Traefik is installed on every cluster; ingress-nginx only stays on one
-// that already runs it, so a new install never downloads it and it is not asked.
+// that uses it.
 var (
 	certManagerCharts = cloudRegistry{what: "cert-manager chart repository", url: "https://charts.jetstack.io/index.yaml"}
 	cnpgCharts        = cloudRegistry{what: "CloudNativePG chart registry", url: "https://ghcr.io/v2/"}
 	traefikCharts     = cloudRegistry{what: "Traefik chart repository", url: "https://traefik.github.io/charts/index.yaml"}
 	monitoringCharts  = cloudRegistry{what: "monitoring chart repository", url: "https://prometheus-community.github.io/helm-charts/index.yaml"}
+	nginxCharts       = cloudRegistry{what: "ingress-nginx chart repository", url: "https://kubernetes.github.io/ingress-nginx/index.yaml"}
 )
 
+// frontEnd is which ingress controllers the install's plan for this cluster keeps:
+// Traefik always, ingress-nginx while the cluster runs it (bootstrap.ClusterChartControllers).
+// known is false when the cluster's IngressClasses could not be read.
+type frontEnd struct{ known, traefik, nginx bool }
+
+// frontEndOf reads the cluster's IngressClasses through kube (the checks' guarded client,
+// nil when nothing could be asked) and resolves the install's front-end plan from them.
+func frontEndOf(ctx context.Context, kube kubernetes.Interface, t cloudTarget) frontEnd {
+	if kube == nil {
+		return frontEnd{}
+	}
+	list, err := within(ctx, cloudAPITimeout, func(ctx context.Context) (*networkingv1.IngressClassList, error) {
+		return kube.NetworkingV1().IngressClasses().List(ctx, metav1.ListOptions{})
+	})
+	if err != nil || list == nil {
+		return frontEnd{}
+	}
+	traefik, nginx, err := bootstrap.ClusterChartControllers(list.Items, t.RemoveLegacyIngress)
+	if err != nil {
+		return frontEnd{}
+	}
+	return frontEnd{known: true, traefik: traefik, nginx: nginx}
+}
+
 // registries are the places THIS plan downloads from: the provider registry, the chart
-// repositories of the components it installs, and the image registry.
-func (t cloudTarget) registries(p cloudProbes) []cloudRegistry {
+// repositories of the components it installs, and the image registry. Traefik is planned
+// on every cluster, so it is asked even when the front end could not be read.
+func (t cloudTarget) registries(p cloudProbes, fe frontEnd) []cloudRegistry {
 	regs := []cloudRegistry{{what: "OpenTofu provider registry", url: "https://" + p.tofuRegistry + "/.well-known/terraform.json"}}
 	if t.CertManager {
 		regs = append(regs, certManagerCharts)
@@ -481,7 +510,12 @@ func (t cloudTarget) registries(p cloudProbes) []cloudRegistry {
 	if t.CNPG {
 		regs = append(regs, cnpgCharts)
 	}
-	regs = append(regs, traefikCharts)
+	if fe.traefik || !fe.known {
+		regs = append(regs, traefikCharts)
+	}
+	if fe.nginx {
+		regs = append(regs, nginxCharts)
+	}
 	if t.Monitoring {
 		regs = append(regs, monitoringCharts)
 	}
@@ -500,8 +534,8 @@ func registryHost(reg string) string {
 	return reg
 }
 
-func (d *doctor) checkRegistries(ctx context.Context, t cloudTarget, p cloudProbes) {
-	regs := t.registries(p)
+func (d *doctor) checkRegistries(ctx context.Context, t cloudTarget, p cloudProbes, fe frontEnd) {
+	regs := t.registries(p, fe)
 	codes := make([]int, len(regs))
 	errs := make([]error, len(regs))
 	var wg sync.WaitGroup
@@ -563,6 +597,10 @@ func (d *doctor) checkRegistries(ctx context.Context, t cloudTarget, p cloudProb
 				d.unknown(what+": could not be reached", fix)
 			}
 		}
+	}
+	if !fe.known && !t.RemoveLegacyIngress {
+		d.notChecked("ingress-nginx chart repository: not checked, the cluster's IngressClasses could not be read, "+
+			"so whether the install keeps ingress-nginx is not known", "")
 	}
 }
 
@@ -682,10 +720,15 @@ const ssarPath = "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews"
 // to be, and stores nothing.
 const ssrPath = "/apis/authentication.k8s.io/v1/selfsubjectreviews"
 
+// ingressClassesPath is the diagnostics' one read of cluster state: the IngressClasses,
+// which say whether the install keeps ingress-nginx (and so downloads its chart).
+const ingressClassesPath = "/apis/networking.k8s.io/v1/ingressclasses"
+
 // kubeRequestPermitted reports whether a request to the cluster may leave. 🔴 IT IS AN
-// ALLOWLIST OF THE DIAGNOSTICS' OWN THREE REQUESTS, each matched EXACTLY under the
+// ALLOWLIST OF THE DIAGNOSTICS' OWN FOUR REQUESTS, each matched EXACTLY under the
 // configured server (its scheme, host and port, and any path prefix it has): GET
-// /version, and POST to the two review endpoints. A suffix would let a proxy subresource
+// /version and the IngressClass list (the one read of cluster state, which nothing
+// secret is in), and POST to the two review endpoints. A suffix would let a proxy subresource
 // (.../services/x/proxy/apis/...) through to a service that can write; so nothing is
 // matched by suffix, and a path that is not already clean, or that was sent escaped,
 // is refused rather than interpreted.
@@ -701,7 +744,7 @@ func kubeRequestPermitted(server *url.URL, method string, u *url.URL) bool {
 	}
 	base := strings.TrimSuffix(server.Path, "/")
 	switch u.Path {
-	case base + "/version":
+	case base + "/version", base + ingressClassesPath:
 		return method == http.MethodGet
 	case base + ssarPath, base + ssrPath:
 		return method == http.MethodPost

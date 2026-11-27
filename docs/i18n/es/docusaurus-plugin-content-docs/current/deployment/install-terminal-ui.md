@@ -112,12 +112,16 @@ nunca bloquean Continue.
   de la pantalla. La credencial que imprime solo se envía al servidor de la API del contexto y nunca
   se muestra. Un plugin que debe ejecutarse de forma interactiva (`interactiveMode: Always`) no se
   ejecuta y se lee como `NOT CHECKED`; un plugin que no está instalado se lee como `WARN`; uno que
-  falla, se cuelga o no imprime una credencial utilizable se lee como `UNKNOWN`, y se muestra su
-  propio mensaje de error sin las credenciales que lleven sus URL. Las entradas heredadas
-  `auth-provider` nunca se ejecutan.
+  falla, se cuelga o no imprime una credencial utilizable se lee como `UNKNOWN`. Lo que el plugin
+  imprime como error nunca se muestra, porque puede contener un token o una clave: la fila solo
+  dice cómo falló el plugin, y `kubectl auth whoami` contra el contexto muestra su propio mensaje.
+  Las entradas heredadas `auth-provider` nunca se ejecutan.
 - **Registros.** Solo se comprueban los repositorios de charts de los componentes que instala este
   plan, así que Compact (que deja fuera la monitorización) y las opciones de monitorización y de
-  CloudNativePG del panel Advanced cambian la lista.
+  CloudNativePG del panel Advanced cambian la lista. Los charts de los controladores de ingress
+  siguen al clúster: siempre el de Traefik, y el de ingress-nginx cuando el clúster ya ejecuta
+  ingress-nginx (que la instalación conserva salvo que se indique `--remove-legacy-ingress`), según
+  las IngressClasses del clúster.
 - **Proxies.** Estas comprobaciones nunca pasan por un proxy. Cuando hay uno configurado, para el
   contexto o en el entorno (`HTTPS_PROXY` y similares), las filas que pasarían por él se leen como
   `NOT CHECKED`.

@@ -5,12 +5,19 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/internal/installtui"
+	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	ktesting "k8s.io/client-go/testing"
 )
 
 // The chart registries the advisory checks ask are the ones THIS plan installs from: a
@@ -98,5 +105,86 @@ func TestTheRegistriesFollowThePlan(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// 🔴 THE INGRESS CHARTS FOLLOW THE CLUSTER'S FRONT-END PLAN, as the install resolves it
+// from the cluster's IngressClasses: Traefik always, and ingress-nginx while the cluster
+// runs it (it is kept, and its chart downloaded) unless --remove-legacy-ingress removes
+// it. When the classes cannot be read, the ingress-nginx row says it was not checked.
+func TestTheIngressChartsFollowTheClustersFrontEnd(t *testing.T) {
+	nginx := &networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "nginx"},
+		Spec: networkingv1.IngressClassSpec{Controller: "k8s.io/ingress-nginx"}}
+	for _, tc := range []struct {
+		name         string
+		classes      []*networkingv1.IngressClass
+		listErr      error
+		removeLegacy bool
+		nginx        installflow.CheckVerdict // "" when the row must be absent
+	}{
+		{name: "a cluster without ingress-nginx"},
+		{name: "a cluster that runs ingress-nginx", classes: []*networkingv1.IngressClass{nginx}, nginx: installflow.CheckPass},
+		{name: "--remove-legacy-ingress", classes: []*networkingv1.IngressClass{nginx}, removeLegacy: true},
+		{name: "the classes cannot be read", listErr: apierrors.NewForbidden(schema.GroupResource{Group: "networking.k8s.io", Resource: "ingressclasses"}, "", errors.New("no")),
+			nginx: installflow.CheckNotChecked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCloudFakes(t)
+			for _, c := range tc.classes {
+				if _, err := f.kube.NetworkingV1().IngressClasses().Create(context.Background(), c, metav1.CreateOptions{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.kube.ClearActions()
+			if tc.listErr != nil {
+				f.kube.PrependReactor("list", "ingressclasses", func(ktesting.Action) (bool, runtime.Object, error) {
+					return true, nil, tc.listErr
+				})
+			}
+			target := prodTarget
+			target.RemoveLegacyIngress = tc.removeLegacy
+			var rows []installflow.PreflightObservation
+			_, _ = cloudDiagnosticsRunner(target, f.probes(testServer)).RunPreflight(context.Background(),
+				func(o installflow.PreflightObservation) {
+					if o.Observation == installflow.ObserveCheck {
+						rows = append(rows, o)
+					}
+				})
+			assertReadOnly(t, f)
+			if r := row(t, rows, "Traefik chart repository"); r.Verdict != installflow.CheckPass {
+				t.Errorf("Traefik reads %s %q", r.Verdict, r.Text)
+			}
+			var got installflow.CheckVerdict
+			for _, o := range rows {
+				if strings.HasPrefix(o.Text.String(), "ingress-nginx chart repository") {
+					got = o.Verdict
+				}
+			}
+			if got != tc.nginx {
+				t.Errorf("the ingress-nginx row reads %q, want %q", got, tc.nginx)
+			}
+		})
+	}
+}
+
+// --remove-legacy-ingress on the command line reaches the checks: the plan it makes
+// removes ingress-nginx, so its chart is not asked for.
+func TestTheRemoveLegacyIngressFlagReachesTheChecks(t *testing.T) {
+	saveChoiceFlags(t)
+	for _, tc := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"local", "--kube-context", "prod", "--version", "v1.12.0"}, false},
+		{[]string{"local", "--kube-context", "prod", "--version", "v1.12.0", "--remove-legacy-ingress"}, true},
+	} {
+		saveChoiceFlags(t)
+		prepared, err := parseChoices(t, tc.args).Prepare(Version, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := cloudTargetFor(prepared).RemoveLegacyIngress; got != tc.want {
+			t.Errorf("%v: RemoveLegacyIngress %v", tc.args, got)
+		}
 	}
 }

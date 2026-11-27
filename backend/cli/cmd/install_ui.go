@@ -516,7 +516,8 @@ func cloudTargetFor(p installchoice.Prepared) cloudTarget {
 	eff := p.Effective
 	opts := p.BootstrapOptions()
 	return cloudTarget{KubeContext: eff.KubeContext, ImageRegistry: opts.ImageRegistry, Build: opts.BuildImages,
-		CertManager: !(eff.Compact && eff.NoTLS), CNPG: !eff.NoCNPG, Monitoring: !eff.NoMonitoring}
+		CertManager: !(eff.Compact && eff.NoTLS), CNPG: !eff.NoCNPG, Monitoring: !eff.NoMonitoring,
+		RemoveLegacyIngress: eff.RemoveLegacy}
 }
 
 // cloudProbesFor builds the advisory diagnostics' windows onto a target. Tests replace it

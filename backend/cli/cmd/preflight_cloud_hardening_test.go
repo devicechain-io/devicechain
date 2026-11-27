@@ -144,6 +144,12 @@ func TestKubeRequestPermitted(t *testing.T) {
 		{plain, "POST", "https://api.example:6443" + ssrPath, true},
 		{prefixed, "POST", "https://rancher.example/k8s/clusters/c-1" + ssarPath, true},
 		{prefixed, "GET", "https://rancher.example/k8s/clusters/c-1/version", true},
+		{plain, "GET", "https://api.example:6443" + ingressClassesPath, true},
+		{prefixed, "GET", "https://rancher.example/k8s/clusters/c-1" + ingressClassesPath, true},
+		{plain, "POST", "https://api.example:6443" + ingressClassesPath, false},
+		{plain, "DELETE", "https://api.example:6443" + ingressClassesPath, false},
+		{plain, "GET", "https://api.example:6443" + ingressClassesPath + "/nginx", false},
+		{plain, "GET", "https://api.example:6443/apis/networking.k8s.io/v1/ingresses", false},
 
 		{plain, "POST", "https://api.example:6443" + proxySSAR, false},
 		{plain, "POST", "https://api.example:6443/k8s/clusters/c-1" + ssarPath, false},

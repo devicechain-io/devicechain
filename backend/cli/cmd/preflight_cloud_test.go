@@ -258,8 +258,8 @@ func TestCloudDiagnosticsOnAHealthyCluster(t *testing.T) {
 	if res.Warns != 0 {
 		t.Errorf("%d warning(s) on a healthy cluster", res.Warns)
 	}
-	if n := len(f.kube.Actions()); n != 2+len(cloudAccessNeeds) {
-		t.Errorf("%d cluster requests, want the version, the self review and %d access reviews", n, len(cloudAccessNeeds))
+	if n := len(f.kube.Actions()); n != 3+len(cloudAccessNeeds) {
+		t.Errorf("%d cluster requests, want the version, the self review, %d access reviews and the IngressClass list", n, len(cloudAccessNeeds))
 	}
 }
 

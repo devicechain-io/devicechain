@@ -14,12 +14,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
-	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/proctree"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -34,11 +32,14 @@ import (
 // could only read NOT CHECKED. What makes running it safe:
 //
 //   - 🔴 IT IS BOUNDED AND IT DIES WITH EVERYTHING IT STARTED. It runs under the probe's
-//     context, inside execPluginTimeout, in its own process tree (a session and process
-//     group on Unix, a Job Object on Windows, procTree): an Exit or the deadline kills the
-//     whole tree at once, and so does the plugin's own exit, so a child it leaves behind
-//     (holding its output open, say) neither holds the run nor outlives it. The run is
-//     joined boundedly (within), so nothing it does holds an Exit past commandWaitDelay.
+//     context, inside execPluginTimeout, through proctree.RunWith: a session and process
+//     group of its own on Unix, signalled before the leader is reaped, and a job object on
+//     Windows, assigned before the plugin runs any code. An Exit or the deadline ends the
+//     whole tree at once, and so does the plugin's own exit (EndTreeOnExit), so a child it
+//     leaves behind (holding its output open, say) neither holds the run nor outlives it;
+//     on Linux a descendant that left the group is found by the run's mark and ended too
+//     (Sweep). The run is joined boundedly (within), so nothing it does holds an Exit past
+//     commandWaitDelay.
 //   - 🔴 IT IS NEVER INTERACTIVE. stdin is the null device, the plugin has no controlling
 //     terminal (Unix: a new session; Windows: no console window), KUBERNETES_EXEC_INFO
 //     tells it it is not interactive, and a plugin whose entry says interactiveMode
@@ -46,10 +47,12 @@ import (
 //   - 🔴 ITS OUTPUT IS NEVER SHOWN OR TRUSTED. stdout is read up to execStdoutCap and only
 //     ever parsed as an ExecCredential of the entry's API version; a credential already
 //     expired is not used, and one that expires during the run is refused by kubeGuard.
-//     Only stderr is ever shown, on a failure, capped and with every URL's credentials
-//     removed (installflow.RedactURLsInText). The credential reaches the API server
-//     through the SAME guarded client as static credentials (cloudKubeClientUntil): no
-//     redirect, no proxy, the exact request allowlist, the context's server only.
+//     stderr goes to the null device and is never read: what a failing plugin prints
+//     there can hold a bare token or a private key, which no redaction can be relied on
+//     to find, so a row says only dcctl's own sentence for how it failed. The credential
+//     reaches the API server through the SAME guarded client as static credentials
+//     (cloudKubeClientUntil): no redirect, no proxy, the exact request allowlist, the
+//     context's server only.
 //   - 🔴 IT NEVER PASSES ON ITS OWN. A plugin that is refused, fails, hangs or answers
 //     nonsense reads NOT CHECKED or UNKNOWN (WARN when it is not installed at all), and
 //     authentication passes only on the API server's word, as for any credentials.
@@ -60,15 +63,9 @@ import (
 // A variable only so a test can make a hung plugin give up quickly.
 var execPluginTimeout = 10 * time.Second
 
-const (
-	// execStdoutCap is the most of a plugin's stdout that is read: an ExecCredential with
-	// a certificate chain is a few kilobytes. More is refused, never parsed.
-	execStdoutCap = 1 << 20
-	// execStderrCap is the most of its stderr that is kept, and execSaidCap the most of
-	// that a row shows.
-	execStderrCap = 4 << 10
-	execSaidCap   = 240
-)
+// execStdoutCap is the most of a plugin's stdout that is read: an ExecCredential with a
+// certificate chain is a few kilobytes. More is refused, never parsed.
+const execStdoutCap = 1 << 20
 
 // The ExecCredential API versions client-go still speaks.
 const (
@@ -87,11 +84,10 @@ const (
 )
 
 // execResult is a plugin run: the credential when there is one, or dcctl's sentence for
-// why there is none (why) and the plugin's own words (said, redacted).
+// why there is none (why). Never anything the plugin wrote.
 type execResult struct {
 	outcome execOutcome
 	why     string
-	said    string
 
 	token     string
 	cert, key []byte
@@ -208,82 +204,61 @@ func (x execPlugin) run(ctx context.Context) execResult {
 	return res
 }
 
-// runBounded is one run of the plugin, killed with everything it started when ctx ends
-// or when it exits, whichever is first.
+// runBounded is one run of the plugin, ended with everything it started when ctx ends or
+// when it exits, whichever is first.
 func (x execPlugin) runBounded(ctx context.Context) (execResult, error) {
 	plugin := "the credential plugin " + x.name
 	failed := func(why string) execResult { return execResult{outcome: execFailed, why: plugin + " " + why} }
-	// 🔴 The plugin writes to pipes dcctl made, not to ones os/exec makes and drains: os/exec
-	// waits for its pipes to close, which a child holding one open delays until WaitDelay.
-	// With these, Wait returns when the plugin exits, the tree is killed at once, and the
-	// pipes close with it.
+	// 🔴 stdout is a pipe dcctl made, not one os/exec makes and drains: os/exec waits for
+	// its pipes to close, which a child holding one open delays until WaitDelay. With
+	// this one, Wait returns when the plugin exits, the tree is ended at once, and the
+	// pipe closes with it.
 	outR, outW, err := os.Pipe()
 	if err != nil {
 		return failed("could not be started"), nil
 	}
-	errR, errW, err := os.Pipe()
-	if err != nil {
-		_, _ = outR.Close(), outW.Close()
-		return failed("could not be started"), nil
-	}
-	closeAll := func() { _, _, _, _ = outR.Close(), outW.Close(), errR.Close(), errW.Close() }
-	cmd := exec.CommandContext(ctx, x.command, x.args...)
+	cmd := exec.Command(x.command, x.args...)
 	cmd.Env = x.env
-	cmd.Stdin = nil // 🔴 the null device: nothing to prompt on
-	cmd.Stdout, cmd.Stderr = outW, errW
+	cmd.Stdin = nil  // 🔴 the null device: nothing to prompt on
+	cmd.Stderr = nil // 🔴 the null device: never read, never shown
+	cmd.Stdout = outW
 	cmd.WaitDelay = commandWaitDelay
-	tree := newProcTree(cmd)
-	if err := tree.start(); err != nil {
-		closeAll()
-		switch {
-		case errors.Is(err, exec.ErrDot):
-			return failed("was found only in the current directory, and is not run from there"), nil
-		case errors.Is(err, errNoProcessTree):
-			return execResult{outcome: execNotRun, why: plugin + " is not run: this system gives the advisory checks no way to stop it"}, nil
-		case errors.Is(err, exec.ErrNotFound), errors.Is(err, fs.ErrNotExist):
-			return execResult{outcome: execMissing, why: plugin + " that this context runs is not installed on this machine"}, nil
-		}
-		return failed("could not be started"), nil
-	}
-	_, _ = outW.Close(), errW.Close() // the plugin's copies are its own now
-	out, said := &cappedBuffer{max: execStdoutCap}, &cappedBuffer{max: execStderrCap}
-	var readers sync.WaitGroup
-	for _, c := range []struct {
-		dst *cappedBuffer
-		src *os.File
-	}{{out, outR}, {said, errR}} {
-		readers.Add(1)
-		go func() {
-			defer readers.Done()
-			_, _ = io.Copy(c.dst, c.src)
-		}()
-	}
-	waitErr := cmd.Wait()
-	tree.kill() // 🔴 whatever it started dies with it
-	// The tree is dead, so the pipes close; a descendant that escaped the tree could still
-	// hold one, and is given up on after commandWaitDelay.
-	readersDone := make(chan struct{})
-	go func() { readers.Wait(); close(readersDone) }()
+	out := &cappedBuffer{max: execStdoutCap}
+	read := make(chan struct{})
+	go func() {
+		defer close(read)
+		_, _ = io.Copy(out, outR)
+	}()
+	runErr := proctree.RunWith(ctx, cmd, proctree.Options{NewSession: true, EndTreeOnExit: true, Sweep: true})
+	_ = outW.Close() // the plugin's copies are gone with its tree
+	// A descendant that escaped every end could still hold the pipe: it is given up on
+	// after commandWaitDelay.
 	select {
-	case <-readersDone:
+	case <-read:
 	case <-time.After(commandWaitDelay):
-		_, _ = outR.Close(), errR.Close()
-		<-readersDone
+		_ = outR.Close()
+		<-read
 	}
-	_, _ = outR.Close(), errR.Close()
-	tree.close()
+	_ = outR.Close()
 	if err := ctx.Err(); err != nil {
 		return execResult{}, err
 	}
 	var exitErr *exec.ExitError
 	switch {
-	case errors.As(waitErr, &exitErr):
-		r := failed(fmt.Sprintf("exited with status %d", exitErr.ExitCode()))
-		r.said = pluginSaid(said.String())
-		return r, nil
-	case waitErr != nil:
-		return failed("did not finish cleanly"), nil
-	case out.overflow:
+	case runErr == nil:
+	case errors.As(runErr, &exitErr):
+		return failed(fmt.Sprintf("exited with status %d", exitErr.ExitCode())), nil
+	case errors.Is(runErr, exec.ErrDot):
+		return failed("was found only in the current directory, and is not run from there"), nil
+	case errors.Is(runErr, exec.ErrNotFound), errors.Is(runErr, fs.ErrNotExist):
+		return execResult{outcome: execMissing, why: plugin + " that this context runs is not installed on this machine"}, nil
+	case cmd.Process != nil:
+		// Started, but not in a tree dcctl could end (proctree ended it at once).
+		return failed("could not be run in a way the advisory checks can stop"), nil
+	default:
+		return failed("could not be started"), nil
+	}
+	if out.overflow {
 		return failed("printed more than an ExecCredential, which is not read"), nil
 	}
 	return parseExecCredential(x, out.Bytes(), time.Now()), nil
@@ -319,20 +294,6 @@ func parseExecCredential(x execPlugin, out []byte, now time.Time) execResult {
 	return r
 }
 
-// pluginSaid is a plugin's stderr as a row may show it: the credential parts of every
-// URL removed, on one line, capped.
-func pluginSaid(stderr string) string {
-	s := strings.Join(strings.Fields(installflow.RedactURLsInText(stderr)), " ")
-	if len(s) > execSaidCap {
-		cut := execSaidCap
-		for cut > 0 && !utf8.RuneStart(s[cut]) {
-			cut--
-		}
-		s = s[:cut] + "…"
-	}
-	return s
-}
-
 // cappedBuffer keeps the first max bytes written to it and notes whether there were
 // more. It always accepts a write, so a plugin that prints too much is drained to its
 // end rather than left blocked on a full pipe.
@@ -363,11 +324,6 @@ func (b *cappedBuffer) Bytes() []byte {
 	defer b.mu.Unlock()
 	return append([]byte(nil), b.buf...)
 }
-
-func (b *cappedBuffer) String() string { return string(b.Bytes()) }
-
-// errNoProcessTree is a system on which a plugin cannot be run as a tree dcctl can kill.
-var errNoProcessTree = errors.New("no process tree on this system")
 
 // execAuthenticator is how cloudProbesFrom authenticates a context whose credentials come
 // from an exec plugin: it runs the plugin and, on a usable credential, returns a cluster

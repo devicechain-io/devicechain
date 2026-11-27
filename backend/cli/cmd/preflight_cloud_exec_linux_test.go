@@ -124,11 +124,10 @@ func TestAPluginGetsNoTerminal(t *testing.T) {
 	}
 }
 
-// A descendant that leaves the plugin's process group (it starts its own session)
-// escapes the group kill, and holds the plugin's stdout open. It cannot hold the run:
-// the pipes are given up on commandWaitDelay after the plugin exits, and what the
-// plugin printed is still read. (The escaped process itself is a known limit on Unix: a
-// process that leaves the group is out of dcctl's reach. The test kills it.)
+// 🔴 A DESCENDANT THAT LEAVES THE PLUGIN'S PROCESS GROUP (it starts a session of its own)
+// is out of reach of the group kill, and holds the plugin's stdout open. It is still
+// ended with the run (the run's marker finds it), so it neither holds the run nor
+// outlives it.
 func TestAnEscapedDescendantDoesNotHoldTheRun(t *testing.T) {
 	old := execPluginTimeout
 	t.Cleanup(func() { execPluginTimeout = old })
@@ -143,9 +142,10 @@ func TestAnEscapedDescendantDoesNotHoldTheRun(t *testing.T) {
 	run := runWithPlugin(t, cfg, nil)
 	// The pipes are given up on commandWaitDelay after the plugin's exit; without that
 	// bound the run would wait out execPluginTimeout.
-	if after := sinceExit(t, pidFile, run.end); after > commandWaitDelay+time.Second {
+	if after := sinceExit(t, pidFile, run.end); after >= commandWaitDelay/2 {
 		t.Errorf("the run ended %v after the plugin exited", after)
 	}
+	assertNoProcessLeft(t, pidFile, 2)
 	if r := authRow(t, run); r.Verdict != installflow.CheckPass {
 		t.Errorf("authentication reads %s %q (%s)", r.Verdict, r.Text, r.Fix)
 	}

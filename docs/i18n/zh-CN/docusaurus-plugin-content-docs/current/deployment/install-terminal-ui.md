@@ -67,8 +67,8 @@ dcctl install local --ui=tui --kube-context prod
 
 使用 `--kube-context` 时，检查之后会出现一组 "Existing cluster (advisory)"。它向集群提出只读问题：API 服务器的名称能否解析，它是否以该上下文信任的 TLS 证书应答，该上下文的凭据是否被接受，以及这些凭据能否创建安装所创建的资源。它还会检查本机能否访问此计划下载所用的提供程序、chart 和镜像仓库。这些检查只是建议：发现的问题显示为 `WARN`，无法判断的显示为 `UNKNOWN` 或 `NOT CHECKED`，并且从不阻止 Continue。
 
-- **凭据插件。** 通过 exec 插件获取凭据的上下文（GKE、EKS 和 AKS 的上下文通常如此）会像 kubectl 那样运行该插件来进行身份验证：从不以交互方式运行，没有终端，输入为空，最长 10 秒；时间用完或您离开该屏幕时，插件及其启动的所有进程都会被一并停止。插件输出的凭据只会发送给该上下文的 API 服务器，并且从不显示。必须以交互方式运行的插件（`interactiveMode: Always`）不会运行，显示为 `NOT CHECKED`；未安装的插件显示为 `WARN`；运行失败、挂起或没有输出可用凭据的插件显示为 `UNKNOWN`，并会显示其自身的错误信息，其中 URL 所带的凭据已被移除。旧式的 `auth-provider` 条目从不运行。
-- **仓库。** 只检查此计划所安装组件的 chart 仓库，因此 Compact（不包含监控）以及 Advanced 面板中的监控和 CloudNativePG 选项都会改变检查列表。
+- **凭据插件。** 通过 exec 插件获取凭据的上下文（GKE、EKS 和 AKS 的上下文通常如此）会像 kubectl 那样运行该插件来进行身份验证：从不以交互方式运行，没有终端，输入为空，最长 10 秒；时间用完或您离开该屏幕时，插件及其启动的所有进程都会被一并停止。插件输出的凭据只会发送给该上下文的 API 服务器，并且从不显示。必须以交互方式运行的插件（`interactiveMode: Always`）不会运行，显示为 `NOT CHECKED`；未安装的插件显示为 `WARN`；运行失败、挂起或没有输出可用凭据的插件显示为 `UNKNOWN`。插件输出的错误信息从不显示，因为其中可能包含令牌或密钥：该行只说明插件是如何失败的，针对该上下文运行 `kubectl auth whoami` 可以看到插件自己的信息。旧式的 `auth-provider` 条目从不运行。
+- **仓库。** 只检查此计划所安装组件的 chart 仓库，因此 Compact（不包含监控）以及 Advanced 面板中的监控和 CloudNativePG 选项都会改变检查列表。Ingress 控制器的 chart 跟随集群而定：始终检查 Traefik 的，当集群已在运行 ingress-nginx 时（除非指定 `--remove-legacy-ingress`，安装会保留它）也检查 ingress-nginx 的，依据是集群的 IngressClass。
 - **代理。** 这些检查从不经过代理。当上下文或环境（`HTTPS_PROXY` 等）中配置了代理时，需要经过该代理的行显示为 `NOT CHECKED`。
 
 ### 集群选项 {#cluster-choices}

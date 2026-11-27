@@ -104,12 +104,15 @@ they cannot decide reads `UNKNOWN` or `NOT CHECKED`, and they never block Contin
   together with everything it started when that time is up or you leave the screen. The credential
   it prints is sent only to the context's API server, and is never shown. A plugin that must run
   interactively (`interactiveMode: Always`) is not run and reads `NOT CHECKED`; a plugin that is not
-  installed reads `WARN`; one that fails, hangs or prints no usable credential reads `UNKNOWN`, with
-  its own error message shown with any credentials in its URLs removed. Legacy `auth-provider`
-  entries are never run.
+  installed reads `WARN`; one that fails, hangs or prints no usable credential reads `UNKNOWN`. What
+  the plugin prints as an error is never shown, since it can hold a token or a key: the row says
+  only how the plugin failed, and `kubectl auth whoami` against the context shows its own message.
+  Legacy `auth-provider` entries are never run.
 - **Registries.** Only the chart repositories of the components this plan installs are checked, so
   Compact (which leaves monitoring out) and the monitoring and CloudNativePG choices in the
-  Advanced drawer change the list.
+  Advanced drawer change the list. The ingress controllers' charts follow the cluster: Traefik's
+  always, and ingress-nginx's when the cluster already runs ingress-nginx (which the install keeps
+  unless `--remove-legacy-ingress` is given), read from the cluster's IngressClasses.
 - **Proxies.** These checks never go through a proxy. When one is configured, for the context or in
   the environment (`HTTPS_PROXY` and the like), the rows it would carry read `NOT CHECKED`.
 

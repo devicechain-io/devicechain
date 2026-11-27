@@ -10,9 +10,10 @@ import (
 	"os/exec"
 )
 
-// Run starts cmd and waits for it, killing it alone if ctx ends first: with neither
-// process groups nor job objects, its descendants cannot be ended with it.
-func Run(ctx context.Context, cmd *exec.Cmd) error {
+// RunWith starts cmd and waits for it, killing it alone if ctx ends first: with neither
+// process groups nor job objects, its descendants cannot be ended with it, and the
+// Options have nothing to act on.
+func RunWith(ctx context.Context, cmd *exec.Cmd, _ Options) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
