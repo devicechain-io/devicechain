@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // The posting transaction: one line, one device, one transaction. It is the ONLY code that applies a
@@ -501,13 +502,21 @@ func fleetRetryDelay(attempts int) time.Duration {
 	return d
 }
 
+// fleetLineRetryStamp is a line's retry record read back with the database time at which it was written.
+type fleetLineRetryStamp struct {
+	FleetOperationLine
+	RecordedAt sql.NullTime `gorm:"->;-:migration"`
+}
+
 // RecordFleetLineRetry notes a retryable failure on a line: one more attempt, the code, and when it may be
 // tried again (a jittered backoff). It never changes the line's posting, and its predicate keeps it from
 // touching a line that was cancelled, refused or redacted meanwhile.
 // The operation's runtime row carries the same code and when it was met: the last error the engine met
 // on this operation, which BulkChange.lastErrorCode serves. Each is its own autocommit statement, so the
-// runtime row stays outside every lock order.
-// now is a SQLite fixture input only; PostgreSQL schedules from its own clock.
+// runtime row stays outside every lock order. The time is the one the line's statement read, after its
+// row lock, so a replica that stalls between the two statements cannot overwrite a newer error with its
+// older one: the runtime row only moves forward.
+// now is a SQLite fixture input only; PostgreSQL schedules and stamps from its own clock.
 func (api *Api) RecordFleetLineRetry(ctx context.Context, lineID uint, code string, now time.Time) error {
 	db := api.RDB.DB(ctx)
 	var line FleetOperationLine
@@ -516,22 +525,36 @@ func (api *Api) RecordFleetLineRetry(ctx context.Context, lineID uint, code stri
 	}
 	delay := fleetRetryDelay(int(line.Attempts) + 1)
 	delay += time.Duration(rand.Int64N(int64(delay)/4 + 1))
-	recorded := db.Model(&FleetOperationLine{}).Where("id = ? AND posting = ?", lineID, FleetPostingPlanned).
-		Updates(map[string]any{"attempts": gorm.Expr("attempts + 1"), "last_error_code": code,
-			"next_attempt_at": fleetTimestampAfter(db, delay, now)})
+	postgres := db.Dialector.Name() == "postgres"
+	var stamp fleetLineRetryStamp
+	record := db.Model(&stamp).Where("id = ? AND posting = ?", lineID, FleetPostingPlanned)
+	if postgres {
+		record = record.Clauses(clause.Returning{Columns: []clause.Column{{Name: "clock_timestamp() AS recorded_at", Raw: true}}})
+	}
+	recorded := record.Updates(map[string]any{"attempts": gorm.Expr("attempts + 1"), "last_error_code": code,
+		"next_attempt_at": fleetTimestampAfter(db, delay, now)})
 	if recorded.Error != nil || recorded.RowsAffected == 0 {
 		return recorded.Error
 	}
 	if fleetRetryHook != nil {
 		fleetRetryHook()
 	}
-	at := fleetTimestamp(db)
-	if !now.IsZero() && db.Dialector.Name() != "postgres" {
-		at = now
+	at := stamp.RecordedAt
+	if !postgres {
+		if now.IsZero() {
+			now = fleetClock()
+		}
+		at = sql.NullTime{Time: now, Valid: true}
+	}
+	if !at.Valid {
+		log.Warn().Str("code", code).Msg("A bulk change line's retry was recorded without its database time; its last error is left as it was")
+		return nil
 	}
 	// Best effort, like the driver's heartbeat: the line's own record above is what retries run on, and a
 	// diagnostic that could not be written must not turn a recorded retry into a failed post.
-	if err := db.Model(&FleetOperationRuntime{}).Where("operation_id = ?", line.OperationId).
+	// Only a newer line record replaces the operation's last error.
+	if err := db.Model(&FleetOperationRuntime{}).
+		Where("operation_id = ? AND (last_error_at IS NULL OR last_error_at < ?)", line.OperationId, at).
 		Updates(map[string]any{"last_error_code": code, "last_error_at": at}).Error; err != nil {
 		log.Warn().Err(err).Str("code", code).Msg("Unable to record a bulk change's last error; the line's own record stands")
 	}
