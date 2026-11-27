@@ -304,7 +304,7 @@ type pluginRun struct {
 // run's context as soon as it reports true (polled), as an Exit does.
 func runWithPlugin(t *testing.T, cfg *rest.Config, cancelWhen func() bool) pluginRun {
 	t.Helper()
-	r := cloudDiagnosticsRunner(prodTarget, func(life context.Context, _ cloudTarget) (cloudProbes, error) {
+	r := cloudDiagnosticsRunner(prodTarget, func(_, life context.Context, _ cloudTarget) (cloudProbes, error) {
 		p, err := cloudProbesFrom(life, cfg)
 		p.http = cloudHTTPClient(newCloudFakes(t))
 		return p, err
