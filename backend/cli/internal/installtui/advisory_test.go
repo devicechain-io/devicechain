@@ -135,6 +135,9 @@ func TestTheRunsPreflightIsNotTheAdvisory(t *testing.T) {
 	h.press("\x1b[Z\r") // Shift+Tab from Recheck back to Continue
 	waitFor(t, "the cluster choices", h.out, screenShows(h.out, choicesTitle))
 	h.press("\r") // no Replan: the choices screen offers its actions only, Continue first
+	waitFor(t, "the review", h.out, screenShows(h.out, reviewCommandTitle))
+	time.Sleep(100 * time.Millisecond) // the review settles (at once in tests) before it takes a key
+	h.press("\t\r")                    // Tab from Back to Approve
 	waitFor(t, "the verdict", h.out, screenShows(h.out, "Install succeeded."))
 	h.press("\r")
 	if err := h.result(done); err != nil {
