@@ -1,0 +1,20 @@
+ \x1b[1mDeviceChain\x1b[m · Installing · kind-devicechain
+ Overall  \x1b[38;5;78m████████████████\x1b[m\x1b[38;5;109m░░░░\x1b[m  5/6 stages
+ \x1b[38;5;109mElapsed 11:02 · Remaining: unknown · last observation 1s …\x1b[m
+ 
+ \x1b[38;5;78mDONE\x1b[m  Resolve target / cluster      \x1b[38;5;78m████████\x1b[m  done
+ \x1b[38;5;78mDONE\x1b[m  Identity, refusals and claim  \x1b[38;5;78m████████\x1b[m  done
+ \x1b[38;5;78mDONE\x1b[m  Credentials and operator      \x1b[38;5;78m████████\x1b[m  done
+ \x1b[38;5;78mDONE\x1b[m  Cluster prerequisites         \x1b[38;5;78m████████\x1b[m  done
+ \x1b[38;5;78mDONE\x1b[m  Base identity and record      \x1b[38;5;78m████████\x1b[m  done
+ \x1b[38;5;38mRUN \x1b[m  Relational store ready        \x1b[38;5;38m█████\x1b[m\x1b[38;5;109m░░░\x1b[m  2/3 replicas
+ 
+ \x1b[38;5;109mNow\x1b[m  Wait for the relational store
+ \x1b[38;5;109m     2 of 3 replicas · limit 15m · waited 3m12s\x1b[m
+ ▾ Logs \x1b[38;5;109m· sanitized · paused · f to follow\x1b[m
+ \x1b[38;5;109m10:05:05\x1b[m tofu    line 0304 helm_release.cert_manager: cre…
+ \x1b[38;5;109m10:05:06\x1b[m tofu    line 0305 helm_release.cert_manager: cre…
+ \x1b[38;5;109m10:05:07\x1b[m tofu    line 0306 helm_release.cert_manager: cre…
+ \x1b[38;5;109m10:05:08\x1b[m k8s     \x1b[38;5;221mline 0307 helm_release.cert_manager: cre…\x1b[m
+ \x1b[38;5;109m… 304 earlier lines kept · 0 aged out · 4 newer\x1b[m
+ \x1b[38;5;109ml\x1b[m logs  \x1b[38;5;109mPgUp/PgDn\x1b[m scroll  \x1b[38;5;109mf\x1b[m follow  \x1b[38;5;109mCtrl+C\x1b[m stop

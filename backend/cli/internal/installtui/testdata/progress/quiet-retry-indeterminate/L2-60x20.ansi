@@ -1,0 +1,20 @@
+ \x1b[1mDeviceChain\x1b[m - Installing - kind-devicechain
+ Overall  ##########..........  3/6 stages
+ Elapsed 01:14 - Remaining: unknown - no new observation...
+ 
+ DONE  Resolve target / cluster      ########  done
+ DONE  Identity, refusals and claim  ########  done
+ DONE  Credentials and operator      ########  done
+ RUN   Cluster prerequisites         working   total unk...
+ WAIT  Base identity and record      --------
+ WAIT  Relational store ready        --------
+ 
+ Now  Apply the cluster prerequisites
+      actions: total unknown - waited 53s - attempt 2
+ > Logs (collapsed - 312 lines kept - l to open)
+ 
+ 
+ 
+ 
+ 
+ l logs  Ctrl+C stop

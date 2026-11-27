@@ -1,0 +1,20 @@
+ DeviceChain · Installing · kind-devicechain
+ Overall  ████████████████░░░░  5/6 stages
+ Elapsed 11:02 · Remaining: unknown · last observation 1s …
+ 
+ DONE  Resolve target / cluster      ████████  done
+ DONE  Identity, refusals and claim  ████████  done
+ DONE  Credentials and operator      ████████  done
+ DONE  Cluster prerequisites         ████████  done
+ DONE  Base identity and record      ████████  done
+ RUN   Relational store ready        █████░░░  2/3 replicas
+ 
+ Now  Wait for the relational store
+      2 of 3 replicas · limit 15m · waited 3m12s
+ ▾ Logs · sanitized · paused · f to follow
+ 10:05:05 tofu    line 0304 helm_release.cert_manager: cre…
+ 10:05:06 tofu    line 0305 helm_release.cert_manager: cre…
+ 10:05:07 tofu    line 0306 helm_release.cert_manager: cre…
+ 10:05:08 k8s     line 0307 helm_release.cert_manager: cre…
+ … 304 earlier lines kept · 0 aged out · 4 newer
+ l logs  PgUp/PgDn scroll  f follow  Ctrl+C stop

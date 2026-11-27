@@ -1,0 +1,40 @@
+╭─ DeviceChain · Installing · kind-devicechain ────────────────────────────────────────────────────────────────────────╮
+│ Overall  \x1b[38;2;95;211;154m█████████████████████████\x1b[m\x1b[38;2;138;166;182m░░░░░\x1b[m  5/6 stages                                                                  │
+│ \x1b[38;2;138;166;182mElapsed 11:02 · Remaining: unknown · last observation 1s ago\x1b[m                                                         │
+│                                                                                                                      │
+│ \x1b[38;2;95;211;154mDONE\x1b[m  Resolve target / cluster        \x1b[38;2;95;211;154m███████████████████\x1b[m  done                                                      │
+│ \x1b[38;2;95;211;154mDONE\x1b[m  Identity, refusals and claim    \x1b[38;2;95;211;154m███████████████████\x1b[m  done                                                      │
+│ \x1b[38;2;95;211;154mDONE\x1b[m  Credentials and operator        \x1b[38;2;95;211;154m███████████████████\x1b[m  done                                                      │
+│ \x1b[38;2;95;211;154mDONE\x1b[m  Cluster prerequisites           \x1b[38;2;95;211;154m███████████████████\x1b[m  done                                                      │
+│ \x1b[38;2;95;211;154mDONE\x1b[m  Base identity and record        \x1b[38;2;95;211;154m███████████████████\x1b[m  done                                                      │
+│ \x1b[38;2;36;163;214mRUN \x1b[m  Relational store ready          \x1b[38;2;36;163;214m████████████\x1b[m\x1b[38;2;138;166;182m░░░░░░░\x1b[m  2/3 replicas                                              │
+│                                                                                                                      │
+│ \x1b[38;2;138;166;182mNow\x1b[m  Wait for the relational store                                                                                   │
+│ \x1b[38;2;138;166;182m     2 of 3 replicas · limit 15m · waited 3m12s\x1b[m                                                                      │
+│ ▾ Logs \x1b[38;2;138;166;182m· sanitized · paused · f to follow\x1b[m                                                                            │
+│ \x1b[38;2;138;166;182m10:04:29\x1b[m tofu    line 0268 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:30\x1b[m tofu    line 0269 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:31\x1b[m tofu    line 0270 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:32\x1b[m tofu    line 0271 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:33\x1b[m k8s     \x1b[38;2;245;196;81mline 0272 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths\x1b[m        │
+│ \x1b[38;2;138;166;182m10:04:34\x1b[m tofu    line 0273 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:35\x1b[m tofu    line 0274 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:36\x1b[m tofu    line 0275 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:37\x1b[m tofu    line 0276 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:38\x1b[m tofu    line 0277 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:39\x1b[m tofu    line 0278 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:40\x1b[m k8s     \x1b[38;2;245;196;81mline 0279 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths\x1b[m        │
+│ \x1b[38;2;138;166;182m10:04:41\x1b[m tofu    line 0280 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:42\x1b[m tofu    line 0281 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:43\x1b[m tofu    line 0282 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:44\x1b[m tofu    line 0283 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:45\x1b[m tofu    line 0284 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:46\x1b[m tofu    line 0285 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:47\x1b[m k8s     \x1b[38;2;245;196;81mline 0286 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths\x1b[m        │
+│ \x1b[38;2;138;166;182m10:04:48\x1b[m tofu    line 0287 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:49\x1b[m tofu    line 0288 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m10:04:50\x1b[m tofu    line 0289 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
+│ \x1b[38;2;138;166;182m… 268 earlier lines kept · 0 aged out · 22 newer\x1b[m                                                                     │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;2;138;166;182ml\x1b[m logs  \x1b[38;2;138;166;182mPgUp/PgDn\x1b[m scroll  \x1b[38;2;138;166;182mf\x1b[m follow  \x1b[38;2;138;166;182mCtrl+C\x1b[m stop                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

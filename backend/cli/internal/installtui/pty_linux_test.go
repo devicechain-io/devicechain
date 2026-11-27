@@ -173,7 +173,7 @@ func TestPTYRestoresTheTerminalOnPanic(t *testing.T) {
 
 func TestPTYCtrlCCancelsAndTheRunSettles(t *testing.T) {
 	r := startPTYChild(t, "settles")
-	waitFor(t, "the run", r.out, screenShows(r.out, "running    install.cluster"))
+	waitFor(t, "the run", r.out, screenShows(r.out, "Resolve the target cluster"))
 	r.press("\x03")
 	if code := r.wait(); code != 1 {
 		t.Fatalf("exit %d, want 1 for a cancelled run; terminal:\n%q", code, r.out.String())
@@ -186,7 +186,7 @@ func TestPTYCtrlCCancelsAndTheRunSettles(t *testing.T) {
 
 func TestPTYDoubleCtrlCForcesExitWithTheTerminalRestored(t *testing.T) {
 	r := startPTYChild(t, "stubborn")
-	waitFor(t, "the run", r.out, screenShows(r.out, "running    install.cluster"))
+	waitFor(t, "the run", r.out, screenShows(r.out, "Resolve the target cluster"))
 	r.press("\x03")
 	waitFor(t, "the cancel", r.out, func() bool { return r.markers() == "cancelled\n" })
 	waitFor(t, "the stopping notice", r.out, screenShows(r.out, "Interrupt received."))
@@ -202,7 +202,7 @@ func TestPTYDoubleCtrlCForcesExitWithTheTerminalRestored(t *testing.T) {
 
 func TestPTYSignalThenCtrlCForcesExit(t *testing.T) {
 	r := startPTYChild(t, "stubborn")
-	waitFor(t, "the run", r.out, screenShows(r.out, "running    install.cluster"))
+	waitFor(t, "the run", r.out, screenShows(r.out, "Resolve the target cluster"))
 	if err := r.cmd.Process.Signal(unix.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestPTYHangupThenCtrlCRestoresTheTerminal(t *testing.T) {
 	for _, sig := range []unix.Signal{unix.SIGHUP, unix.SIGQUIT} {
 		t.Run(sig.String(), func(t *testing.T) {
 			r := startPTYChild(t, "stubborn")
-			waitFor(t, "the run", r.out, screenShows(r.out, "running    install.cluster"))
+			waitFor(t, "the run", r.out, screenShows(r.out, "Resolve the target cluster"))
 			if err := r.cmd.Process.Signal(sig); err != nil {
 				t.Fatal(err)
 			}

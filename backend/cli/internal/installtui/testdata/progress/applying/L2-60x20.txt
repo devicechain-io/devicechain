@@ -1,0 +1,20 @@
+ DeviceChain - Installing - kind-devicechain
+ Overall  ##########..........  3/6 stages
+ Elapsed 06:42 - Remaining: unknown - last observation 2...
+ 
+ DONE  Resolve target / cluster      ########  done
+ DONE  Identity, refusals and claim  ########  done
+ DONE  Credentials and operator      ########  done
+ RUN   Cluster prerequisites         #####...  41/63 act...
+ WAIT  Base identity and record      --------
+ WAIT  Relational store ready        --------
+ 
+ Now  Apply the cluster prerequisites
+      41 of 63 actions - waited 6m22s
+ > Logs (collapsed - 312 lines kept - l to open)
+ 
+ 
+ 
+ 
+ 
+ l logs  Ctrl+C stop

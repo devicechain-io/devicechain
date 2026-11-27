@@ -46,8 +46,16 @@ func assertRestored(t *testing.T, out, marker string) {
 }
 
 func TestProgressOnlyRunExitsOnCompletion(t *testing.T) {
-	h := newHarness(t, tuiCaps(true))
+	caps := tuiCaps(true)
+	// A full-size screen, where the log pane is open without a key.
+	caps.Width, caps.Height, caps.SizeKnown, caps.Layout = 120, 40, true, terminal.Full
+	h := newHarness(t, caps)
 	err := h.result(h.run(engineFunc(func(_ context.Context, rt installflow.Runtime) (installflow.Summary, error) {
+		if !rt.ObserveTools {
+			// The screen draws measured progress, so it asks the engine to observe its
+			// tools (OpenTofu's -json apply) for it.
+			return installflow.Summary{}, errors.New("the terminal UI did not turn on ObserveTools")
+		}
 		if err := startRun(rt); err != nil {
 			return installflow.Summary{}, err
 		}
@@ -60,7 +68,7 @@ func TestProgressOnlyRunExitsOnCompletion(t *testing.T) {
 	out := h.out.String()
 	assertRestored(t, out, "dcctl install: succeeded")
 	// The engine's words went to the log ring, drawn on screen, never straight to stdout.
-	if !strings.Contains(out, "│ words from the engine") {
+	if !strings.Contains(out, "dcctl   words from the engine") {
 		t.Errorf("the engine's output never reached the screen:\n%q", out)
 	}
 	if strings.Contains(out, "\nwords from the engine") {
@@ -203,7 +211,7 @@ func TestFirstCtrlCCancelsOnceAndTheScreenStays(t *testing.T) {
 	h := newHarness(t, tuiCaps(false))
 	var cancels atomic.Int32
 	done := h.run(stubbornEngine(&cancels), installflow.Request{Operation: installflow.OperationInstall})
-	waitFor(t, "the run", h.out, screenShows(h.out, "running    install.cluster"))
+	waitFor(t, "the run", h.out, screenShows(h.out, "Resolve the target cluster"))
 	h.press("\x03")
 	waitFor(t, "the cancel", h.out, func() bool { return cancels.Load() == 1 })
 	waitFor(t, "the stopping notice", h.out, screenShows(h.out, "Interrupt received."))
@@ -246,7 +254,7 @@ func TestASignalThenCtrlCIsTheSecondInterrupt(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the presenter never listened for signals")
 	}
-	waitFor(t, "the run", h.out, screenShows(h.out, "running    install.cluster"))
+	waitFor(t, "the run", h.out, screenShows(h.out, "Resolve the target cluster"))
 	sigs <- os.Interrupt
 	waitFor(t, "the cancel", h.out, func() bool { return cancels.Load() == 1 })
 	waitFor(t, "the stopping notice", h.out, screenShows(h.out, "Interrupt received."))
@@ -276,7 +284,7 @@ func TestCtrlCWaitsForTheEngineToSettle(t *testing.T) {
 		<-settle // the graceful stop takes a while
 		return cancelled, ctx.Err()
 	}), installflow.Request{Operation: installflow.OperationInstall, AssumeYes: true})
-	waitFor(t, "the run", h.out, screenShows(h.out, "running    install.cluster"))
+	waitFor(t, "the run", h.out, screenShows(h.out, "Resolve the target cluster"))
 	h.press("\x03")
 	waitFor(t, "the stopping notice", h.out, screenShows(h.out, "Interrupt received."))
 	select {
@@ -351,7 +359,7 @@ func TestAStdoutThatStopsAcceptingWritesIsAFailedRenderer(t *testing.T) {
 		<-next
 		return succeeded, endRun(rt)
 	}), installflow.Request{Operation: installflow.OperationInstall, AssumeYes: true})
-	waitFor(t, "the run", &out.syncBuffer, screenShows(&out.syncBuffer, "running    install.cluster"))
+	waitFor(t, "the run", &out.syncBuffer, screenShows(&out.syncBuffer, "Resolve the target cluster"))
 	out.failing.Store(true)
 	next <- struct{}{}
 	waitFor(t, "the fallback", errs, screenShows(errs, "continuing with plain output"))
@@ -434,7 +442,7 @@ func TestAPanicWritingTheScreenIsAFailedRenderer(t *testing.T) {
 		<-next
 		return succeeded, endRun(rt)
 	}), installflow.Request{Operation: installflow.OperationInstall, AssumeYes: true})
-	waitFor(t, "the run", &out.syncBuffer, screenShows(&out.syncBuffer, "running    install.cluster"))
+	waitFor(t, "the run", &out.syncBuffer, screenShows(&out.syncBuffer, "Resolve the target cluster"))
 	out.panicking.Store(true)
 	next <- struct{}{}
 	waitFor(t, "the fallback", errs, screenShows(errs, "continuing with plain output"))
@@ -518,7 +526,10 @@ func TestTheEnginesErrorIsRedacted(t *testing.T) {
 // whatever it says goes to the log pane, redacted, instead of over the screen. And it
 // may not read stdin beside the program: the process's stdin is the null device.
 func TestTheProcessStreamsBelongToTheScreenWhileItIsUp(t *testing.T) {
-	h := newHarness(t, tuiCaps(true))
+	caps := tuiCaps(true)
+	// A full-size screen, where the log pane is open without a key.
+	caps.Width, caps.Height, caps.SizeKnown, caps.Layout = 120, 40, true, terminal.Full
+	h := newHarness(t, caps)
 	h.p.OwnProcessStreams = true
 	realStdin, realStderr := os.Stdin, os.Stderr
 	var sawStdin atomic.Value

@@ -37,6 +37,10 @@ func stageName(id installflow.StepID) string {
 	return string(id)
 }
 
+// StageName is stageName for the progress screen's "Now" line (installtui), so
+// both screens name a stage from this one table.
+func StageName(id installflow.StepID) string { return stageName(id) }
+
 // failedAt is the failed stage as a line, or "" when no stage is blamed.
 func (in Input) failedAt() string {
 	if in.Summary.FailedStep == "" {

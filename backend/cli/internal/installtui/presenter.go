@@ -150,7 +150,7 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 		// this is only its starting point; it never draws into a zero-sized screen.
 		tea.WithWindowSize(sizeOr(p.Caps.Width, 80), sizeOr(p.Caps.Height, 24)),
 	}, p.options...)
-	prog = tea.NewProgram(newModel(p.Caps, intr, start, hub.Logs), opts...)
+	prog = tea.NewProgram(newModel(p.Caps, intr, start, hub, hub.Redact), opts...)
 
 	// OS signals while the screen is up. The root context hears the first one too; this
 	// channel is what keeps the SECOND from killing the process with the terminal still
