@@ -1,0 +1,40 @@
+╭─ DeviceChain · dcctl install · context prod ───────────────────────────────────────────────────────── dcctl v1.12.0 ─╮
+│ Review · context prod, Compact, HA                                                                                   │
+│                                                                                                                      │
+│ This is the plan the install will run, as the command line would resolve it. Nothing has been changed yet. Approve   │
+│ starts it; Back returns to the choices, and a change there needs its own checks and its own review.                  │
+│                                                                                                                      │
+│   Target       existing cluster, context prod: reused as it is; dcctl never creates or deletes it                    │
+│   Release      dcctl v1.12.0; published images v1.12.0 from ghcr.io/devicechain-io                                   │
+│   Shape        Compact footprint, HA                                                                                 │
+│   TLS          on (cert-manager)                                                                                     │
+│   Backups      on, to a store the cluster provisions for itself (no off-site archive)                                │
+│   State        /home/op/.devicechain/clusters/<assigned after identification>/infra                                  │
+│                                                                                                                      │
+│ Warnings                                                                                                             │
+│   WARN no database backups: a lost volume cannot be recovered                                                        │
+│   WARN --skip-preflight: the read-only checks are not run, here or by the install                                    │
+│                                                                                                                      │
+│ Preflight: all checks passed.                                                                                        │
+│                                                                                                                      │
+│ Equivalent command (template)                                                                                        │
+│   'dcctl' 'install' 'local' '--compact=true' '--ha=true' '--kube-context=prod' \\                                     │
+│   '--alert-webhook=<redacted: supply privately>' '--yes=true'                                                        │
+│   template: replace each <...> placeholder with its value before running it                                          │
+│                                                                                                                      │
+│   Back  › Approve and install    Exit                                                                                │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Tab action · Enter select · ↑/↓ scroll · Esc back · q exit · Ctrl+C exit                                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

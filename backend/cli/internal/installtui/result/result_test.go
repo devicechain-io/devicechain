@@ -946,3 +946,68 @@ func TestAScreenLineKeepsItsLabelWhenOnlyTheValueIsWithheld(t *testing.T) {
 		t.Errorf("the screen draws %q, or not its label with the value withheld:\n%s", secret, text)
 	}
 }
+
+// CommandLines breaks only between words, continues every line but the last, and
+// refuses a width a word cannot fit in rather than split it.
+func TestCommandLinesNeverSplitAWord(t *testing.T) {
+	args := []string{"'dcctl'", "'install'", "'local'", "'--kube-context=prod cluster'", "'--yes=true'"}
+	c := Command{Line: strings.Join(args, " "), Args: args}
+	for _, sh := range []struct {
+		shell Shell
+		cont  string
+	}{{POSIX, " \\"}, {PowerShell, " `"}} {
+		lines, ok := CommandLines(c, sh.shell, nil, 34)
+		if !ok || len(lines) < 2 {
+			t.Fatalf("lines %q ok %v", lines, ok)
+		}
+		var joined []string
+		for i, l := range lines {
+			if lipgloss.Width(l) > 34 {
+				t.Fatalf("line %q is wider than 34", l)
+			}
+			if i < len(lines)-1 {
+				if !strings.HasSuffix(l, sh.cont) {
+					t.Fatalf("line %q has no continuation", l)
+				}
+				l = strings.TrimSuffix(l, sh.cont)
+			}
+			joined = append(joined, l)
+		}
+		if got := strings.Join(joined, " "); got != c.Line {
+			t.Fatalf("joined %q, want %q", got, c.Line)
+		}
+		if _, ok := CommandLines(c, sh.shell, nil, 20); ok {
+			t.Fatal("a word wider than the line was drawn")
+		}
+	}
+}
+
+// 🔴 A LONG COMMAND IS NEVER CUT. A 10.8 KiB command, past the 8 KiB a single text
+// is capped at, is drawn whole through a real hub's redaction: every argument, the
+// last (--yes=true) included.
+func TestCommandLinesNeverTruncateALongCommand(t *testing.T) {
+	hub := canaryHub(t)
+	args := []string{"'dcctl'", "'install'", "'local'"}
+	for i := 0; len(strings.Join(args, " ")) < 10800; i++ {
+		args = append(args, fmt.Sprintf("'--database-toleration=dedicated%03d=%s:NoSchedule'", i, strings.Repeat("d", 230)))
+	}
+	args = append(args, "'--yes=true'")
+	c := Command{Line: strings.Join(args, " "), Args: args}
+	if len(c.Line) < 10800 {
+		t.Fatalf("the command is only %d bytes", len(c.Line))
+	}
+	lines, ok := CommandLines(c, POSIX, hub.Redact, 300)
+	if !ok {
+		t.Fatal("a long command was not drawn")
+	}
+	var joined []string
+	for i, l := range lines {
+		if i < len(lines)-1 {
+			l = strings.TrimSuffix(l, " \\")
+		}
+		joined = append(joined, l)
+	}
+	if got := strings.Join(joined, " "); got != c.Line {
+		t.Fatalf("drawn %d bytes of %d; ends %q", len(got), len(c.Line), got[max(0, len(got)-40):])
+	}
+}

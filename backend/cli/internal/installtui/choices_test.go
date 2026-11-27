@@ -34,7 +34,8 @@ func (r *replanner) replan(e Edits) (Replanned, error) {
 	}
 	return Replanned{Engine: engineFunc(func(context.Context, installflow.Runtime) (installflow.Summary, error) {
 		return succeeded, nil
-	}), Preflight: r.runner(e), Facts: r.facts(e), Settings: testSettings(e)}, nil
+	}), Preflight: r.runner(e), Facts: r.facts(e), Settings: testSettings(e),
+		Review: testReview(r.facts(e)), Command: testCommand(r.facts(e))}, nil
 }
 
 func (r *replanner) facts(e Edits) Facts {
@@ -86,6 +87,7 @@ func failing() *preRunner {
 // choicesWizard is a wizard whose plan passes its preflight until an edit says otherwise.
 func choicesWizard(r *replanner) *Wizard {
 	return &Wizard{Facts: preFacts(), Settings: testSettings(Edits{}), Replan: r.replan,
+		Review: testReview(preFacts()), Command: testCommand(preFacts()),
 		Contexts: func() ([]string, error) { return []string{"kind-devicechain", "prod", "staging"}, nil }}
 }
 
@@ -210,7 +212,7 @@ func TestContinueWaitsForTheChangedPlansChecks(t *testing.T) {
 	if !p.canContinue() {
 		t.Fatalf("the changed plan passed and Continue is unavailable:\n%s", screenText(p))
 	}
-	if out := press(p, "enter"); out != proceed {
+	if out := press(p, "enter", "tab", "enter"); out != proceed {
 		t.Fatalf("Continue gave %v", out)
 	}
 }
@@ -562,7 +564,7 @@ func TestChoicesWithoutAReplanAreReadOnly(t *testing.T) {
 	if v := screenText(p); !strings.Contains(v, "(*) Standard") || strings.Contains(v, "Enter to rename") {
 		t.Fatalf("read-only choices:\n%s", v)
 	}
-	if out := press(p, "enter"); out != proceed {
+	if out := press(p, "enter", "tab", "enter"); out != proceed {
 		t.Fatalf("Continue gave %v", out)
 	}
 }

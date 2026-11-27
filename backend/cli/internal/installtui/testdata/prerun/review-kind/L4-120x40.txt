@@ -1,0 +1,40 @@
+╭─ DeviceChain · dcctl install · kind devicechain ───────────────────────────────────────────────────── dcctl v1.12.0 ─╮
+│ Review · kind devicechain, Standard, Single                                                                          │
+│                                                                                                                      │
+│ This is the plan the install will run, as the command line would resolve it. Nothing has been changed yet. Approve   │
+│ starts it; Back returns to the choices, and a change there needs its own checks and its own review.                  │
+│                                                                                                                      │
+│   Target       local kind cluster devicechain: created if it does not exist, reused if it does                       │
+│   Release      dcctl v1.12.0; published images v1.12.0 from ghcr.io/devicechain-io                                   │
+│   Shape        Standard footprint, Single                                                                            │
+│   TLS          on (cert-manager)                                                                                     │
+│   Backups      on, to a store the cluster provisions for itself (no off-site archive)                                │
+│   State        /home/op/.devicechain/clusters/<assigned after identification>/infra                                  │
+│                                                                                                                      │
+│ Preflight: all checks passed.                                                                                        │
+│                                                                                                                      │
+│ If no kind cluster devicechain exists yet, approving also answers the install's question to create it: yes, for this │
+│ cluster and this plan only.                                                                                          │
+│                                                                                                                      │
+│ Equivalent command                                                                                                   │
+│   'dcctl' 'install' 'local' '--yes=true'                                                                             │
+│                                                                                                                      │
+│ › Back    Approve and install    Exit                                                                                │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Tab action · Enter select · ↑/↓ scroll · Esc back · q exit · Ctrl+C exit                                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

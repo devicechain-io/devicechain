@@ -1,0 +1,20 @@
+\x1b[1mDeviceChain · dcctl install · context prod\x1b[m     \x1b[38;5;109mdcctl v1.12.0\x1b[m
+────────────────────────────────────────────────────────────
+\x1b[1mReview\x1b[m · context prod, Compact, HA
+
+This is the plan the install will run, as the command line
+would resolve it. Nothing has been changed yet. Approve
+starts it; Back returns to the choices, and a change there
+needs its own checks and its own review.
+
+  \x1b[38;5;109mTarget      \x1b[m existing cluster, context prod: reused as it
+               is; dcctl never creates or deletes it
+  \x1b[38;5;109mRelease     \x1b[m dcctl v1.12.0; published images v1.12.0 from
+               ghcr.io/devicechain-io
+  \x1b[38;5;109mShape       \x1b[m Compact footprint, HA
+… 21 lines below
+
+  Back  › \x1b[7mApprove and install\x1b[m    Exit
+────────────────────────────────────────────────────────────
+\x1b[38;5;109mTab action · Enter select · ↑/↓ scroll · Esc back · q exit\x1b[m
+\x1b[38;5;109mCtrl+C exit\x1b[m

@@ -133,6 +133,8 @@ func TestTheActionsAreVisibleAtEveryAcceptedSize(t *testing.T) {
 						want = []string{"Continue", "Advanced", "Preflight", "Exit"}
 					case p.screen == screenWelcome:
 						want = []string{"Continue", "Exit"}
+					case p.screen == screenReview:
+						want = []string{"Back", reviewApproveLabel, "Exit"}
 					case p.pf.confirm:
 						want = []string{"Switch to " + footprintWord(!p.facts.Compact) + "?"}
 					default:
@@ -277,6 +279,9 @@ func TestTheScreenRunsTheBoundPreflightAndTheRunDoesNot(t *testing.T) {
 	h.press("\x1b[Z\r") // Shift+Tab to Continue
 	waitFor(t, "the cluster choices", h.out, screenShows(h.out, choicesTitle))
 	h.press("\r") // Continue, focused: no replan, so the choices are read-only
+	waitFor(t, "the review", h.out, screenShows(h.out, reviewCommandTitle))
+	time.Sleep(100 * time.Millisecond) // the review settles (at once in tests) before it takes a key
+	h.press("\t\r")                    // Tab from Back to Approve
 	waitFor(t, "the verdict", h.out, screenShows(h.out, "Install succeeded."))
 	h.press("\r")
 	if err := h.result(done); err != nil {

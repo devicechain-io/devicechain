@@ -266,7 +266,7 @@ func TestAWarningDoesNotBlockContinue(t *testing.T) {
 	if out := press(p, "enter"); out != stay || p.screen != screenChoices {
 		t.Fatalf("Continue gave %v on screen %v, not the cluster choices", out, p.screen)
 	}
-	if out := press(p, "enter"); out != proceed {
+	if out := press(p, "enter", "tab", "enter"); out != proceed {
 		t.Fatalf("Continue on the cluster choices gave %v", out)
 	}
 }
@@ -594,7 +594,13 @@ func TestTheRunStartsWithThePlanTheScreensSettled(t *testing.T) {
 	if started.Load() || original.Load() {
 		t.Fatal("the run started before the cluster choices were confirmed")
 	}
-	h.press("\t\t\t\t\r") // from the target field to Continue
+	h.press("\t\t\t\t\r") // from the target field to Continue, which shows the review
+	waitFor(t, "the review", h.out, screenShows(h.out, reviewCommandTitle))
+	if started.Load() || original.Load() {
+		t.Fatal("the run started before the review was approved")
+	}
+	time.Sleep(100 * time.Millisecond) // the review settles (at once in tests) before it takes a key
+	h.press("\t\r")                    // Tab from Back to Approve
 	waitFor(t, "the verdict", h.out, screenShows(h.out, "Install succeeded."))
 	h.press("\r")
 	if err := h.result(done); err != nil {

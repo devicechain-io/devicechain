@@ -167,6 +167,15 @@ var installScenarios = []installScenario{
 		"--max-connections", "900", "--relational-store-max-wal-mib", "2048"},
 		kubeContext: "prod", engine: engineFakeOK},
 	{name: "engine-error", args: []string{"install", "local", "--skip-preflight", "--yes"}, engine: engineFakeErr},
+	// A URL credential whose password is an ordinary word ("install", also the start of
+	// every step id). The terminal UI's review hides it; nothing it does may reach the
+	// plain or JSON output, which must be what they were before the review existed.
+	{name: "plan-url-credentials", args: []string{"install", "local", "--skip-preflight",
+		"--registry", "https://dcuser:install@registry.example.test/dc",
+		"--restore-rdb-from", "s3://dcuser:install@bucket/rdb?token=install#install"}, engine: engineFakeOK},
+	{name: "json-plan-url-credentials", args: []string{"install", "local", "--skip-preflight", "-o", "json",
+		"--registry", "https://dcuser:install@registry.example.test/dc",
+		"--restore-rdb-from", "s3://dcuser:install@bucket/rdb?token=install#install"}, engine: engineFakeOK},
 
 	// --output json: the same runs as the event stream, with the run id and the clock
 	// fixed. Stdout is NDJSON and nothing else; the reason a run failed is on stderr,

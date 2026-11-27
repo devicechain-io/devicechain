@@ -121,12 +121,21 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	// (Exit, an interrupt, a renderer that failed before Continue) is never started.
 	var planMu sync.Mutex
 	var confirmed bool
+	var pre *prerun
 	choose := func(ce installflow.Engine, cp installflow.PreflightRunner) {
 		planMu.Lock()
 		defer planMu.Unlock()
 		confirmed = true
 		if ce != nil {
 			e, preflight = ce, cp
+		}
+		// The review's approval answers the run's question to create the kind cluster
+		// it approved, and no other. Without one (an Exit or an interrupt before the run)
+		// nothing is answered for the operator.
+		if pre != nil {
+			if cluster, ok := pre.approvedKindCluster(); ok {
+				b.approve(cluster)
+			}
 		}
 	}
 	con := installflow.Console{
@@ -180,6 +189,7 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 			// The checks on screen run under the run's context, so an interrupt reaches them.
 			mo.pre = newPrerun(runCtx, p.Caps, p.Wizard, preflight, hub.Redact)
 			mo.choose = choose
+			pre = mo.pre
 		}
 	}
 	prog = tea.NewProgram(newModel(p.Caps, intr, start, hub, hub.Redact, mo), opts...)
@@ -338,6 +348,12 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	}
 	if !b.plain.Load() {
 		writeExitSummary(p.Stdout, res.sum)
+		// The review's command, exact on one line, whatever the screen could draw.
+		if pre != nil {
+			if c := pre.exitCommand(); c != "" {
+				fmt.Fprintf(p.Stdout, "equivalent command: %s\n", c)
+			}
+		}
 	}
 	// The command prints this error after the screen has closed, and a tool's
 	// diagnostics are often appended to it: it is redacted, as an event is.
