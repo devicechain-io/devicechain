@@ -1,0 +1,16 @@
+\x1b[1mDeviceChain - dcctl install - kind devicechain\x1b[m dcctl v1.12.0
+------------------------------------------------------------
+\x1b[1mWelcome\x1b[m
+This installs shared cluster prerequisites. Create an
+instance later with dcctl bootstrap.
+
+  Provider    local
+  Target      local kind cluster devicechain, created if it
+              does not exist
+... 5 lines below
+
+No changes have been made.
+
+> \x1b[7mContinue\x1b[m    Exit
+------------------------------------------------------------
+Enter select - Tab action - q exit - Ctrl+C exit

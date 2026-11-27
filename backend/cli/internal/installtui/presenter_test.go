@@ -15,6 +15,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/installtui/brand"
 	"github.com/devicechain-io/dcctl/internal/installtui/terminal"
 )
 
@@ -178,7 +179,7 @@ func TestASkippedSplashStartsTheRun(t *testing.T) {
 		}
 		return succeeded, endRun(rt)
 	}), installflow.Request{Operation: installflow.OperationInstall})
-	waitFor(t, "the splash", h.out, screenShows(h.out, "press any key"))
+	waitFor(t, "the splash", h.out, screenShows(h.out, brand.SkipHint))
 	// The skip key is consumed: the question that follows still waits for its own answer.
 	h.press("y")
 	waitFor(t, "the question", h.out, screenShows(h.out, "[y/N]"))

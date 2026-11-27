@@ -278,11 +278,17 @@ func TestTicksDropLateFramesAndStayWithinBudget(t *testing.T) {
 	if s.Elapsed() != 300*time.Millisecond {
 		t.Errorf("elapsed went back to %v", s.Elapsed())
 	}
-	// A static splash holds once, with no frames.
+	// A static splash holds once, with no frames, for StaticHold.
 	s = New(Options{Caps: caps(120, 40, func(in *terminal.Inputs) { in.Env["SSH_CONNECTION"] = "x" })})
 	s.Start(t0)
-	if s.NextTick() != Duration {
+	if s.NextTick() != StaticHold {
 		t.Errorf("static hold ticks after %v", s.NextTick())
+	}
+	if s.Advance(t0.Add(StaticHold - time.Millisecond)); s.Done() {
+		t.Error("the static splash ended before its hold")
+	}
+	if s.Advance(t0.Add(StaticHold)); !s.Done() || s.Elapsed() != StaticHold {
+		t.Errorf("the static splash did not hand off at %v: done=%v elapsed=%v", StaticHold, s.Done(), s.Elapsed())
 	}
 }
 

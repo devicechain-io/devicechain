@@ -1,0 +1,24 @@
++-\x1b[1m DeviceChain - dcctl install - kind devicechain \x1b[m------------- dcctl v1.12.0 -+
+| \x1b[1mPreflight\x1b[m - read-only checks - footprint Standard                            |
+|                                                                              |
+| \x1b[1mTooling\x1b[m                                                                      |
+|   PASS        kubectl v1.33.1                                                |
+|   PASS        tofu v1.10.6                                                   |
+| \x1b[1mDocker engine\x1b[m                                                                |
+|   PASS        docker daemon reachable                                        |
+|   PASS        engine CPUs: 8                                                 |
+|   PASS        engine memory: 16Gi                                            |
+| \x1b[1mKubernetes server version\x1b[m                                                    |
+|   PASS        server v1.33.1                                                 |
+|                                                                              |
+| Preflight: all checks passed.                                                |
+|                                                                              |
+| > \x1b[7mContinue\x1b[m    Recheck    Switch to Compact    Exit                           |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
++------------------------------------------------------------------------------+
+| up/down check - Tab action - Enter select - Esc back - q exit - Ctrl+C exit  |
++------------------------------------------------------------------------------+

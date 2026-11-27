@@ -1,0 +1,20 @@
+DeviceChain · dcctl install · context prod     dcctl v1.12.0
+────────────────────────────────────────────────────────────
+Welcome
+This installs shared cluster prerequisites. Create an
+instance later with dcctl bootstrap.
+
+  Provider    local
+  Target      existing cluster, context prod (dcctl never
+              creates or deletes it)
+  Footprint   Compact (from --compact)
+  Topology    HA (from --ha)
+  Images      built from this source checkout, pushed to
+              localhost:5000 as dev
+  Preflight   read-only checks run next
+
+No changes have been made.
+
+  Continue  › Exit
+────────────────────────────────────────────────────────────
+Enter select · Tab action · q exit · Ctrl+C exit

@@ -1,0 +1,40 @@
+╭─\x1b[1m DeviceChain · dcctl install · kind devicechain \x1b[m─────────────────────────────────────────────────────\x1b[38;5;109m dcctl v1.12.0 \x1b[m─╮
+│ \x1b[1mPreflight\x1b[m · read-only checks · footprint Standard                                                                    │
+│                                                                                                                      │
+│ \x1b[1mDocker engine\x1b[m                                                                                                        │
+│   \x1b[38;5;78mPASS\x1b[m        docker daemon reachable                                                                                │
+│   \x1b[38;5;221mWARN\x1b[m        docker context = colima                                                                                │
+│ \x1b[1mKernel & cgroups\x1b[m                                                                                                     │
+│ › \x1b[7mPASS\x1b[m        cgroup v2                                                                                              │
+│   \x1b[38;5;221mWARN\x1b[m        fs.inotify.max_user_watches = 8192                                                                     │
+│                                                                                                                      │
+│ \x1b[38;5;221mPreflight: ready, with 2 warnings. Review them before you continue.\x1b[m                                                  │
+│                                                                                                                      │
+│   Continue  › \x1b[7mRecheck\x1b[m    Switch to Compact    Exit                                                                   │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;5;109m↑/↓ check · Tab action · Enter select · Esc back · q exit · Ctrl+C exit\x1b[m                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

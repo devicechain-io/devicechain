@@ -1,0 +1,16 @@
+\x1b[1mDeviceChain - dcctl install - kind devicechain\x1b[m dcctl v1.12.0
+------------------------------------------------------------
+> \x1b[7mFAIL\x1b[m        engine memory: 6.0Gi
+... 7 lines above, 10 below
+\x1b[1mPreflight: 2 failures, 1 warning. Continue is unavailable\x1b[m
+\x1b[1mwhile any check fails. Fix each failure, then Recheck.\x1b[m
+Compact is the small-footprint preset for the cluster and
+every instance on it: smaller volumes, lowered JetStream/KV
+ceilings and scheduling requests, no monitoring stack, and,
+unless --no-tls=false, no cert-manager and therefore no
+database backups.
+The plan changes to this footprint and every check runs
+again for it.
+\x1b[1mSwitch to Compact?\x1b[m
+------------------------------------------------------------
+Enter switch - Esc keep - Ctrl+C exit

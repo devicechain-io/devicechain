@@ -37,6 +37,9 @@ type doctor struct {
 	// an install hands the observations to its engine, which reports them through
 	// the run's event stream to whichever presenter is drawing it.
 	observe func(installflow.PreflightObservation)
+	// ctx, when set, bounds every command the checks run (the terminal UI's screen).
+	// Nil runs them exactly as they have always been run.
+	ctx context.Context
 }
 
 const dockerInstallHint = "install Docker (Docker Desktop on macOS and Windows, Docker Engine on Linux): https://docs.docker.com/get-docker/"
@@ -71,7 +74,10 @@ func (d *doctor) section(code installflow.MessageCode) {
 	d.record(installflow.PreflightObservation{Observation: installflow.ObserveSection, Section: code})
 }
 
-// run executes a command and returns trimmed stdout (empty on error).
+// run executes a command and returns trimmed stdout (empty on error). It is the
+// doctor's command as it has always been run: `dcctl preflight`, and every install's
+// own preflight stage, plain or not, run their commands this way and print what they
+// always printed, whatever happens to the run around them.
 func run(name string, args ...string) string {
 	out, err := exec.Command(name, args...).Output()
 	if err != nil {
@@ -80,14 +86,54 @@ func run(name string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// commandWaitDelay bounds how long a context-run command is waited for once its
+// context has ended: a killed tool whose descendant (an exec credential plugin, say)
+// still holds its output open is given up on after this, rather than waited on forever.
+const commandWaitDelay = 2 * time.Second
+
+// runContext is run for a check that can be abandoned: the terminal UI's preflight
+// screen, which an Exit or an interrupt ends. The command is killed when ctx ends,
+// and waited for at most commandWaitDelay after that. Only the screen uses it; see
+// doctorRunner.
+func runContext(ctx context.Context, name string, args ...string) string {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = commandWaitDelay
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// run is a host command: under the doctor's context when it has one (the screen's
+// checks), and exactly as always when it does not.
+func (d *doctor) run(name string, args ...string) string {
+	if runCmd != nil {
+		return runCmd(name, args...)
+	}
+	if d.ctx == nil {
+		return plainCommand(name, args...)
+	}
+	return hostCommand(d.ctx, name, args...)
+}
+
+// plainCommand and hostCommand are run and runContext; a test replaces them to see
+// which way, and under which context, each check runs.
+var (
+	plainCommand = run
+	hostCommand  = runContext
+)
+
 func haveTool(name string) bool { _, err := lookPath(name); return err == nil }
 
 // lookPath and runCmd are the doctor's only windows onto the host. They are
 // variables so a test can present a host with (or without) a Docker daemon, or a
 // kubectl that answers per --context, without needing either on the machine.
+// runCmd is nil in production: the doctor then runs the command itself, under its
+// context (doctor.run).
 var (
 	lookPath = exec.LookPath
-	runCmd   = run
+	runCmd   func(name string, args ...string) string
 )
 
 // doctorOpts says what the run about to follow will actually need from this host.
@@ -215,13 +261,13 @@ func (d *doctor) checkDockerEngine(opts doctorOpts) string {
 		d.fail("docker not installed", dockerInstallHint)
 		return ""
 	}
-	if runCmd("docker", "info", "--format", "{{.ServerVersion}}") == "" {
+	if d.run("docker", "info", "--format", "{{.ServerVersion}}") == "" {
 		d.fail("docker daemon not reachable", "start Docker Desktop, or on Linux start dockerd (e.g. 'sudo service docker start') and make sure your user is in the 'docker' group")
 		return ""
 	}
 	d.pass("docker daemon reachable")
 
-	if ctx := runCmd("docker", "context", "show"); ctx != "" {
+	if ctx := d.run("docker", "context", "show"); ctx != "" {
 		switch {
 		case ctx == "default":
 			d.pass("docker context = default (native engine)")
@@ -239,14 +285,14 @@ func (d *doctor) checkDockerEngine(opts doctorOpts) string {
 		capacityIssue = d.fail
 	}
 	const capacityFix = "give Docker >= 4 CPUs and >= 8Gi, or re-run install with --compact for the small-footprint preset"
-	if n, _ := strconv.Atoi(runCmd("docker", "info", "--format", "{{.NCPU}}")); n > 0 {
+	if n, _ := strconv.Atoi(d.run("docker", "info", "--format", "{{.NCPU}}")); n > 0 {
 		if n >= 4 {
 			d.pass(fmt.Sprintf("engine CPUs: %d", n))
 		} else {
 			capacityIssue(fmt.Sprintf("engine CPUs: %d", n), capacityFix)
 		}
 	}
-	if b, _ := strconv.ParseInt(runCmd("docker", "info", "--format", "{{.MemTotal}}"), 10, 64); b > 0 {
+	if b, _ := strconv.ParseInt(d.run("docker", "info", "--format", "{{.MemTotal}}"), 10, 64); b > 0 {
 		gi := b / (1 << 30)
 		switch {
 		case gi >= 8:
@@ -257,7 +303,7 @@ func (d *doctor) checkDockerEngine(opts doctorOpts) string {
 			d.warn(fmt.Sprintf("engine memory: %.1fGi", float64(b)/(1<<30)), capacityFix)
 		}
 	}
-	if drv := runCmd("docker", "info", "--format", "{{.Driver}}"); drv != "" {
+	if drv := d.run("docker", "info", "--format", "{{.Driver}}"); drv != "" {
 		// "overlayfs" is the containerd image store's snapshotter, the default engine
 		// since Docker 29; kind runs on it as it does on overlay2.
 		if drv == "overlay2" || drv == "overlayfs" {
@@ -266,7 +312,7 @@ func (d *doctor) checkDockerEngine(opts doctorOpts) string {
 			d.warn("storage driver: "+drv, "overlay2 is recommended for kind")
 		}
 	}
-	return runCmd("docker", "info", "--format", "{{.DockerRootDir}}")
+	return d.run("docker", "info", "--format", "{{.DockerRootDir}}")
 }
 
 // checkDocker runs the engine check only when the run needs a daemon, and says so
@@ -284,17 +330,17 @@ func (d *doctor) checkDocker(opts doctorOpts) string {
 
 func (d *doctor) checkPorts() {
 	d.section(installplain.SectionPorts)
-	registryUp := strings.Contains(runCmd("docker", "ps", "--format", "{{.Names}}"), "kind-registry")
+	registryUp := strings.Contains(d.run("docker", "ps", "--format", "{{.Names}}"), "kind-registry")
 	// A cluster dcctl is about to CREATE publishes 80, 443 and 1883-1885 on the host (ingress
 	// HTTP, ingress HTTPS, and one MQTT port for each of up to three local instances). If
 	// something else holds one, the create dies on Docker's bind error, so say so here; a
 	// cluster that already exists holds them itself.
-	clusterExists := d.cluster != "" && containsLine(runCmd("kind", "get", "clusters"), d.cluster)
+	clusterExists := d.cluster != "" && containsLine(d.run("kind", "get", "clusters"), d.cluster)
 	// A cluster created before the extra MQTT maps does not publish 1884 or 1885, so a holder of
 	// either is not that cluster: it is noted, and it blocks nothing, since no cluster is created.
 	publishes := map[int]bool{}
 	if clusterExists {
-		if out := runCmd("docker", "port", d.cluster+"-control-plane"); out != "" {
+		if out := d.run("docker", "port", d.cluster+"-control-plane"); out != "" {
 			for _, p := range []int{1884, 1885} {
 				publishes[p] = strings.Contains(out, fmt.Sprintf(":%d\n", p)) || strings.HasSuffix(strings.TrimSpace(out), fmt.Sprintf(":%d", p))
 			}
@@ -309,12 +355,12 @@ func (d *doctor) checkPorts() {
 		case inUse && p == 5000:
 			d.warn("port 5000 already in use", "free it or it may conflict with the local image registry")
 		case inUse && clusterExists && extraMQTT && !publishes[p]:
-			d.warn(portHolderMessage(p)+fmt.Sprintf(", and not by the existing kind cluster %q, which does not publish it", d.cluster),
+			d.warn(d.portHolderMessage(p)+fmt.Sprintf(", and not by the existing kind cluster %q, which does not publish it", d.cluster),
 				"nothing needs it on this cluster; a new local cluster would, for a second or third instance's MQTT port")
 		case inUse && clusterExists:
 			d.pass(fmt.Sprintf("port %d in use (by the existing kind cluster %q, expected)", p, d.cluster))
 		case inUse:
-			d.fail(portHolderMessage(p), fmt.Sprintf("stop what holds port %d and re-run: creating the kind cluster publishes it on the host and fails while it is taken", p))
+			d.fail(d.portHolderMessage(p), fmt.Sprintf("stop what holds port %d and re-run: creating the kind cluster publishes it on the host and fails while it is taken", p))
 		default:
 			d.pass(fmt.Sprintf("port %d free", p))
 		}
@@ -323,8 +369,8 @@ func (d *doctor) checkPorts() {
 
 // portHolderMessage names the Docker container publishing a port when there is one,
 // which is the usual holder on a machine that already runs another kind cluster.
-func portHolderMessage(p int) string {
-	holder := strings.TrimSpace(runCmd("docker", "ps", "--filter", fmt.Sprintf("publish=%d", p), "--format", "{{.Names}}"))
+func (d *doctor) portHolderMessage(p int) string {
+	holder := strings.TrimSpace(d.run("docker", "ps", "--filter", fmt.Sprintf("publish=%d", p), "--format", "{{.Names}}"))
 	if holder != "" {
 		return fmt.Sprintf("port %d already in use by container %s", p, strings.ReplaceAll(holder, "\n", ", "))
 	}
@@ -420,7 +466,7 @@ const (
 func (d *doctor) checkKubeServerVersion(kubeContext string) {
 	d.section(installplain.SectionKubeServerVersion)
 
-	out := runCmd("kubectl", kubectlVersionArgs(kubeContext)...)
+	out := d.run("kubectl", kubectlVersionArgs(kubeContext)...)
 	if out == "" {
 		// Not a failure. The local provider is allowed to run before a cluster
 		// exists, and an unreachable server is already reported by the context
@@ -527,16 +573,45 @@ func runDoctor(provider string, opts doctorOpts) *doctor {
 
 // doctorRunner is the preflight an install's engine runs, as its install.preflight
 // stage: the same checks as runDoctor, observed through the run instead of printed.
+//
+// 🔴 IT DOES NOT BIND ITS COMMANDS TO THE RUN'S CONTEXT. An interrupted plain install
+// prints what it always printed: a `docker info` cut short by a signal would read as
+// "docker daemon not reachable" and change the counts. Only the terminal UI's
+// preflight screen, which can be abandoned, asks for the bound form (BoundToContext).
 func doctorRunner(provider string, opts doctorOpts) installflow.PreflightRunner {
-	return installflow.PreflightFunc(func(_ context.Context, observe func(installflow.PreflightObservation)) (installflow.PreflightResult, error) {
-		d := runDoctorTo(provider, opts, observe)
-		return installflow.PreflightResult{Fails: d.fails, Warns: d.warns}, nil
-	})
+	return doctorPreflight{provider: provider, opts: opts}
+}
+
+type doctorPreflight struct {
+	provider string
+	opts     doctorOpts
+	bound    bool
+}
+
+func (p doctorPreflight) RunPreflight(ctx context.Context, observe func(installflow.PreflightObservation)) (installflow.PreflightResult, error) {
+	d := &doctor{observe: observe}
+	if p.bound {
+		d.ctx = ctx
+	}
+	runChecksOn(d, p.provider, p.opts)
+	return installflow.PreflightResult{Fails: d.fails, Warns: d.warns}, nil
+}
+
+// BoundToContext is the same preflight with every command killed when the context it
+// is run under ends. The terminal UI's screens run this form.
+func (p doctorPreflight) BoundToContext() installflow.PreflightRunner {
+	p.bound = true
+	return p
 }
 
 // runDoctorTo is runDoctor with its observations sent to observe (nil: stdout).
 func runDoctorTo(provider string, opts doctorOpts, observe func(installflow.PreflightObservation)) *doctor {
-	d := &doctor{observe: observe}
+	return runChecksOn(&doctor{observe: observe}, provider, opts)
+}
+
+// runChecksOn runs every check on d, which says where the observations go and whether
+// the commands are bound to a context.
+func runChecksOn(d *doctor, provider string, opts doctorOpts) *doctor {
 	if opts.hostsKind() {
 		d.cluster = strings.TrimPrefix(opts.Target, "kind-")
 	}

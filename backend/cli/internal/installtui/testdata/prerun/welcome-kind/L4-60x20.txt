@@ -1,0 +1,20 @@
+DeviceChain · dcctl install · kind devicechain dcctl v1.12.0
+────────────────────────────────────────────────────────────
+Welcome
+This installs shared cluster prerequisites. Create an
+instance later with dcctl bootstrap.
+
+  Provider    local
+  Target      local kind cluster devicechain, created if it
+              does not exist
+  Footprint   Standard
+  Topology    Single
+  Images      published images v1.12.0 from
+              ghcr.io/devicechain-io
+  Preflight   read-only checks run next
+
+No changes have been made.
+
+› Continue    Exit
+────────────────────────────────────────────────────────────
+Enter select · Tab action · q exit · Ctrl+C exit

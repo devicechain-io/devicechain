@@ -1,0 +1,40 @@
+╭─\x1b[1m DeviceChain · dcctl install · kind devicechain \x1b[m─────────────────────────────────────────────────────\x1b[38;2;138;166;182m dcctl v1.12.0 \x1b[m─╮
+│ \x1b[1mWelcome\x1b[m                                                                                                              │
+│ This installs shared cluster prerequisites. Create an instance later with dcctl bootstrap.                           │
+│                                                                                                                      │
+│   \x1b[38;2;138;166;182mProvider   \x1b[m local                                                                                                  │
+│   \x1b[38;2;138;166;182mTarget     \x1b[m local kind cluster devicechain, created if it does not exist                                           │
+│   \x1b[38;2;138;166;182mFootprint  \x1b[m Standard                                                                                               │
+│   \x1b[38;2;138;166;182mTopology   \x1b[m Single                                                                                                 │
+│   \x1b[38;2;138;166;182mImages     \x1b[m published images v1.12.0 from ghcr.io/devicechain-io                                                   │
+│   \x1b[38;2;138;166;182mPreflight  \x1b[m read-only checks run next                                                                              │
+│                                                                                                                      │
+│ No changes have been made.                                                                                           │
+│                                                                                                                      │
+│ › \x1b[7mContinue\x1b[m    Exit                                                                                                   │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;2;138;166;182mEnter select · Tab action · q exit · Ctrl+C exit\x1b[m                                                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

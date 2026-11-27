@@ -27,10 +27,14 @@ type Options struct {
 // SkipHint is shown under the splash while it can be skipped.
 const SkipHint = "any key: skip"
 
+// StaticHold is how long a splash that does not animate stays up.
+const StaticHold = 500 * time.Millisecond
+
 // Splash is the splash screen's state. It is driven entirely by its caller:
 // Start and Advance take times from an injected monotonic clock, Skip is a key
-// press, Resize a new terminal size. It holds for Duration, animated only when
-// the capabilities allow, and is done when the hold ends or a key skips it.
+// press, Resize a new terminal size. It holds for Duration when it animates and
+// for StaticHold when it does not (animated only when the capabilities allow),
+// and is done when the hold ends or a key skips it.
 type Splash struct {
 	opts      Options
 	art       terminal.Art
@@ -40,8 +44,12 @@ type Splash struct {
 	start     time.Time
 	started   bool
 	elapsed   time.Duration
-	done      bool
-	skipped   bool
+	// hold is how long the splash stays: Duration when it animates, StaticHold
+	// when it does not. It is settled once, at New: an animation stopped by a
+	// shrinking terminal keeps the static mark up for the rest of its hold.
+	hold    time.Duration
+	done    bool
+	skipped bool
 }
 
 // New returns a splash for the given options. Nothing is shown until Start.
@@ -51,6 +59,10 @@ func New(o Options) *Splash {
 		s.width, s.height = 0, 0
 	}
 	s.animating = o.Caps.Animate && s.art == terminal.LargeMark
+	s.hold = StaticHold
+	if s.animating {
+		s.hold = Duration
+	}
 	return s
 }
 
@@ -67,7 +79,7 @@ func (s *Splash) Start(now time.Time) {
 }
 
 // Advance moves the splash to now. Time never runs backwards, and the splash
-// is done once Duration has elapsed.
+// is done once its hold has elapsed.
 func (s *Splash) Advance(now time.Time) {
 	if !s.started || s.done {
 		return
@@ -75,24 +87,24 @@ func (s *Splash) Advance(now time.Time) {
 	if e := now.Sub(s.start); e > s.elapsed {
 		s.elapsed = e
 	}
-	if s.elapsed >= Duration {
-		s.elapsed, s.done = Duration, true
+	if s.elapsed >= s.hold {
+		s.elapsed, s.done = s.hold, true
 	}
 }
 
 // NextTick is the delay from the current elapsed time to the next frame.
 // Frames fall on multiples of FrameInterval from the start, so a late tick
 // drops the frames it missed rather than replaying them; the last tick lands
-// exactly on Duration.
+// exactly on the end of the hold.
 func (s *Splash) NextTick() time.Duration {
 	if s.done {
 		return 0
 	}
 	if !s.animating {
-		return Duration - s.elapsed
+		return s.hold - s.elapsed
 	}
 	next := (s.elapsed/FrameInterval + 1) * FrameInterval
-	return min(next, Duration) - s.elapsed
+	return min(next, s.hold) - s.elapsed
 }
 
 // Skip ends the splash at once. It reports whether the key was consumed by
@@ -147,7 +159,7 @@ func (s *Splash) Skipped() bool { return s.skipped }
 // Animating reports whether frames are still animated.
 func (s *Splash) Animating() bool { return s.animating }
 
-// Elapsed is the time shown, clamped to Duration.
+// Elapsed is the time shown, clamped to the hold.
 func (s *Splash) Elapsed() time.Duration { return s.elapsed }
 
 // Art is the art currently shown.

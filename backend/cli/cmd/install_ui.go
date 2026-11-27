@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
+	"github.com/devicechain-io/dcctl/internal/installchoice"
 	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/internal/installplain"
 	"github.com/devicechain-io/dcctl/internal/installtui"
@@ -89,25 +90,70 @@ type installPresenter interface {
 
 // newInstallTUI builds the terminal-UI presenter on the process's own streams. Tests
 // replace it, so that the choice can be checked without a terminal to take over.
-var newInstallTUI = func(caps terminal.Capabilities) installPresenter {
+var newInstallTUI = func(caps terminal.Capabilities, wiz *installtui.Wizard) installPresenter {
 	// It owns the process's streams while the screen is up: a credential plugin or any
 	// other child that reaches them writes to the log pane, never over the screen, and
 	// finds no terminal to read.
-	return installtui.Presenter{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Caps: caps, OwnProcessStreams: true}
+	return installtui.Presenter{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Caps: caps,
+		OwnProcessStreams: true, Wizard: wiz}
 }
 
 // installPresenterFor settles which presenter renders this install, from --ui,
 // --no-splash, --dev and the options the run was resolved to.
-func installPresenterFor(opts bootstrap.InstallOptions) (installPresenter, error) {
+func installPresenterFor(opts bootstrap.InstallOptions, wiz *installtui.Wizard) (installPresenter, error) {
 	ui, err := parseInstallUI(installUI)
 	if err != nil {
 		return nil, err
 	}
 	if caps, ok := selectInstallPresenter(installUIRequest{UI: ui, Yes: opts.AssumeYes, Dev: installDev,
 		DryRun: opts.DryRun, NoSplash: installNoSplash}, probeInstallTerminal); ok {
-		return newInstallTUI(caps), nil
+		return newInstallTUI(caps, wiz), nil
 	}
 	return installplain.Presenter{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin}, nil
+}
+
+// installWizardFor is what the terminal UI's welcome and preflight screens show and may
+// change, from the request as the command line resolved it. Its one change, the
+// footprint, is re-resolved through the same Prepare the command line used, so a
+// combination the command line refuses is refused on the screen too.
+func installWizardFor(provider bootstrap.Provider, choices installchoice.Choices, prepared installchoice.Prepared) *installtui.Wizard {
+	eff := prepared.Effective
+	opts := prepared.BootstrapOptions()
+	facts := installtui.Facts{
+		Version: Version, Provider: choices.Provider, Providers: bootstrap.Names(),
+		KubeContext: eff.KubeContext, Cluster: eff.Cluster,
+		Compact: eff.Compact, HA: eff.HA, SkipPreflight: eff.SkipPreflight,
+	}
+	switch {
+	case choices.Given.Has("size"):
+		facts.FootprintFlag = "--size " + choices.Size
+	case choices.Given.Has("compact") && choices.Compact:
+		facts.FootprintFlag = "--compact"
+	case choices.Given.Has("compact"):
+		facts.FootprintFlag = "--compact=false"
+	}
+	if choices.Given.Has("ha") {
+		facts.TopologyFlag = "--ha"
+		if !choices.HA {
+			facts.TopologyFlag = "--ha=false"
+		}
+	}
+	if opts.BuildImages {
+		facts.Images = fmt.Sprintf("built from this source checkout, pushed to %s as %s", opts.ImageRegistry, opts.ImageVersion)
+	} else {
+		facts.Images = fmt.Sprintf("published images %s from %s", opts.ImageVersion, opts.ImageRegistry)
+	}
+	return &installtui.Wizard{Facts: facts, Replan: func(compact bool) (installflow.Engine, installflow.PreflightRunner, error) {
+		c := choices.Clone()
+		c.Compact, c.Size = compact, ""
+		c.Given["compact"], c.Given["size"] = true, false
+		p, err := c.Prepare(Version, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		e, preflight := installRunFor(provider, choices.Provider, p)
+		return e, preflight, nil
+	}}
 }
 
 func init() {

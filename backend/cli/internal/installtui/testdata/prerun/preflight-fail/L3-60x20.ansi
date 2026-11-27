@@ -1,0 +1,20 @@
+\x1b[1mDeviceChain · dcctl install · kind devicechain\x1b[m \x1b[38;5;109mdcctl v1.12.0\x1b[m
+────────────────────────────────────────────────────────────
+\x1b[1mPreflight\x1b[m · read-only checks · footprint Standard
+
+… 7 lines above
+› \x1b[7mFAIL\x1b[m        engine memory: 6.0Gi
+              fix: give Docker >= 4 CPUs and >= 8Gi, or
+                   re-run install with --compact
+… 8 lines below
+
+\x1b[38;5;204mPreflight: 2 failures, 1 warning. Continue is unavailable\x1b[m
+\x1b[38;5;204mwhile any check fails. Fix each failure, then Recheck.\x1b[m
+
+  \x1b[38;5;109mContinue (unavailable)\x1b[m
+› \x1b[7mRecheck\x1b[m
+  Switch to Compact
+  Exit
+────────────────────────────────────────────────────────────
+\x1b[38;5;109m↑/↓ check · Tab action · Enter select · Esc back · q exit\x1b[m
+\x1b[38;5;109mCtrl+C exit\x1b[m
