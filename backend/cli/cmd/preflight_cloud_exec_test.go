@@ -74,7 +74,14 @@ func execPluginHelper(mode string) int {
 	}
 	startSleeper := func(holdStdout bool) {
 		c := exec.Command(os.Args[0])
-		c.Env = append(os.Environ(), execPluginHelperEnv+"=sleeper")
+		// Without the run's sweep mark (proctree.Options.Sweep), so only the group's end
+		// can reach it: each way a leftover is ended is tested on its own.
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(kv, "DCCTL_PROCTREE_RUN=") {
+				c.Env = append(c.Env, kv)
+			}
+		}
+		c.Env = append(c.Env, execPluginHelperEnv+"=sleeper")
 		if holdStdout {
 			c.Stdout = os.Stdout
 		}
