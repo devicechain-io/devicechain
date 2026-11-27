@@ -27,11 +27,14 @@ const MinRedactionBytes = 4
 // in tool output, with a placeholder. It is defence in depth: the primary
 // defence is that producers only put allowlisted values into payloads.
 //
-// It holds two kinds of value, matched two ways:
+// It holds three kinds of value, matched two ways:
 //
-//   - STRICT (AddSecret): a secret dcctl itself holds and controls (a root key, a
-//     passphrase, a minted password). Replaced wherever it occurs, as a substring,
-//     and an identifier that contains it is refused.
+//   - SECRET (AddSecret): a secret dcctl holds — a passphrase, an SMTP password, a
+//     webhook or backup credential, a typed answer. Replaced wherever it occurs, as
+//     a substring, and it never refuses an identifier.
+//   - GENERATED (AddGeneratedSecret): a secret dcctl itself made at random (a root
+//     key, a minted password). Replaced exactly as a SECRET is, and an identifier
+//     that contains it is refused as well.
 //   - TOKEN (AddRedaction): a value dcctl found rather than made — a kubeconfig's
 //     credentials, an exec plugin's arguments and environment. Such a value can be
 //     an ordinary word ("prod", "install"), so it is replaced only as a WHOLE TOKEN,
@@ -39,26 +42,47 @@ const MinRedactionBytes = 4
 //     identifier. "prod" is redacted in "--profile prod" and left alone in
 //     "production"; an unused user's password "install" never stops a run.
 //
+// 🔴 ONLY A RANDOM VALUE MAY REFUSE AN IDENTIFIER. Identifiers (step ids, message
+// and error codes, prompt ids, sources) are dcctl's own vocabulary, built from its
+// constants and checked against a grammar that keeps free text out of them. A value
+// a PERSON chose can be a word of that vocabulary: a passphrase "bootstrap" or an
+// SMTP password "install" is a substring of "bootstrap.escrow" and "install.inputs",
+// and refusing those identifiers made every later event of a run invalid, so a run
+// that had built everything it was asked to exited 1. Such a coincidence cannot be
+// told from a leak by looking at the identifier, and the identifier reveals nothing
+// about the value either way: it is the same string whatever was registered. A value
+// dcctl generated at random cannot coincide with a word, so for it — and only for it
+// — an identifier holding it is evidence of a leak, and is refused. Free text is
+// redacted the same way for SECRET and GENERATED values: nothing about text changed.
+//
 // Whole-token matching applies to every TOKEN value, not only short ones. A long
 // value gains nothing from substring matching that a real leak needs — a leaked
 // credential stands as a token between quotes, spaces, '=' or ':' — and keeping one
 // rule means no length threshold decides whether a run's text is corrupted.
 type redactor struct {
 	mu sync.RWMutex
-	// strictForms are the STRICT values' forms; tokenForms the TOKEN values',
-	// longest first.
+	// strictForms are the SECRET and GENERATED values' forms, idForms the
+	// GENERATED values' alone; tokenForms the TOKEN values', longest first.
 	strictForms map[string]struct{}
+	idForms     map[string]struct{}
 	tokenForms  []string
 	tokenSet    map[string]struct{}
 	strict      *strings.Replacer
+	// ids matches the forms that refuse an identifier.
+	ids *strings.Replacer
 }
 
 func newRedactor() *redactor {
-	return &redactor{strictForms: map[string]struct{}{}, tokenSet: map[string]struct{}{}}
+	return &redactor{strictForms: map[string]struct{}{}, idForms: map[string]struct{}{}, tokenSet: map[string]struct{}{}}
 }
 
-// add registers secret strictly: see redactor.
-func (r *redactor) add(secret string) bool {
+// add registers secret as a SECRET value: see redactor.
+func (r *redactor) add(secret string) bool { return r.addStrict(secret, false) }
+
+// addGenerated registers secret as a GENERATED value: see redactor.
+func (r *redactor) addGenerated(secret string) bool { return r.addStrict(secret, true) }
+
+func (r *redactor) addStrict(secret string, refusesIDs bool) bool {
 	if !longEnough(secret, MinSecretBytes) {
 		return false
 	}
@@ -67,8 +91,14 @@ func (r *redactor) add(secret string) bool {
 	defer r.mu.Unlock()
 	for _, f := range forms {
 		r.strictForms[f] = struct{}{}
+		if refusesIDs {
+			r.idForms[f] = struct{}{}
+		}
 	}
 	r.strict = buildReplacer(r.strictForms)
+	if refusesIDs {
+		r.ids = buildReplacer(r.idForms)
+	}
 	return true
 }
 
@@ -260,12 +290,12 @@ func (r *redactor) text(t SafeText) SafeText {
 	return SafeText{s: capText(r.redact(t.s))}
 }
 
-// contains reports whether s holds a STRICT value's form. Identifier fields use
-// it to refuse, rather than redact, an event whose code is a secret. A TOKEN
-// value never refuses one.
+// contains reports whether s holds a GENERATED value's form. Identifier fields
+// use it to refuse, rather than redact, an event whose code is a secret. A SECRET
+// or TOKEN value never refuses one: see redactor.
 func (r *redactor) contains(s string) bool {
 	r.mu.RLock()
-	rep := r.strict
+	rep := r.ids
 	r.mu.RUnlock()
 	return s != "" && rep != nil && rep.Replace(s) != s
 }

@@ -65,6 +65,42 @@ var urlSecretCases = []struct {
 		[]string{"dcCanarySecret", "suffix", "user"}},
 	{"space in an unbracketed authority", "s3://dc canary/pw@bucket/x", "s3://REDACTED@bucket/x", []string{"canary", "pw"}},
 	{"raw ? in the password", "s3://u:pa?dcCanaryPw@bucket/x", "s3://REDACTED@bucket/x", []string{"dcCanaryPw", "pa"}},
+	// A password that starts with '/' or with digits makes the authority before the
+	// raw delimiter read as host[:port]: the userinfo '@' must still win.
+	{"slash-leading password", "s3://AKIDEXAMPLE:/wJalrXUtnFEMI+K7MDENG@bucket/archive", "s3://REDACTED@bucket/archive",
+		[]string{"AKIDEXAMPLE", "wJalrXUtnFEMI", "K7MDENG"}},
+	{"digit-leading password", "s3://admin:2024/dcCanarySecret@bucket/archive", "s3://REDACTED@bucket/archive",
+		[]string{"admin", "2024", "dcCanarySecret"}},
+	{"all-digit password segment", "https://admin:12345/678@host.example:9000/x", "https://REDACTED@host.example:9000/x",
+		[]string{"admin", "12345", "678"}},
+	{"digit-leading password, no scheme", "admin:2024/dcCanarySecret@registry.example/org", "REDACTED@registry.example/org",
+		[]string{"admin", "dcCanarySecret"}},
+	{"slash-leading password, no scheme", "user:/dcCanarySecret@registry.example/org", "REDACTED@registry.example/org",
+		[]string{"user", "dcCanarySecret"}},
+	{"digits then ? in the password", "s3://u:12?dcCanaryPw@bucket/x", "s3://REDACTED",
+		[]string{"u:12", "dcCanaryPw"}},
+	{"digits then # in the password", "s3://dcUser:12#dcCanaryPw@bucket/x", "s3://REDACTED",
+		[]string{"dcUser", "dcCanaryPw"}},
+	{"empty port then ? in the password", "s3://dcUser:?dcCanaryPw@bucket/x", "s3://REDACTED",
+		[]string{"dcUser", "dcCanaryPw"}},
+	{"@ in a query after a port", "https://host.example:8443/x?token=@dcCanarySecret", "https://REDACTED",
+		[]string{"dcCanarySecret", "token"}},
+	{"colon in the password", "s3://dcUser:dc:Canary:Pw@bucket/x", "s3://REDACTED@bucket/x",
+		[]string{"dcUser", "dc:Canary:Pw", "Canary"}},
+	{"colons and a slash in the password", "s3://dcUser:20:24/dcCanaryPw@bucket/x", "s3://REDACTED@bucket/x",
+		[]string{"dcUser", "dcCanaryPw", "20:24"}},
+	{"colon after a slash-leading password", "s3://dcUser:/dc:CanaryPw@bucket/x", "s3://REDACTED@bucket/x",
+		[]string{"dcUser", "CanaryPw"}},
+	{"digit-leading password, ipv6 host", "https://dcUser:123/dcCanaryPw@[2001:db8::1]:9000/x",
+		"https://REDACTED@[2001:db8::1]:9000/x", []string{"dcUser", "dcCanaryPw"}},
+	{"slash-leading password, ipv6 host", "https://dcUser:/dcCanaryPw@[::1]/x", "https://REDACTED@[::1]/x",
+		[]string{"dcUser", "dcCanaryPw"}},
+	// An empty port is in doubt whatever follows the '@': here an IPv6 zone that the
+	// host reading does not accept.
+	{"slash-leading password, ipv6 zone host", "https://dcUser:/dcCanaryPw@[fe80::1%25eth0]:9000/x",
+		"https://REDACTED@[fe80::1%25eth0]:9000/x", []string{"dcUser", "dcCanaryPw"}},
+	{"colon in the password, ipv6 host", "oci://dcUser:dc:CanaryPw@[2001:db8::1]:5000/org", "oci://REDACTED@[2001:db8::1]:5000/org",
+		[]string{"dcUser", "CanaryPw"}},
 }
 
 // Values with no credential must come back BYTE FOR BYTE: every golden of a run
@@ -76,6 +112,12 @@ var urlCleanCases = []string{
 	"nats://127.0.0.1:4222", "s3://bucket/a%20b", "C:\\backups\\set", "https://h/x?", "https://h/x#",
 	"s3://@bucket/x", "https://host/a@b/archive", "s3://bucket/a%2540dcHost", "s3://bucket/a%40b",
 	"ghcr.io/org/img@sha256:abc", "localhost:5001/frontend@sha256:abc",
+	// A digest after a port, and an '@' in the path of a bracketed IP literal, are
+	// not userinfo: the far side of the '@' is no host, or the authority cannot be a
+	// user name.
+	"oci://registry.example:5000/org/img@sha256:abc", "registry.example:5000/org/img:tag@sha256:0123abc",
+	"https://[2001:db8::1]:9000/org/img@sha256:abc", "https://[::1]:9000/a@b/archive",
+	"http://[::1]/x", "http://[::1]:8080",
 }
 
 func TestRedactURLHidesEveryCredentialPart(t *testing.T) {
@@ -146,6 +188,9 @@ func TestRedactURLsInTextHidesCredentialsInFreeText(t *testing.T) {
 		{"line one\nuser:dcPwZX@reg/x\r\n", "line one\nREDACTED@reg/x\r\n"},
 		{`from user:dcCanaryZX://x@host/p`, `from REDACTED@host/p`},
 		{`pushing user:dc/PwZX@reg/x`, `pushing REDACTED@reg/x`},
+		{`input = "s3://admin:2024/dcPwZX@bucket/archive"`, `input = "s3://REDACTED@bucket/archive"`},
+		{`from s3://AKIDZX:/wJalrZX@bucket/archive`, `from s3://REDACTED@bucket/archive`},
+		{`pushing admin:2024/dcPwZX@reg.example/x failed`, `pushing REDACTED@reg.example/x failed`},
 	} {
 		if got := RedactURLsInText(tc.in); got != tc.want {
 			t.Errorf("RedactURLsInText(%q) = %q, want %q", tc.in, got, tc.want)

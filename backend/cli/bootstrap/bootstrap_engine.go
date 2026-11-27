@@ -188,7 +188,8 @@ func (e *BootstrapEngine) Run(ctx context.Context, req installflow.Request, rt i
 	if err != nil {
 		return r.close(ctx, err)
 	}
-	r.addSecrets(plan.Passphrase, plan.RestoredRootKey)
+	r.addSecrets(plan.Passphrase)
+	r.addGeneratedSecrets(plan.RestoredRootKey)
 
 	r.enter(installflow.StepBootstrapCluster)
 	st, err := e.Target(rctx, Console{c: r.con}, plan)
@@ -257,25 +258,33 @@ func (r *installRun) pipelineStepDone(name string, st *State) {
 			r.readinessIs(installflow.ReadinessReady)
 		}
 	}
-	r.addSecrets(st.Values["secretsRootKey"], st.Escrow.Passphrase, st.Escrow.RestoredRootKey)
+	r.addSecrets(st.Escrow.Passphrase)
+	r.addGeneratedSecrets(st.Values["secretsRootKey"], st.Escrow.RestoredRootKey)
 	if c := st.Credentials; c != nil {
-		r.addSecrets(c.RDBPassword, c.RDBProvisionerPassword, c.RDBInstancePassword, c.TSDBPassword,
+		r.addGeneratedSecrets(c.RDBPassword, c.RDBProvisionerPassword, c.RDBInstancePassword, c.TSDBPassword,
 			c.ObjectStoreUser, c.ObjectStoreSecret, c.GrafanaAdminPassword, c.SuperuserPassword)
 	}
 }
 
-// addSecrets registers values with the hub's redactor: defence in depth behind the rule
-// that nothing the engine emits holds them. A value too short for a strict registration
-// is registered redact-only; one too short even for that is warned about, never
-// skipped silently.
-func (r *installRun) addSecrets(values ...string) {
+// addSecrets registers values a person chose (the escrow passphrase) with the hub's
+// redactor: defence in depth behind the rule that nothing the engine emits holds them.
+// A value too short for a strict registration is registered redact-only; one too short
+// even for that is warned about, never skipped silently.
+func (r *installRun) addSecrets(values ...string) { r.registerValues(false, values) }
+
+// addGeneratedSecrets registers values dcctl generated at random (the root key and the
+// minted credentials) as addSecrets does; an event code holding one is also refused.
+// See credential.generated.
+func (r *installRun) addGeneratedSecrets(values ...string) { r.registerValues(true, values) }
+
+func (r *installRun) registerValues(generated bool, values []string) {
 	if r == nil || r.events == nil {
 		return
 	}
 	var creds []credential
 	for _, v := range values {
 		if v != "" {
-			creds = append(creds, credential{value: v})
+			creds = append(creds, credential{value: v, generated: generated})
 		}
 	}
 	warnUncovered(r.warnings(), "instance secret", registerCredentials(r.events, creds))

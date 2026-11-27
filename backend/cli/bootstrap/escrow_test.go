@@ -7,11 +7,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -413,6 +416,100 @@ func TestWriteEscrowRefusesToOverwriteAnExistingArtifact(t *testing.T) {
 	}
 	if string(after) != string(before) {
 		t.Fatal("the existing artifact was modified by the refused write")
+	}
+}
+
+// 🔴 TWO WRITERS, ONE ARTIFACT. Two runs for the same instance name share the escrow
+// path, and both can pass the existence check before either publishes: the write and
+// the verify between them take two Argon2id passes. Both are held at the publish here,
+// so both have passed the check. Exactly one may win; the other must fail with the
+// refusal a sequential retry gets, and the artifact must be the winner's, whole. It is
+// run on both publish paths: the hard link, and the O_EXCL create a filesystem without
+// hard links falls back to.
+func TestWriteEscrowConcurrentWritersNeverReplaceEachOther(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		noLinks  bool
+		wantLink bool
+	}{{name: "hard link", wantLink: true}, {name: "no hard links on the filesystem", noLinks: true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "prod.escrow")
+			var linked atomic.Int32
+			orig := linkFile
+			linkFile = func(oldname, newname string) error {
+				if tc.noLinks {
+					return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: errors.New("operation not supported")}
+				}
+				linked.Add(1)
+				return orig(oldname, newname)
+			}
+			var arrived sync.WaitGroup
+			arrived.Add(2)
+			escrowBeforePublish = func() {
+				arrived.Done()
+				arrived.Wait()
+			}
+			t.Cleanup(func() { linkFile, escrowBeforePublish = orig, nil })
+
+			keys := []string{testRootKey, base64.StdEncoding.EncodeToString([]byte("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"))}
+			errs := make([]error, len(keys))
+			var done sync.WaitGroup
+			for i, k := range keys {
+				done.Add(1)
+				go func() {
+					defer done.Done()
+					errs[i] = WriteEscrow(EscrowPlan{Path: path, Passphrase: "pw"}, k, "prod", time.Now().UTC())
+				}()
+			}
+			done.Wait()
+
+			winner := -1
+			for i, err := range errs {
+				if err == nil {
+					if winner >= 0 {
+						t.Fatal("both writers reported success: one replaced the other's escrow artifact")
+					}
+					winner = i
+				}
+			}
+			if winner < 0 {
+				t.Fatalf("neither writer published: %v", errs)
+			}
+			lost := errs[1-winner]
+			if !strings.Contains(lost.Error(), "will not overwrite") || !strings.Contains(lost.Error(), "--restore-root-key") {
+				t.Errorf("the losing writer's error is not the refusal a retry gets:\n%v", lost)
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			art, err := escrow.Decode(raw)
+			if err != nil {
+				t.Fatalf("the published artifact does not parse: %v", err)
+			}
+			key, err := escrow.Open(art, "pw")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := base64.StdEncoding.EncodeToString(key); got != keys[winner] {
+				t.Errorf("the artifact holds the losing writer's key")
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 1 {
+				var names []string
+				for _, e := range entries {
+					names = append(names, e.Name())
+				}
+				t.Errorf("the directory holds %v, want the artifact alone", names)
+			}
+			if tc.wantLink && linked.Load() != 2 {
+				t.Errorf("%d publishes went through the hard link, want 2", linked.Load())
+			}
+		})
 	}
 }
 

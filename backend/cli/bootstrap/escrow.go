@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -523,10 +524,18 @@ func readHidden(prompt string) (string, error) {
 // WriteEscrow wraps the instance root key under the plan's passphrase and writes
 // the artifact.
 //
-// O_EXCL, so an existing file is an error rather than an overwrite. The path is
-// derived from the instance name, so re-bootstrapping an instance of the same name
-// lands on the same file — and silently replacing it would destroy the escrow of
-// the instance whose database backups the operator still has.
+// An existing file is an error rather than an overwrite. The path is derived from
+// the instance name, so re-bootstrapping an instance of the same name lands on the
+// same file — and silently replacing it would destroy the escrow of the instance
+// whose database backups the operator still has.
+//
+// 🔴 THE GUARANTEE IS THE PUBLISH, NOT THE CHECK. The read below that refuses an
+// existing artifact is only the early, cheap answer: two runs for the same instance
+// name (two clusters bootstrapped from one workstation) can both pass it, since the
+// write and the verify between it and the publish take two Argon2id passes. The
+// publish itself is therefore exclusive (publishEscrowArtifact), so the run that
+// publishes second fails loudly with the same refusal instead of replacing the
+// first run's artifact, the only second copy of a key that is already in use.
 func WriteEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.Time) error {
 	key, err := base64.StdEncoding.DecodeString(rootKeyBase64)
 	if err != nil {
@@ -561,8 +570,8 @@ func WriteEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.Time)
 		return fmt.Errorf("checking for an existing escrow artifact: %w", err)
 	}
 
-	// Written to a temporary file and renamed, so the artifact is either absent or
-	// complete and never a truncated stub that blocks its own replacement forever. It
+	// Written to a temporary file and published under its name only once whole, so
+	// the artifact is either absent or complete and never a truncated stub that blocks its own replacement forever. It
 	// is fsynced because the whole point of the file is to survive the machine, and
 	// bootstrap goes on to spend ten minutes building a cluster around a key whose
 	// only other copy would otherwise be an unflushed page.
@@ -571,7 +580,7 @@ func WriteEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.Time)
 		return fmt.Errorf("creating the escrow artifact: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename has succeeded
+	defer os.Remove(tmpName) // the published artifact is a second name for it, which stays
 
 	if err := tmp.Chmod(escrowFileMode); err != nil {
 		tmp.Close()
@@ -590,7 +599,7 @@ func WriteEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.Time)
 	}
 
 	// Prove the file opens BEFORE publishing it, so a failed check leaves nothing
-	// behind. Verifying after the rename would put an artifact that does not work at
+	// behind. Verifying after the publish would put an artifact that does not work at
 	// the destination, where the overwrite guard would then refuse every retry.
 	//
 	// This runs at all because everything else about this artifact is checked on the
@@ -601,10 +610,70 @@ func WriteEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.Time)
 		return err
 	}
 
-	if err := os.Rename(tmpName, plan.Path); err != nil {
+	if escrowBeforePublish != nil {
+		escrowBeforePublish()
+	}
+	if err := publishEscrowArtifact(tmpName, plan.Path, encoded); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			// Another run published first, after the check above.
+			existing, rerr := os.ReadFile(plan.Path)
+			if rerr != nil {
+				return fmt.Errorf("an escrow artifact appeared at %s while this one was being written, "+
+					"and will not be overwritten (reading it: %w)", plan.Path, rerr)
+			}
+			return fmt.Errorf("%s", describeBlockingArtifact(plan.Path, existing))
+		}
 		return fmt.Errorf("publishing the escrow artifact: %w", err)
 	}
 	syncDir(dir)
+	return nil
+}
+
+// escrowBeforePublish, when set, runs between WriteEscrow's verify and its publish:
+// a test holds two writers there, so both have passed the existence check.
+var escrowBeforePublish func()
+
+// linkFile is os.Link; a test replaces it to take the fallback below.
+var linkFile = os.Link
+
+// publishEscrowArtifact puts the verified temporary file tmp at dst, and fails with
+// an error that is fs.ErrExist when anything is already there. It never replaces dst.
+//
+// os.Rename cannot do this anywhere: rename(2) replaces its destination atomically,
+// and on Windows Go renames with MOVEFILE_REPLACE_EXISTING. A hard link can: link(2)
+// on Linux and macOS, and CreateHardLink on Windows, create the new name or fail with
+// EEXIST (ERROR_ALREADY_EXISTS), as one atomic step, and the file appears complete,
+// since tmp has already been written, flushed and verified. It is in the standard
+// library on every platform dcctl ships for, unlike renameat2(RENAME_NOREPLACE)
+// (Linux only, and refused by some filesystems), renamex_np(RENAME_EXCL) (macOS only)
+// or MoveFileEx without MOVEFILE_REPLACE_EXISTING (Windows only).
+//
+// A filesystem without hard links (FAT and exFAT, some network and FUSE mounts)
+// refuses the link with some other error. Then dst is claimed with O_CREATE|O_EXCL,
+// which is just as exclusive, and data written into it and flushed. That path cannot
+// make the file appear whole: a crash during the write leaves a short file, which
+// describeBlockingArtifact names as an interrupted write. A failed write removes the
+// file this call created, and nothing else.
+func publishEscrowArtifact(tmp, dst string, data []byte) error {
+	err := linkFile(tmp, dst)
+	if err == nil || errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, escrowFileMode)
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(data)
+	if werr == nil {
+		werr = f.Sync()
+	}
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		_ = os.Remove(dst)
+		return werr
+	}
 	return nil
 }
 
@@ -712,7 +781,7 @@ func verifyWrittenArtifact(path, passphrase, rootKeyBase64 string) error {
 	return nil
 }
 
-// syncDir flushes a directory entry so a freshly renamed file survives a power loss.
+// syncDir flushes a directory entry so a freshly published file survives a power loss.
 // Best-effort: a filesystem that refuses this (or a platform without it) is not a
 // reason to fail a bootstrap that has otherwise succeeded.
 func syncDir(dir string) {
