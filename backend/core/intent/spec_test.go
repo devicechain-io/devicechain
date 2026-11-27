@@ -238,3 +238,41 @@ func TestTokenGrammarAgreesWithCore(t *testing.T) {
 		}
 	}
 }
+
+// hex4 reads exactly four hex digits, so whatever follows them, including digits that would
+// spell MaxInt32, MaxInt32+1 or MaxUint32 as one number, it never yields more than 0xFFFF and
+// never wraps to a negative rune.
+func TestHex4ReadsExactlyFourDigits(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want rune
+	}{
+		{"0000", 0}, {"0041", 'A'}, {"d83d", 0xD83D}, {"DC00", 0xDC00}, {"fFfF", 0xFFFF},
+		{"7fffffff", 0x7FFF}, // MaxInt32
+		{"80000000", 0x8000}, // MaxInt32 + 1
+		{"ffffffff", 0xFFFF}, // MaxUint32
+		{"0010ffff", 0x0010},
+	} {
+		got, ok := hex4([]byte(tc.in), 0)
+		if !ok || got != tc.want || got < 0 || got > 0xFFFF {
+			t.Errorf("hex4(%q) = %#x, %v; want %#x", tc.in, got, ok, tc.want)
+		}
+	}
+	for _, in := range []string{"", "fff", "+fff", "-001", " fff", "0x12", "fffg", "ff\"f", "\u00e9ff"} {
+		if got, ok := hex4([]byte(in), 0); ok {
+			t.Errorf("hex4(%q) = %#x; want refused", in, got)
+		}
+	}
+	if _, ok := hex4([]byte("ffff"), -1); ok {
+		t.Error("hex4 accepted a negative offset")
+	}
+	if _, ok := hex4([]byte("ffff"), 1); ok {
+		t.Error("hex4 read past the end of the document")
+	}
+	// Eight escaped hex digits spelling MaxUint32 are a \uFFFF escape followed by text, so the
+	// document parses, and the value holds U+FFFF then "ffff": nothing wrapped.
+	s, err := Parse([]byte(with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"STRING","value":"\uffffffff"}`)))
+	if err != nil || *s.Value.Value != "\uffff"+"ffff" {
+		t.Errorf("Parse of \uffffffff = %+v, %v", s.Value, err)
+	}
+}

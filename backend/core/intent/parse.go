@@ -299,13 +299,27 @@ func checkSurrogateEscapes(doc []byte) error {
 	return nil
 }
 
+// hex4 decodes the four hex digits of a \uXXXX escape starting at doc[at]. It reads exactly four
+// bytes and accepts only 0-9, a-f and A-F (no sign, no prefix, no space), so the result is at most
+// 0xFFFF by construction: no wider integer is ever narrowed to a rune.
 func hex4(doc []byte, at int) (rune, bool) {
-	if at+4 > len(doc) {
+	if at < 0 || at > len(doc)-4 {
 		return 0, false
 	}
-	n, err := strconv.ParseUint(string(doc[at:at+4]), 16, 32)
-	if err != nil {
-		return 0, false
+	var r rune
+	for _, c := range doc[at : at+4] {
+		var d byte
+		switch {
+		case '0' <= c && c <= '9':
+			d = c - '0'
+		case 'a' <= c && c <= 'f':
+			d = c - 'a' + 10
+		case 'A' <= c && c <= 'F':
+			d = c - 'A' + 10
+		default:
+			return 0, false
+		}
+		r = r<<4 | rune(d)
 	}
-	return rune(n), true
+	return r, true
 }
