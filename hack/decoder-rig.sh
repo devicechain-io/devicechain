@@ -1180,6 +1180,15 @@ check_events_flow() {
   done
   took=$(($(date +%s) - t0))
   p1="$(uplink_result plan_unavailable)"
+  # A hung lookup is counted only when it times out (planLookupTimeout). On a fast machine every
+  # ordinary event can be stored before the first lookup has timed out, so wait a bounded extra
+  # moment for the counter before judging "no lookup hung". The timing verdict below still uses
+  # $took, measured before this wait.
+  local settle_deadline=$(($(date +%s) + ${DC_DEC_RIG_LOOKUP_SETTLE:-10}))
+  while [[ $((p1 - p0)) -lt 1 && "$(date +%s)" -lt "$settle_deadline" ]]; do
+    sleep 1
+    p1="$(uplink_result plan_unavailable)"
+  done
   n=$(($(lines "$got") - $(lines "$base")))
   echo "    $f1_flood uplinks flooded from $cold; $n of $f1_events ordinary events stored $took s after the first was published; lookups that hung meanwhile: $((p1 - p0))"
   [[ $((p1 - p0)) -ge 1 ]] || { echo "    VIOLATION: no lookup hung, so device-management was not hanging for event-sources"; return 1; }
