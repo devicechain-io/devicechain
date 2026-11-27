@@ -292,7 +292,7 @@ func setupInstanceScreens(t setupTarget) *installtui.BootstrapScreens {
 		},
 		Handover: &installtui.Handover{Target: t.label() + " (" + t.shape() + ")", Continue: setupContinueCommand(t, nil)},
 		Plan: func(p installtui.BootstrapPlanned) (installtui.BootstrapPlan, error) {
-			return instancePlan(bootstrapCmd, p, t.args(), t.args(), setupInstanceReview(t, p), facts.observe)
+			return instancePlan(bootstrapCmd, p, t.args(), t.args(), setupInstanceReview(t, p), nil, facts.observe)
 		},
 		Facts: facts.read,
 	}

@@ -39,7 +39,13 @@ const passphraseFilePlaceholder = "<file holding the escrow passphrase>"
 // only as a placeholder for a protected file. targetArgs are the target's flags
 // (--kube-context or --cluster) as the command line had them.
 func BootstrapCommand(in InstanceChoices, esc EscrowChoice, targetArgs []string) string {
-	argv := quoteArgs(BootstrapArgs(in, esc, targetArgs))
+	return BootstrapCommandOf(BootstrapArgs(in, esc, targetArgs), esc)
+}
+
+// BootstrapCommandOf is BootstrapCommand for a command line already composed, word by
+// word and unquoted (BootstrapArgs, as the command layer may have adjusted it).
+func BootstrapCommandOf(words []string, esc EscrowChoice) string {
+	argv := quoteArgs(words)
 	if esc.Mode != EscrowNone {
 		argv = append(argv, "--escrow-passphrase-file="+passphraseFilePlaceholder)
 	}

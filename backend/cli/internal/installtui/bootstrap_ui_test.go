@@ -6,6 +6,7 @@ package installtui
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -174,5 +175,48 @@ func TestTheEscrowPathIsCheckedForTheChosenInstance(t *testing.T) {
 	d.throughPlan()
 	if len(asked) != 1 || asked[0] != "acme /home/op/.devicechain/escrow/acme-rootkey.escrow" {
 		t.Fatalf("the path check was asked %q", asked)
+	}
+}
+
+// SeededChoices is exactly what the screens send when nothing on them is changed: the
+// instance screen continued, then the escrow screen continued, keys and nothing else.
+func TestSeededChoicesAreWhatTheUntouchedScreensSend(t *testing.T) {
+	for _, seed := range []func(*BootstrapSetup){
+		func(*BootstrapSetup) {},
+		func(s *BootstrapSetup) {
+			s.Instance.Profile, s.Instance.ObjectStore, s.Instance.Host = "full", "none", "iot.example.com"
+			s.Instance.Areas, s.Instance.NoTLS = []string{"lwm2m-ingest"}, true
+			s.Instance.FromFlag = map[string]bool{"name": true, "profile": true, "object-store": true, "host": true,
+				"enable-area": true, "no-tls": true}
+		},
+		func(s *BootstrapSetup) {
+			s.Instance.FromFlag = map[string]bool{"name": true, "object-store": true, "profile": true}
+		},
+		func(s *BootstrapSetup) { s.Escrow.Mode = EscrowNone },
+		func(s *BootstrapSetup) { s.Escrow.Path, s.Escrow.PathFromFlag = "/keep/acme.escrow", true },
+		func(s *BootstrapSetup) { s.Escrow.Mode, s.Escrow.RestoreFrom = EscrowRestore, "old.escrow" },
+	} {
+		s := bsSetup(bsCaps(terminal.L1, 100, 40))
+		s.Instance.Name = "acme"
+		seed(&s)
+		d := newBSDriver(t, s)
+		for i := 0; i < 50 && d.f.phase == phaseInstance; i++ {
+			if d.f.inst.focus == fieldContinue {
+				d.keys("enter")
+				break
+			}
+			d.keys("tab")
+		}
+		for i := 0; i < 50 && d.f.phase == phaseEscrow; i++ {
+			if d.f.esc.focus == escrowFieldContinue {
+				d.keys("enter")
+				break
+			}
+			d.keys("tab")
+		}
+		got, want := SeededChoices(s), d.planned()
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("seeded choices %+v, the untouched screens sent %+v", got, want)
+		}
 	}
 }

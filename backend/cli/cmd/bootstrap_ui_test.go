@@ -365,3 +365,95 @@ func TestTheEscrowScreensUseTheEnginesPathRule(t *testing.T) {
 		t.Fatalf("bootstrap refused an existing artifact a re-run would check: %v", err)
 	}
 }
+
+// flagPresence is what the bootstrap reads of a screen flag: whether it was given, and its value.
+type flagPresence struct {
+	changed bool
+	value   string
+}
+
+func screenFlagPresence(t *testing.T) map[string]flagPresence {
+	t.Helper()
+	out := map[string]flagPresence{}
+	for _, name := range screenChoiceFlags {
+		f := bootstrapCmd.Flags().Lookup(name)
+		if f == nil {
+			t.Fatalf("no bootstrap flag --%s", name)
+		}
+		out[name] = flagPresence{f.Changed, f.Value.String()}
+	}
+	return out
+}
+
+// 🔴 AN UNCHANGED SCREEN CHOICE REBUILDS THE COMMAND LINE EXACTLY AS GIVEN, EMPTY VALUES
+// INCLUDED. Each flag the instance and escrow screens seed is given (empty, explicitly
+// false, or with a value) and the screens are left as they start: the run is then built
+// with every screen flag given exactly when plain mode's was, with the same value. An
+// explicit --object-store= is the case that matters most: plain mode records the default
+// store as chosen on the declaration (ObjectStoreExplicit), where an omitted flag keeps a
+// store the instance already declares.
+func TestAnUnchangedChoiceKeepsEveryFlagAsGiven(t *testing.T) {
+	resetBootstrapFlags(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	for _, given := range [][]string{
+		nil,
+		{"--object-store="}, {"--object-store=none"}, {"--object-store=filesystem"},
+		{"--profile="}, {"--profile=full"}, {"--profile=default"},
+		{"--host="}, {"--host=iot.example.com"},
+		{"--enable-area="}, {"--enable-area=lwm2m-ingest"},
+		{"--no-tls"}, {"--no-tls=false"},
+		{"--escrow-file="}, {"--escrow-file=" + filepath.Join(home, "keep", "acme.escrow")},
+		{"--no-escrow"}, {"--no-escrow=false"},
+		{"--restore-root-key="}, {"--restore-root-key=old.escrow"},
+		{"--object-store=", "--profile=", "--host=", "--enable-area=", "--no-tls=false", "--escrow-file=",
+			"--no-escrow=false", "--restore-root-key="},
+	} {
+		words := append([]string{"dcctl", "bootstrap", "local", "acme", "--kube-context=prod"}, given...)
+		if _, _, err := bootstrapRunFromWords(bootstrapCmd, words, nil); err != nil {
+			t.Fatalf("%v: %v", given, err)
+		}
+		plain, plainStore := screenFlagPresence(t), objectStoreFlagGiven(bootstrapCmd.Flags().Changed)
+		scr := bootstrapScreensFor(bootstrapCmd, []string{"local", "acme"}, &instanceFactsRecorder{}, false)
+		if _, err := scr.Plan(installtui.SeededChoices(scr.Setup)); err != nil {
+			t.Fatalf("%v: the unchanged choices were not planned: %v", given, err)
+		}
+		tui, tuiStore := screenFlagPresence(t), objectStoreFlagGiven(bootstrapCmd.Flags().Changed)
+		for _, name := range screenChoiceFlags {
+			if tui[name] != plain[name] {
+				t.Errorf("%v: --%s is %+v in the run the screens built, %+v in plain mode", given, name, tui[name], plain[name])
+			}
+		}
+		if tuiStore != plainStore {
+			t.Errorf("%v: the object store is explicit %v in the run the screens built, %v in plain mode", given, tuiStore, plainStore)
+		}
+	}
+}
+
+// A choice the person changed is emitted as chosen, and the flags they did not touch stay
+// as given beside it.
+func TestAChangedChoiceReplacesOnlyItsOwnFlag(t *testing.T) {
+	resetBootstrapFlags(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	words := []string{"dcctl", "bootstrap", "local", "acme", "--object-store=", "--host=iot.example.com"}
+	if _, _, err := bootstrapRunFromWords(bootstrapCmd, words, nil); err != nil {
+		t.Fatal(err)
+	}
+	scr := bootstrapScreensFor(bootstrapCmd, []string{"local", "acme"}, &instanceFactsRecorder{}, false)
+	p := installtui.SeededChoices(scr.Setup)
+	p.Instance.Host = "other.example.com"
+	plan, err := scr.Plan(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bootstrapHost != "other.example.com" || !bootstrapCmd.Flags().Changed("object-store") || bootstrapObjectStore.Mode != "" {
+		t.Fatalf("host %q, object store given %v as %q", bootstrapHost, bootstrapCmd.Flags().Changed("object-store"),
+			bootstrapObjectStore.Mode)
+	}
+	if strings.Count(plan.Command, "--host=") != 1 || !strings.Contains(plan.Command, "--object-store=") {
+		t.Fatalf("the equivalent command: %s", plan.Command)
+	}
+}

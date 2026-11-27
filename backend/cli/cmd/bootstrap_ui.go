@@ -109,21 +109,7 @@ func carriedBootstrapFlags(fs *pflag.FlagSet) carriedFlags {
 		if !f.Changed || bootstrapScreenFlags[f.Name] {
 			return
 		}
-		var words []string
-		if sv, ok := f.Value.(pflag.SliceValue); ok {
-			items := sv.GetSlice()
-			for _, item := range items {
-				if f.Value.Type() == "stringSlice" {
-					item = csvField(item)
-				}
-				words = append(words, "--"+f.Name+"="+item)
-			}
-			if len(items) == 0 {
-				words = append(words, "--"+f.Name+"=")
-			}
-		} else {
-			words = []string{"--" + f.Name + "=" + f.Value.String()}
-		}
+		words := flagWords(f)
 		c.run = append(c.run, words...)
 		if f.Name != "escrow-passphrase-file" {
 			c.command = append(c.command, words...)
@@ -131,6 +117,27 @@ func carriedBootstrapFlags(fs *pflag.FlagSet) carriedFlags {
 		c.names = append(c.names, "--"+f.Name)
 	})
 	return c
+}
+
+// flagWords is a flag as the command line gave it, as words that parse back to the same
+// value AND the same presence: one word per value of a repeatable flag, and an explicitly
+// empty one as "--name=", which is given, unlike an omitted flag.
+func flagWords(f *pflag.Flag) []string {
+	sv, ok := f.Value.(pflag.SliceValue)
+	if !ok {
+		return []string{"--" + f.Name + "=" + f.Value.String()}
+	}
+	var words []string
+	for _, item := range sv.GetSlice() {
+		if f.Value.Type() == "stringSlice" {
+			item = csvField(item)
+		}
+		words = append(words, "--"+f.Name+"="+item)
+	}
+	if len(words) == 0 {
+		words = []string{"--" + f.Name + "="}
+	}
+	return words
 }
 
 // csvField is one value of a comma-separated flag as that flag parses it back: quoted
@@ -237,12 +244,18 @@ func (r *instanceFactsRecorder) read(installflow.Summary) installtui.InstanceFac
 }
 
 // instancePlan builds the run a set of instance choices describes, through the bootstrap
-// command c's own flags and bootstrapRun (bootstrapRunFromWords): runArgs are the flags the run
+// command c's own flags and bootstrapRun (bootstrapRunFromWords): asGiven, when set, puts
+// back the words of the flags the screens left as the command line gave them; runArgs are the flags the run
 // is built with beside the choices, commandArgs the same for the equivalent command. A
 // refusal is the review's to show, and Approve is then unavailable.
 func instancePlan(c *cobra.Command, p installtui.BootstrapPlanned, runArgs, commandArgs []string, review installtui.Review,
-	observe func(*bootstrap.State, error)) (installtui.BootstrapPlan, error) {
-	e, preflight, err := bootstrapRunFromWords(c, installtui.BootstrapArgs(p.Instance, p.Escrow, runArgs), observe)
+	asGiven func([]string) []string, observe func(*bootstrap.State, error)) (installtui.BootstrapPlan, error) {
+	words := installtui.BootstrapArgs(p.Instance, p.Escrow, runArgs)
+	commandWords := installtui.BootstrapArgs(p.Instance, p.Escrow, commandArgs)
+	if asGiven != nil {
+		words, commandWords = asGiven(words), asGiven(commandWords)
+	}
+	e, preflight, err := bootstrapRunFromWords(c, words, observe)
 	if err != nil {
 		return installtui.BootstrapPlan{}, err
 	}
@@ -253,7 +266,7 @@ func instancePlan(c *cobra.Command, p installtui.BootstrapPlanned, runArgs, comm
 	}
 	e.PersonAtTerminal = personAtTheTerminal
 	return installtui.BootstrapPlan{Engine: e, Preflight: preflight, Review: review,
-		Command: installtui.BootstrapCommand(p.Instance, p.Escrow, commandArgs)}, nil
+		Command: installtui.BootstrapCommandOf(commandWords, p.Escrow)}, nil
 }
 
 // bootstrapScreensFor is dcctl bootstrap's instance journey under the terminal UI: the
@@ -299,10 +312,12 @@ func bootstrapScreensFor(cmd *cobra.Command, args []string, facts *instanceFacts
 		return scr
 	}
 	runArgs := append(append([]string(nil), targetArgs...), carried.run...)
+	given := givenScreenFlagsOf(fs, scr.Setup.Instance, esc)
 	clusterLine := target.label() + ", as dcctl install prepared it; its footprint and topology are read from it " +
 		"when the run starts"
 	scr.Plan = func(p installtui.BootstrapPlanned) (installtui.BootstrapPlan, error) {
-		return instancePlan(cmd, p, runArgs, commandArgs, instanceReview(clusterLine, p, carried.names), facts.observe)
+		return instancePlan(cmd, p, runArgs, commandArgs, instanceReview(clusterLine, p, carried.names),
+			given.asGivenFor(p), facts.observe)
 	}
 	return scr
 }
@@ -364,4 +379,101 @@ func passphraseHow(esc installtui.EscrowChoice, twice bool) string {
 
 func init() {
 	bootstrapCmd.Flags().StringVar(&bootstrapUI, "ui", string(terminal.Plain), uiUsage("bootstrap"))
+}
+
+// givenScreenFlags are the flags the instance screens choose that the command line gave,
+// each as it gave them, with the seeds the screens started from.
+type givenScreenFlags struct {
+	words map[string][]string
+	inst  installtui.InstanceSeed
+	esc   installtui.EscrowSeed
+}
+
+// The screen flags: the instance screen's, then the escrow screen's three, which are one
+// choice.
+var (
+	instanceScreenFlags = []string{"profile", "enable-area", "host", "no-tls", "object-store"}
+	escrowScreenFlags   = []string{"escrow-file", "no-escrow", "restore-root-key"}
+	screenChoiceFlags   = append(append([]string(nil), instanceScreenFlags...), escrowScreenFlags...)
+)
+
+func givenScreenFlagsOf(fs *pflag.FlagSet, inst installtui.InstanceSeed, esc installtui.EscrowSeed) givenScreenFlags {
+	g := givenScreenFlags{words: map[string][]string{}, inst: inst, esc: esc}
+	for _, name := range screenChoiceFlags {
+		if f := fs.Lookup(name); f != nil && f.Changed {
+			g.words[name] = flagWords(f)
+		}
+	}
+	return g
+}
+
+// unchanged reports, for each screen flag, whether p leaves its choice as the seed had it.
+func (g givenScreenFlags) unchanged(p installtui.BootstrapPlanned) map[string]bool {
+	in, seed := p.Instance, g.inst
+	defaulted := func(v, def string) string {
+		if v == "" {
+			return def
+		}
+		return v
+	}
+	same := map[string]bool{
+		"profile":      defaulted(in.Profile, "default") == defaulted(seed.Profile, "default"),
+		"enable-area":  strings.Join(in.Areas, ",") == strings.Join(seed.Areas, ","),
+		"host":         in.Host == seed.Host,
+		"no-tls":       in.NoTLS == seed.NoTLS,
+		"object-store": defaulted(in.ObjectStore, "auto") == defaulted(seed.ObjectStore, "auto"),
+	}
+	esc, seedMode := p.Escrow, g.esc.Mode
+	if seedMode == "" {
+		seedMode = installtui.EscrowWrite
+	}
+	escrowSame := esc.Mode == seedMode
+	if escrowSame && esc.Mode == installtui.EscrowWrite {
+		if g.esc.PathFromFlag && g.esc.Path != "" {
+			escrowSame = esc.PathGiven && esc.Path == g.esc.Path
+		} else {
+			escrowSame = !esc.PathGiven
+		}
+	}
+	for _, name := range escrowScreenFlags {
+		same[name] = escrowSame
+	}
+	return same
+}
+
+// asGivenFor makes a command line for the choices p re-emit, for every screen flag p
+// leaves unchanged, exactly the words the command line gave, and nothing for one it never
+// gave. 🔴 A FLAG'S PRESENCE IS PART OF THE REQUEST, NOT ONLY ITS VALUE: an explicitly
+// empty --object-store= is an object store CHOSEN (the default, recorded on the
+// declaration), while an omitted one keeps whatever the instance already declares.
+func (g givenScreenFlags) asGivenFor(p installtui.BootstrapPlanned) func([]string) []string {
+	same := g.unchanged(p)
+	return func(words []string) []string {
+		if len(words) < 4 {
+			return words
+		}
+		out := append([]string(nil), words[:4]...) // dcctl bootstrap <provider> <instance>
+		for _, w := range words[4:] {
+			if name, ok := screenFlagOf(w); ok && same[name] {
+				continue // replaced by the words as given, below
+			}
+			out = append(out, w)
+		}
+		for _, name := range screenChoiceFlags {
+			if same[name] {
+				out = append(out, g.words[name]...)
+			}
+		}
+		return out
+	}
+}
+
+// screenFlagOf is the screen flag a word sets, if it sets one.
+func screenFlagOf(w string) (string, bool) {
+	for _, name := range screenChoiceFlags {
+		if w == "--"+name || strings.HasPrefix(w, "--"+name+"=") {
+			return name, true
+		}
+	}
+	return "", false
 }
