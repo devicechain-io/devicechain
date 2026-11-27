@@ -41,6 +41,8 @@ messaging package alone is ~36 minutes of test + race). SPLITS gives such a pack
 its top-level tests dealt round-robin over N shards by hack/go-leg.sh; the rest of the module runs
 in one catch-all leg that also carries the module's static checks. The catch-all is `go list ./...`
 MINUS the split packages, computed in the leg, so a new package lands there by construction.
+One test too long for any shard to balance is named in ALONE: the shards deal the package's tests
+without it, and it runs by name in a leg of its own, so it still runs exactly once.
 """
 import fnmatch
 import json
@@ -376,11 +378,31 @@ SPLITS = {
     # 3, not 2: on run 43972121210 the two bootstrap shards took 20.5 and 18.9 min (2.8 min of each is
     # the `go test -list` compile), the longest legs of the run. A third shard costs one more setup
     # (~3 min) and brings each to ~13-16 min, under integration (core) at 20.1. device-management's
-    # processor stays at 3: its slow shard (19.3 min) carries one ~350 s test that round-robin cannot
-    # split, so a fourth shard would buy ~1 min on a leg that is not the critical path.
+    # processor stays at 3: the one test of it that round-robin cannot split runs in a leg of its
+    # own (ALONE below), which a fourth shard could not have done.
     "backend/cli": {"bootstrap": 3},
     "backend/services/user-management": {"identity": 2},
     "backend/services/event-processing": {"internal/detect/core": 2},
+}
+
+# ---------------------------------------------------------------------------------------------
+# ALONE: module -> {split package dir: {leg label: top-level test}}. A test so long that whichever
+# shard round-robin deals it to becomes the longest leg of the run gets a leg of its own beside its
+# package's shards: hack/go-leg.sh takes it out of the list before dealing the shards, and its own
+# leg runs exactly it. Same package, same test and race steps, same race scope as the shards, so
+# its coverage is unchanged; it only runs on another runner, in parallel with the rest of its
+# package. The package must be split (SPLITS). `check` refuses a test the package no longer
+# declares, and the leg refuses one `go test -list` does not print, so a renamed test fails
+# rather than running nowhere.
+#
+# device-management/processor: `processor 1/3` was the last job to finish in 63 of 144 green runs
+# to 2026-11-27 (p50 20.9 min against 8.2 and 5.6 for its sisters), and the kill test below was
+# ~79% of it: 100 trials, 364 s of its leg's 463 s `go test` and ~590 s of its 749 s race step.
+# ---------------------------------------------------------------------------------------------
+ALONE = {
+    "backend/services/device-management": {
+        "processor": {"envelope-kill": "TestKillBetweenRoundZeroPubAckAndAckLosesAndDuplicatesNothing"},
+    },
 }
 
 ESCAPE_RE = re.compile(r'"\.\."|"(\.\./)+|show-toplevel|"go\.work"|runtime\.Caller\(|Abs\("\.\.')
@@ -1013,8 +1035,8 @@ def apply_race(s, go):
             continue
         mine = s.race.get(m, set())
         rel = {"." if p == m else os.path.relpath(p, m).replace("\\", "/") for p in mine}
-        if leg["shard"]:
-            # A shard runs one split package (its share of the tests): all of it, or none.
+        if leg["shard"] or leg["tests"]:
+            # A shard or an ALONE leg runs one split package (its share of the tests): all of it, or none.
             if leg["pkgs"] not in {pkg_arg(r) for r in rel}:
                 leg["race_scope"] = "none"
             continue
@@ -1270,25 +1292,36 @@ def legs_for(module, pkgs=None):
     return out
 
 
+def _split_legs(module, p, n):
+    """One split package's legs: N shards of its tests minus the ALONE ones, then one leg per ALONE test."""
+    alone = {norm_pkg(k): v for k, v in ALONE.get(module, {}).items()}.get(p, {})
+    skip = " ".join(sorted(alone.values()))
+    out = [dict(module=module, leg="%s %d/%d" % (p, i, n), static=False, pkgs=pkg_arg(p), exclude="", shard="%d/%d" % (i, n),
+                tests="", skip_tests=skip) for i in range(1, n + 1)]
+    for label, test in sorted(alone.items()):
+        out.append(dict(module=module, leg="%s %s" % (p, label), static=False, pkgs=pkg_arg(p), exclude="", shard="",
+                        tests=test, skip_tests=""))
+    return out
+
+
 def _legs_for(module, pkgs=None):
     splits = {norm_pkg(k): v for k, v in SPLITS.get(module, {}).items()}
     out = []
     if pkgs is None:
         for p, n in sorted(splits.items()):
-            for i in range(1, n + 1):
-                out.append(dict(module=module, leg="%s %d/%d" % (p, i, n), static=False, pkgs=pkg_arg(p), exclude="", shard="%d/%d" % (i, n)))
-        out.append(dict(module=module, leg="rest" if splits else "", static=True, pkgs="", exclude=" ".join(pkg_arg(p) for p in sorted(splits)), shard=""))
+            out.extend(_split_legs(module, p, n))
+        out.append(dict(module=module, leg="rest" if splits else "", static=True, pkgs="", exclude=" ".join(pkg_arg(p) for p in sorted(splits)), shard="",
+                        tests="", skip_tests=""))
         return out
     rest = []
     for p in sorted(norm_pkg(x) for x in pkgs):
         n = splits.get(p)
         if n:
-            for i in range(1, n + 1):
-                out.append(dict(module=module, leg="%s %d/%d" % (p, i, n), static=False, pkgs=pkg_arg(p), exclude="", shard="%d/%d" % (i, n)))
+            out.extend(_split_legs(module, p, n))
         else:
             rest.append(pkg_arg(p))
     if rest:
-        out.append(dict(module=module, leg="readers", static=False, pkgs=" ".join(rest), exclude="", shard=""))
+        out.append(dict(module=module, leg="readers", static=False, pkgs=" ".join(rest), exclude="", shard="", tests="", skip_tests=""))
     return out
 
 
@@ -1469,6 +1502,28 @@ def cmd_check():
                 errs.append("SPLITS %s %s: no such package" % (module, pkg))
             if not (1 <= n <= 8):
                 errs.append("SPLITS %s %s: shard count %d out of range" % (module, pkg, n))
+    # An ALONE test must still be declared, in a split package, under a label fit for a job name.
+    # The leg refuses one `go test -list` does not print too; this catches it before the fan-out.
+    for module, pkgs in ALONE.items():
+        for pkg, labels in pkgs.items():
+            if norm_pkg(pkg) not in {norm_pkg(p) for p in SPLITS.get(module, {})}:
+                errs.append("ALONE %s %s: not a SPLITS package (an unsplit package runs whole in one leg)" % (module, pkg))
+                continue
+            d = os.path.join(ROOT, module, norm_pkg(pkg))
+            src = ""
+            for name in sorted(os.listdir(d)):
+                if name.endswith("_test.go"):
+                    with open(os.path.join(d, name), encoding="utf-8", errors="replace") as fh:
+                        src += fh.read()
+            if len(set(labels.values())) != len(labels):
+                errs.append("ALONE %s %s: one test is named under two labels" % (module, pkg))
+            for label, test in labels.items():
+                if not re.fullmatch(r"[a-z][a-z0-9-]*", label) or label in ("rest", "readers"):
+                    errs.append("ALONE %s %s: label %r is not a plain lower-case name" % (module, pkg, label))
+                if not re.fullmatch(r"(Test|Example|Fuzz)[A-Za-z0-9_]*", test):
+                    errs.append("ALONE %s %s %s: %r is not a top-level test name" % (module, pkg, label, test))
+                elif not re.search(r"(?m)^func %s\(" % re.escape(test), src):
+                    errs.append("ALONE %s %s %s: no func %s in the package's tests (renamed or moved?)" % (module, pkg, label, test))
 
     # Every module has a cache group, and every group's saver is a workspace module in that group:
     # a saver that left the workspace would leave its group never saved, silently.
@@ -1632,7 +1687,7 @@ def fake_ws():
 
 
 def self_test():
-    global READERS, SPLITS
+    global READERS, SPLITS, ALONE
     fails = []
 
     def expect(cond, what):
@@ -1868,6 +1923,17 @@ def self_test():
                        "a changed split package races every shard of it and not the catch-all: %s" % sc)
                 expect(sc[("backend/services/svc-a", "")] == ("none", "") and sc[("backend/cli", "")] == ("none", ""),
                        "a module selected only for REQUIRING a changed one races nothing: %s" % sc)
+                saved_alone = ALONE
+                ALONE = {"backend/core": {"messaging": {"slow": "TestSlow"}}}
+                try:
+                    sc = scopes("backend/core/messaging/m.go")
+                    expect(sc[("backend/core", "messaging slow")] == ("all", "") and sc[("backend/core", "messaging 1/3")] == ("all", ""),
+                           "a changed split package races its ALONE leg as it races its shards: %s" % sc)
+                    sc = scopes("backend/core/leaf/l.go")
+                    expect(sc[("backend/core", "messaging slow")] == ("none", "") and sc[("backend/core", "messaging 1/3")] == ("none", ""),
+                           "...and an unchanged one races neither: %s" % sc)
+                finally:
+                    ALONE = saved_alone
                 sc = scopes("backend/core/leaf/l.go")
                 expect([sc[("backend/core", "messaging %d/3" % i)][0] for i in (1, 2, 3)] == ["none"] * 3
                        and sc[("backend/core", "rest")] == ("changed", "./leaf/ ./sqlnull/"),
@@ -1998,6 +2064,31 @@ def self_test():
         go = legs_for("backend/core", ["messaging", "test"])
         expect([g["leg"] for g in go] == ["messaging 1/3", "messaging 2/3", "messaging 3/3", "readers"] and go[-1]["pkgs"] == "./test/",
                "a reader-selected split package is still sharded")
+
+        print("==> alone")
+        saved_alone = ALONE
+        ALONE = {"backend/core": {"messaging": {"slow": "TestSlow", "slower": "TestSlower"}}}
+        try:
+            core = [g for g in plan(ws, full_selection(ws, "t"), [])[0] if g["module"] == "backend/core"]
+            expect([g["leg"] for g in core] == ["messaging 1/3", "messaging 2/3", "messaging 3/3", "messaging slow", "messaging slower", "rest"],
+                   "an ALONE test gets a leg of its own beside its package's shards: %s" % [g["leg"] for g in core])
+            expect(all(g["skip_tests"] == "TestSlow TestSlower" and not g["tests"] for g in core[:3]),
+                   "every shard deals its package's tests WITHOUT the ALONE ones")
+            expect([(g["tests"], g["skip_tests"], g["shard"], g["pkgs"], g["static"]) for g in core[3:5]]
+                   == [("TestSlow", "", "", "./messaging/", False), ("TestSlower", "", "", "./messaging/", False)],
+                   "an ALONE leg runs exactly its test, of the split package, with no static checks")
+            expect(core[5]["exclude"] == "./messaging/" and not core[5]["tests"] and not core[5]["skip_tests"],
+                   "the catch-all still excludes the whole split package")
+            go = legs_for("backend/core", ["messaging", "test"])
+            expect([g["leg"] for g in go] == ["messaging 1/3", "messaging 2/3", "messaging 3/3", "messaging slow", "messaging slower", "readers"],
+                   "a reader-selected split package runs its ALONE legs too")
+            go = legs_for("backend/core", ["test"])
+            expect(not any(g["tests"] for g in go), "a reader leg that does not select the split package runs no ALONE leg")
+            ALONE = {"backend/core": {"leaf": {"slow": "TestSlow"}}}
+            expect(not any(g["tests"] or g["skip_tests"] for g in legs_for("backend/core")),
+                   "an ALONE entry on an unsplit package plans nothing (check refuses it)")
+        finally:
+            ALONE = saved_alone
     finally:
         READERS, SPLITS = saved
     if fails:

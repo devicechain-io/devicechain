@@ -119,7 +119,7 @@ def batch_selection(legs, modules, batches):
         if len(batch) == 1:
             out.extend(selected)  # all shards/readers/rest keep their existing independent jobs
             continue
-        if len({g["module"] for g in selected}) != len(selected) or any(g["shard"] or g["exclude"] for g in selected):
+        if len({g["module"] for g in selected}) != len(selected) or any(g["shard"] or g["exclude"] or g.get("tests") or g.get("skip_tests") for g in selected):
             raise ValueError("a split leg reached a small-module batch")
         if len({g["cache_group"] for g in selected}) != 1:
             raise ValueError("selected batch mixes cache groups")
