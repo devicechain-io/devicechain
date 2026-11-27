@@ -5,7 +5,9 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -151,7 +153,8 @@ func newMeasurementUntrusted(name, unit, text string) *MeasurementUntrusted {
 }
 
 type GetLatestMeasurementsOutput struct {
-	Measurements []LatestMeasurement `json:"measurements"`
+	TextUnavailable bool                `json:"textUnavailable,omitempty" jsonschema:"true when the device-state service answering is an older release that does not serve text readings (as during an upgrade); a reading with no value then has unknown text, not none"`
+	Measurements    []LatestMeasurement `json:"measurements"`
 }
 
 var latestMeasurementsQuery = newDocument("device-state", `query LatestMeasurements($deviceToken: String!) {
@@ -159,6 +162,32 @@ var latestMeasurementsQuery = newDocument("device-state", `query LatestMeasureme
     name value textValue unit dataType occurredTime
   }
 }`)
+
+// latestMeasurementsWithoutTextQuery is the same read for a device-state older than textValue,
+// whose validator refuses the whole document that names the field. During a rolling upgrade such a
+// pod can answer any request, so a refusal of the field falls back to this rather than failing the
+// numeric readings with it.
+var latestMeasurementsWithoutTextQuery = newDocument("device-state", `query LatestMeasurementsWithoutText($deviceToken: String!) {
+  latestMeasurements(deviceToken: $deviceToken) {
+    name value unit dataType occurredTime
+  }
+}`)
+
+// refusesTextValue reports whether err is a request validation refusal that names the textValue
+// field: an older device-state. Any other error, including a resolver error that happens to
+// mention it, is not.
+func refusesTextValue(err error) bool {
+	var response *graphqlResponseError
+	if !errors.As(err, &response) || !response.validation {
+		return false
+	}
+	for _, e := range response.errors {
+		if strings.Contains(e.Message, `Cannot query field "textValue"`) {
+			return true
+		}
+	}
+	return false
+}
 
 // GetLatestMeasurements reads the last-known value of each metric for a device.
 func (t *Tools) GetLatestMeasurements(ctx context.Context, req *mcp.CallToolRequest, in GetLatestMeasurementsInput) (*mcp.CallToolResult, GetLatestMeasurementsOutput, error) {
@@ -179,10 +208,18 @@ func (t *Tools) GetLatestMeasurements(ctx context.Context, req *mcp.CallToolRequ
 			OccurredTime string   `json:"occurredTime"`
 		} `json:"latestMeasurements"`
 	}
-	if err := t.gql.Query(ctx, latestMeasurementsQuery, token, map[string]any{"deviceToken": in.DeviceToken}, &resp); err != nil {
-		return nil, GetLatestMeasurementsOutput{}, err
+	vars := map[string]any{"deviceToken": in.DeviceToken}
+	textUnavailable := false
+	if err := t.gql.Query(ctx, latestMeasurementsQuery, token, vars, &resp); err != nil {
+		if !refusesTextValue(err) {
+			return nil, GetLatestMeasurementsOutput{}, err
+		}
+		textUnavailable = true
+		if err := t.gql.Query(ctx, latestMeasurementsWithoutTextQuery, token, vars, &resp); err != nil {
+			return nil, GetLatestMeasurementsOutput{}, err
+		}
 	}
-	out := GetLatestMeasurementsOutput{Measurements: []LatestMeasurement{}}
+	out := GetLatestMeasurementsOutput{TextUnavailable: textUnavailable, Measurements: []LatestMeasurement{}}
 	for _, m := range resp.LatestMeasurements {
 		out.Measurements = append(out.Measurements, LatestMeasurement{
 			Value: m.Value, DataType: m.DataType, OccurredTime: m.OccurredTime,
