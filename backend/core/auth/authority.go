@@ -439,6 +439,24 @@ const (
 	// would be bounded by nothing; the act:* ceilings hold proposal authorities only, and a
 	// ratchet (TestAgentAdminNeverInActCeiling) pins that this one is never among them.
 	AgentAdmin Authority = "agent:admin"
+
+	// IntentRead and IntentWrite are reserved for the intent layer: reading a tenant's
+	// declared intents with their plans and shadow reports, and authoring, publishing,
+	// suspending, resuming and retiring them.
+	//
+	// Tenant-tier: an intent acts on one tenant's devices. Holders of "*" satisfy both. Neither
+	// is seeded into any built-in role nor into the read-only viewer baseline (intent:read
+	// ends in ":read", so that absence is a decision, with its own test), and no OAuth
+	// ceiling, service token or proposal authority carries either. Neither implies the
+	// other.
+	//
+	// INERT IN THIS RELEASE: nothing checks them, and a repository scan
+	// (TestReservedAuthoritiesHaveNoConsumer) fails if production code references them. They
+	// ship a minor early for the reason fleet:operate did: role writes validate the whole
+	// authority set, so a previous-release user-management pod refuses a role containing a
+	// name it does not know, even when the edit changes something unrelated to it.
+	IntentRead  Authority = "intent:read"
+	IntentWrite Authority = "intent:write"
 )
 
 // vocabulary maps every known authority to its tier. A Role may only grant
@@ -551,6 +569,9 @@ var vocabulary = map[Authority]Tiers{
 	AIInfer: tenant,
 	// The agent policy is a tenant's own governance of its own agents.
 	AgentAdmin: tenant,
+	// Reserved, inert until the intent layer ships; the reasons are on the constants.
+	IntentRead:  tenant,
+	IntentWrite: tenant,
 }
 
 // ValidAuthority reports whether s names a known, GRANTABLE authority (including the
