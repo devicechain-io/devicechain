@@ -4,12 +4,12 @@ section: whats-new
 
 ## en
 
-- **Analytics during rolling upgrades.** Pods preserve a newer SQL/BI surface and report the skipped reconciliation at info level and in `devicechain_eventmanagement_analytics_reconcile_newer_surface_skips_total`.
+- **The analytics views survive a rolling upgrade.** An event-management pod of an older release that finds the analytics (SQL/BI) views already at a newer generation leaves them as they are instead of rebuilding them, logs the skip at info level and counts it in `devicechain_eventmanagement_analytics_reconcile_newer_surface_skips_total`.
 
 ## es
 
-- **Analítica durante las actualizaciones graduales.** Los pods conservan una superficie SQL/BI más reciente e informan de la reconciliación omitida en el registro de nivel informativo y en `devicechain_eventmanagement_analytics_reconcile_newer_surface_skips_total`.
+- **Las vistas analíticas sobreviven a una actualización progresiva.** Un pod de event-management de una versión anterior que encuentra las vistas analíticas (SQL/BI) ya en una generación más reciente las deja como están en lugar de reconstruirlas, registra la omisión con nivel informativo y la cuenta en `devicechain_eventmanagement_analytics_reconcile_newer_surface_skips_total`.
 
 ## zh-CN
 
-- **滚动升级期间的分析功能。** Pod 会保留较新版本的 SQL/BI 接口，并通过 info 级别日志和 `devicechain_eventmanagement_analytics_reconcile_newer_surface_skips_total` 指标报告跳过的协调操作。
+- **分析视图在滚动升级中保持不变。** 旧版本的 event-management Pod 如果发现分析（SQL/BI）视图已处于更新的代次，会保持原样而不重建，并以 info 级别记录这次跳过，计入 `devicechain_eventmanagement_analytics_reconcile_newer_surface_skips_total`。
