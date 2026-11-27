@@ -89,6 +89,33 @@ see its fix.
 - While any check fails, **Continue is unavailable**, and there is no way past it on screen.
   `--skip-preflight` on the command line is still the only way to skip the checks.
 
+#### Existing cluster checks {#preflight-advisory}
+
+With `--kube-context`, an "Existing cluster (advisory)" group follows the checks. It asks the
+cluster read-only questions: whether the API server's name resolves, whether it answers over a TLS
+certificate the context trusts, whether the context's credentials are accepted, and whether they may
+create what the install creates. It also asks whether this machine reaches the provider, chart and
+image registries this plan downloads from. These checks are advice: a problem reads `WARN`, anything
+they cannot decide reads `UNKNOWN` or `NOT CHECKED`, and they never block Continue.
+
+- **Credential plugins.** A context that gets its credentials from an exec plugin (as GKE, EKS and
+  AKS contexts usually do) is authenticated by running the plugin, as kubectl would: never
+  interactively, with no terminal and nothing on its input, for at most 10 seconds, and stopped
+  together with everything it started when that time is up or you leave the screen. The credential
+  it prints is sent only to the context's API server, and is never shown. A plugin that must run
+  interactively (`interactiveMode: Always`) is not run and reads `NOT CHECKED`; a plugin that is not
+  installed reads `WARN`; one that fails, hangs or prints no usable credential reads `UNKNOWN`. What
+  the plugin prints as an error is never shown, since it can hold a token or a key: the row says
+  only how the plugin failed, and `kubectl auth whoami` against the context shows its own message.
+  Legacy `auth-provider` entries are never run.
+- **Registries.** Only the chart repositories of the components this plan installs are checked, so
+  Compact (which leaves monitoring out) and the monitoring and CloudNativePG choices in the
+  Advanced drawer change the list. The ingress controllers' charts follow the cluster: Traefik's
+  always, and ingress-nginx's when the cluster already runs ingress-nginx (which the install keeps
+  unless `--remove-legacy-ingress` is given), read from the cluster's IngressClasses.
+- **Proxies.** These checks never go through a proxy. When one is configured, for the context or in
+  the environment (`HTTPS_PROXY` and the like), the rows it would carry read `NOT CHECKED`.
+
 ### Cluster choices {#cluster-choices}
 
 The target (a managed local kind cluster, which you can rename, or an existing context), the

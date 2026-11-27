@@ -27,14 +27,34 @@ import (
 // outside it from the start. It is not the terminal's foreground group: give the
 // command a stdin that is not the terminal (nil, the null device), or a read of it
 // stops the group.
-func Run(ctx context.Context, cmd *exec.Cmd) error {
+//
+// RunWith is Run with Options (see each).
+func RunWith(ctx context.Context, cmd *exec.Cmd, o Options) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
-	cmd.SysProcAttr.Setpgid = true
+	if o.NewSession {
+		// A session leader leads its own group too; setpgid on it would fail.
+		cmd.SysProcAttr.Setsid = true
+	} else {
+		cmd.SysProcAttr.Setpgid = true
+	}
+	if o.Sweep {
+		if m := mark(cmd); m != "" {
+			defer func() {
+				// The sweep's own budget, not ctx: an Exit has ended ctx, and is exactly
+				// when what the command left must be ended.
+				sctx, cancel := context.WithTimeout(context.Background(), sweepBudget)
+				defer cancel()
+				if !sweep(sctx, m) {
+					err = errors.Join(err, ErrSweepIncomplete)
+				}
+			}()
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -49,6 +69,10 @@ func Run(ctx context.Context, cmd *exec.Cmd) error {
 			// The exit cannot be watched without reaping: end the leader alone, through
 			// exec, which is safe whenever it runs.
 			return waitKillingLeader(ctx, cmd)
+		}
+		if o.EndTreeOnExit {
+			// Unreaped, the leader still holds its pgid: the group is the command's.
+			_ = signalGroup(pid)
 		}
 		return cmd.Wait()
 	case <-ctx.Done():

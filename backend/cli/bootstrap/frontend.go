@@ -1145,3 +1145,18 @@ func refuseUnlessGatewayCertificatesReady(vs []gatewayCertVerdict, missingIsRefu
 	}
 	return fmt.Errorf("%s:\n  %s\n%s Nothing has been changed", what, strings.Join(bad, "\n  "), remedy)
 }
+
+// ClusterChartControllers is which ingress controllers the cluster root installs (and so
+// whose charts an install downloads) on a cluster with these IngressClasses, read from the
+// plan an install makes there (planClusterFrontEnd): Traefik always, and ingress-nginx
+// while the cluster runs it, unless removeLegacy (--remove-legacy-ingress) removes it.
+// It is for advice: the install itself also weighs the cluster's Ingress objects, which
+// can refuse a plan but never change which controllers it keeps.
+func ClusterChartControllers(classes []networkingv1.IngressClass, removeLegacy bool) (traefik, nginx bool, err error) {
+	f := frontEndFactsFrom(classes, nil, false, nil, "", false)
+	plan, err := planClusterFrontEnd(f.clusterFrontEnd, false, removeLegacy)
+	if err != nil {
+		return false, false, err
+	}
+	return slices.Contains(plan.Vars, "enable_traefik=true"), slices.Contains(plan.Vars, "enable_ingress_nginx=true"), nil
+}

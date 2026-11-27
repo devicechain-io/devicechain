@@ -29,7 +29,10 @@ import (
 // assign the job at creation, but only through a CreateProcess call of Run's own,
 // which would leave os/exec behind. The window that remains: dcctl itself ended
 // between the create and the assignment leaves the command suspended, outside any job.
-func Run(ctx context.Context, cmd *exec.Cmd) error {
+//
+// RunWith is Run with Options (see each; EndTreeOnExit is what Run always does here, and
+// Sweep does nothing, since nothing leaves a job that does not allow breakaway).
+func RunWith(ctx context.Context, cmd *exec.Cmd, o Options) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -37,6 +40,9 @@ func Run(ctx context.Context, cmd *exec.Cmd) error {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
+	if o.NewSession {
+		cmd.SysProcAttr.CreationFlags |= windows.CREATE_NO_WINDOW | windows.CREATE_NEW_PROCESS_GROUP
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}

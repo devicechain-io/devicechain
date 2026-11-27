@@ -11,9 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,7 +23,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
-	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
 // recorder is an API server that notes every request it is sent, with whether it carried
@@ -148,6 +144,12 @@ func TestKubeRequestPermitted(t *testing.T) {
 		{plain, "POST", "https://api.example:6443" + ssrPath, true},
 		{prefixed, "POST", "https://rancher.example/k8s/clusters/c-1" + ssarPath, true},
 		{prefixed, "GET", "https://rancher.example/k8s/clusters/c-1/version", true},
+		{plain, "GET", "https://api.example:6443" + ingressClassesPath, true},
+		{prefixed, "GET", "https://rancher.example/k8s/clusters/c-1" + ingressClassesPath, true},
+		{plain, "POST", "https://api.example:6443" + ingressClassesPath, false},
+		{plain, "DELETE", "https://api.example:6443" + ingressClassesPath, false},
+		{plain, "GET", "https://api.example:6443" + ingressClassesPath + "/nginx", false},
+		{plain, "GET", "https://api.example:6443/apis/networking.k8s.io/v1/ingresses", false},
 
 		{plain, "POST", "https://api.example:6443" + proxySSAR, false},
 		{plain, "POST", "https://api.example:6443/k8s/clusters/c-1" + ssarPath, false},
@@ -178,59 +180,31 @@ func TestKubeRequestPermitted(t *testing.T) {
 	}
 }
 
-// 🔴 FINDING 3: a credential plugin is never run. client-go runs an exec plugin with no
-// way to cancel it, so a hung one would outlive every bound and Exit. The context's
-// authentication and permissions read NOT CHECKED, and the API server is asked only
-// what it answers without credentials.
-func TestACredentialPluginIsNeverRun(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the plugin is a shell script")
-	}
-	oldAPI := cloudAPITimeout
-	t.Cleanup(func() { cloudAPITimeout = oldAPI })
-	cloudAPITimeout = 300 * time.Millisecond
-
-	var api recorder
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		api.note(r)
-		_, _ = io.WriteString(w, versionJSON)
-	}))
-	defer srv.Close()
-	marker := filepath.Join(t.TempDir(), "plugin-ran")
-	cfg := &rest.Config{Host: srv.URL, ExecProvider: &clientcmdapi.ExecConfig{
-		Command: "sh", Args: []string{"-c", "touch " + marker + "; sleep 30"},
-		APIVersion: "client.authentication.k8s.io/v1", InteractiveMode: clientcmdapi.NeverExecInteractiveMode,
-	}}
-	p, err := cloudProbesFrom(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.http = cloudHTTPClient(newCloudFakes(t))
-	var rows []installflow.PreflightObservation
-	start := time.Now()
-	d := &doctor{observe: func(o installflow.PreflightObservation) {
-		if o.Observation == installflow.ObserveCheck {
-			rows = append(rows, o)
+// 🔴 NO ALLOWLISTED REQUEST TAKES A QUERY IT DOES NOT NEED: each may carry only the
+// timeout client-go adds (rest.Config.Timeout), once, as a duration. A watch (which would
+// hold a stream open, ?watch=true or ?watch=1), a follow, a limit, any other parameter, a
+// repeated or malformed timeout, or an empty "?" is refused on every allowlisted path.
+func TestKubeRequestPermittedRefusesQueries(t *testing.T) {
+	server, _ := url.Parse("https://api.example:6443")
+	for _, r := range []struct{ method, path string }{
+		{"GET", "/version"}, {"GET", ingressClassesPath}, {"POST", ssarPath}, {"POST", ssrPath},
+	} {
+		for _, q := range []string{"?watch=true", "?watch=1", "?follow=true", "?limit=1", "?unknown=x", "?",
+			"?timeout=15s&watch=true", "?watch=true&timeout=15s", "?timeout=15s&timeout=1s", "?timeout=soon", "?timeout="} {
+			u, err := url.Parse("https://api.example:6443" + r.path + q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kubeRequestPermitted(server, r.method, u) {
+				t.Errorf("%s %s%s is permitted", r.method, r.path, q)
+			}
 		}
-	}}
-	d.checkCloud(context.Background(), prodTarget, p)
-	if took := time.Since(start); took > 2*time.Second {
-		t.Errorf("the run took %v", took)
-	}
-	time.Sleep(200 * time.Millisecond)
-	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the credential plugin ran (%v)", err)
-	}
-	if r := row(t, rows, "authentication"); r.Verdict != installflow.CheckNotChecked || !strings.Contains(r.Text.String(), "plugin") {
-		t.Errorf("authentication reads %s %q", r.Verdict, r.Text)
-	}
-	for _, o := range rows {
-		if strings.HasPrefix(o.Text.String(), "may ") && o.Verdict != installflow.CheckNotChecked {
-			t.Errorf("%q reads %s", o.Text, o.Verdict)
+		for _, q := range []string{"", "?timeout=15s"} {
+			u, _ := url.Parse("https://api.example:6443" + r.path + q)
+			if !kubeRequestPermitted(server, r.method, u) {
+				t.Errorf("%s %s%s is refused", r.method, r.path, q)
+			}
 		}
-	}
-	if _, auth := api.snapshot(); len(auth) != 0 {
-		t.Errorf("the API server was sent credentials %v", auth)
 	}
 }
 

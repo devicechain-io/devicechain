@@ -95,6 +95,37 @@ Desplázate a una comprobación con las flechas para ver su solución.
   en pantalla. `--skip-preflight` en la línea de comandos sigue siendo la única forma de omitir las
   comprobaciones.
 
+#### Comprobaciones del clúster existente {#preflight-advisory}
+
+Con `--kube-context`, un grupo "Existing cluster (advisory)" sigue a las comprobaciones. Hace al
+clúster preguntas de solo lectura: si el nombre del servidor de la API se resuelve, si responde con
+un certificado TLS en el que confía el contexto, si se aceptan las credenciales del contexto y si
+pueden crear lo que crea la instalación. También pregunta si esta máquina llega a los registros de
+proveedores, charts e imágenes de los que descarga este plan. Estas comprobaciones son un consejo:
+un problema se lee como `WARN`, lo que no pueden decidir se lee como `UNKNOWN` o `NOT CHECKED`, y
+nunca bloquean Continue.
+
+- **Plugins de credenciales.** Un contexto que obtiene sus credenciales de un plugin exec (como
+  suelen hacerlo los contextos de GKE, EKS y AKS) se autentica ejecutando el plugin, como lo haría
+  kubectl: nunca de forma interactiva, sin terminal y sin nada en su entrada, durante 10 segundos
+  como máximo, y se detiene junto con todo lo que haya iniciado cuando se agota ese tiempo o sales
+  de la pantalla. La credencial que imprime solo se envía al servidor de la API del contexto y nunca
+  se muestra. Un plugin que debe ejecutarse de forma interactiva (`interactiveMode: Always`) no se
+  ejecuta y se lee como `NOT CHECKED`; un plugin que no está instalado se lee como `WARN`; uno que
+  falla, se cuelga o no imprime una credencial utilizable se lee como `UNKNOWN`. Lo que el plugin
+  imprime como error nunca se muestra, porque puede contener un token o una clave: la fila solo
+  dice cómo falló el plugin, y `kubectl auth whoami` contra el contexto muestra su propio mensaje.
+  Las entradas heredadas `auth-provider` nunca se ejecutan.
+- **Registros.** Solo se comprueban los repositorios de charts de los componentes que instala este
+  plan, así que Compact (que deja fuera la monitorización) y las opciones de monitorización y de
+  CloudNativePG del panel Advanced cambian la lista. Los charts de los controladores de ingress
+  siguen al clúster: siempre el de Traefik, y el de ingress-nginx cuando el clúster ya ejecuta
+  ingress-nginx (que la instalación conserva salvo que se indique `--remove-legacy-ingress`), según
+  las IngressClasses del clúster.
+- **Proxies.** Estas comprobaciones nunca pasan por un proxy. Cuando hay uno configurado, para el
+  contexto o en el entorno (`HTTPS_PROXY` y similares), las filas que pasarían por él se leen como
+  `NOT CHECKED`.
+
 ### Opciones del clúster {#cluster-choices}
 
 El destino (un clúster kind local gestionado, al que puedes cambiar el nombre, o un contexto
