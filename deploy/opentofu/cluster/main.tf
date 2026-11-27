@@ -425,7 +425,8 @@ resource "terraform_data" "postgres_wal_guard" {
 resource "terraform_data" "restore_guard" {
   count = local.rdb_restore == null ? 0 : 1
 
-  input = var.restore_rdb_from
+  # Sensitive, so a plan does not print the restore source: see database_restored_from.
+  input = sensitive(var.restore_rdb_from)
 
   lifecycle {
     precondition {

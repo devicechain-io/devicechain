@@ -186,6 +186,24 @@ func secretFlagValue(name, value string) bool {
 			(u.User != nil || u.RawQuery != "" || u.Fragment != "") {
 			return true
 		}
+		// A URL-valued flag is also held to the display rule every other print site
+		// uses, which catches what url.Parse misreads: "user:pass@registry/org"
+		// parses as an opaque URL with no userinfo, and "dc-rdb#token" as a path with
+		// no host. Only URL-valued flags: an address like ops@example.test is not a
+		// credential.
+		if urlValuedFlag(name) && installflow.RedactURL(word) != word {
+			return true
+		}
+	}
+	return false
+}
+
+// urlValuedFlag reports whether a flag's value is a URL (or URL-like) a person
+// typed, and so may carry a credential in its userinfo, query or fragment.
+func urlValuedFlag(name string) bool {
+	switch name {
+	case "registry", "restore-rdb-from", "restore-tsdb-from":
+		return true
 	}
 	return false
 }
@@ -206,6 +224,36 @@ func DisplayValue(name, value string) (string, bool) {
 	if name == "alert-webhook" || name == "alert-watchdog-webhook" {
 		return "", false
 	}
+	shown := ""
+	if urlValuedFlag(name) {
+		// A URL-valued flag is shown through the one display rule every other print
+		// site uses, which reads the delimiters rather than url.Parse: the parser
+		// reads "user:pass@registry/org" as an opaque URL with no userinfo, and
+		// would show it whole.
+		// A URL the parser cannot read at all is still not shown, as before.
+		for _, word := range strings.Fields(value) {
+			if _, err := url.Parse(word); err != nil && strings.Contains(word, "://") {
+				return "", false
+			}
+		}
+		shown = strings.ReplaceAll(installflow.RedactURL(value), installflow.URLRedaction, redactedPart)
+	} else {
+		var ok bool
+		if shown, ok = displayParsedURLs(value); !ok {
+			return "", false
+		}
+	}
+	for _, part := range installflow.URLCredentials(value) {
+		if strings.Contains(shown, part) {
+			return "", false
+		}
+	}
+	return shown, true
+}
+
+// displayParsedURLs is value with each URL url.Parse reads in it shown with its
+// userinfo, query and fragment replaced; false when a URL cannot be parsed.
+func displayParsedURLs(value string) (string, bool) {
 	words := strings.Fields(value)
 	for i, word := range words {
 		u, err := url.Parse(word)
@@ -237,11 +285,5 @@ func DisplayValue(name, value string) (string, bool) {
 		}
 		words[i] = b.String()
 	}
-	shown := strings.Join(words, " ")
-	for _, part := range installflow.URLCredentials(value) {
-		if strings.Contains(shown, part) {
-			return "", false
-		}
-	}
-	return shown, true
+	return strings.Join(words, " "), true
 }

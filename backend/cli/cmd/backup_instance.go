@@ -18,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dcctl/backup"
 	"github.com/devicechain-io/dcctl/bootstrap"
+	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/nats-io/nats.go"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -181,5 +182,10 @@ func backupBroker(ctx context.Context, url string, cfg config.NatsConfiguration)
 	if user != "" {
 		opts = append(opts, nats.UserInfo(user, password))
 	}
-	return nats.Connect(url, opts...)
+	nc, err := nats.Connect(url, opts...)
+	if err != nil {
+		// The client quotes a URL it cannot parse whole, userinfo and all.
+		return nil, installflow.RedactURLError(err)
+	}
+	return nc, nil
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/operator"
 	"github.com/fatih/color"
 )
@@ -198,7 +199,7 @@ func buildOperatorImageForInstall(ctx context.Context, st *State) error {
 	}
 	if st.DryRun {
 		c.wouldDo(fmt.Sprintf("provision a local registry at %s and ko-build+push the operator image at tag %q",
-			st.ImageRegistry, st.ImageVersion))
+			installflow.RedactURL(st.ImageRegistry), st.ImageVersion))
 		return nil
 	}
 

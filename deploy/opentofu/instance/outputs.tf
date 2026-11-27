@@ -86,4 +86,8 @@ output "database_restored_from" {
     exists changes nothing at all, with no error and a green apply.
   EOT
   value       = local.tsdb_restore == null ? null : local.tsdb_restore.source_server_name
+  # Sensitive: a restore source is whatever was typed after --restore-*-from, and a
+  # credential written into it would otherwise be printed in every plan and apply.
+  # `tofu output -json` (which dcctl reads) and `tofu output -raw` still return it.
+  sensitive = true
 }

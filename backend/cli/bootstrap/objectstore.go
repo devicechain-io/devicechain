@@ -26,6 +26,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/yaml"
+
+	"github.com/devicechain-io/dcctl/internal/installflow"
 )
 
 // The instance's object store: where tenant branding logos and update artifacts live.
@@ -371,7 +373,7 @@ func describeObjectStore(spec *dcv1beta1.ObjectStoreSpec) string {
 		s3 := spec.S3
 		where := s3.Region
 		if s3.Endpoint != "" {
-			where = s3.Endpoint
+			where = installflow.RedactURL(s3.Endpoint)
 		}
 		creds := "pod identity (no credentials Secret)"
 		if s3.CredentialsSecret != nil {

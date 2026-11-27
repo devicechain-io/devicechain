@@ -377,9 +377,9 @@ func wizardFacts(orig installchoice.Choices, prepared installchoice.Prepared, ed
 		}
 	}
 	if opts.BuildImages {
-		facts.Images = fmt.Sprintf("built from this source checkout, pushed to %s as %s", opts.ImageRegistry, opts.ImageVersion)
+		facts.Images = fmt.Sprintf("built from this source checkout, pushed to %s as %s", installflow.RedactURL(opts.ImageRegistry), opts.ImageVersion)
 	} else {
-		facts.Images = fmt.Sprintf("published images %s from %s", opts.ImageVersion, opts.ImageRegistry)
+		facts.Images = fmt.Sprintf("published images %s from %s", opts.ImageVersion, installflow.RedactURL(opts.ImageRegistry))
 	}
 	return facts
 }

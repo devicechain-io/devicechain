@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/internal/tofujson"
 	"github.com/hashicorp/terraform-exec/tfexec"
 )
@@ -47,6 +48,8 @@ type tofuExec struct {
 	abandonBudget time.Duration
 	waitDelay     time.Duration
 	stderr        io.Writer
+	// stderrFilter is stderr's URL stream filter, flushed when each command ends.
+	stderrFilter *installflow.URLRedactingWriter
 	// target is the cluster this runner acts on, frozen at construction. Every command
 	// that configures a provider re-resolves it into a kubePin and hands tofu that
 	// explicit file and context: see kubePin.
@@ -189,15 +192,20 @@ func newTofuExec(rootdir, tofuBin, kubeContext string) (*tofuExec, error) {
 	}
 	stdout := &streamSwitch{w: io.Discard}
 	tf.SetStdout(stdout)
-	tf.SetStderr(os.Stderr)
-	return &tofuExec{Terraform: tf, stdout: stdout, abandonBudget: tofuAbandonBudget, waitDelay: time.Minute, stderr: os.Stderr, target: target}, nil
+	// stderr is a tool's output dcctl prints, so it passes the URL stream filter: a
+	// diagnostic quoting a restore source or an endpoint quotes its credential too.
+	stderr := installflow.NewURLRedactingWriter(os.Stderr)
+	tf.SetStderr(stderr)
+	return &tofuExec{Terraform: tf, stdout: stdout, abandonBudget: tofuAbandonBudget, waitDelay: time.Minute,
+		stderr: stderr, stderrFilter: stderr, target: target}, nil
 }
 
 // useConsole sends the runner's stderr to c rather than the process's own. Called
 // once, straight after newTofuExec and before any command: terraform-exec reads the
 // writer when a command starts, so setting it afterwards would race a running one.
 func (t *tofuExec) useConsole(c console) {
-	t.stderr = c.stderr()
+	t.stderrFilter = installflow.NewURLRedactingWriter(c.stderr())
+	t.stderr = t.stderrFilter
 	t.Terraform.SetStderr(t.stderr)
 }
 
@@ -297,8 +305,17 @@ func runUntilAbandoned(ctx context.Context, budget time.Duration, run func() err
 // an operator interrupts, and they are the ones that leave a provider plugin running
 // long enough to orphan the pipe. The version read above is outside it on purpose —
 // `version -json` starts no providers, so it has nothing to orphan the pipe TO.
+//
+// 🔴 WHAT IT STREAMS PASSES THE URL STREAM FILTER (installflow.URLRedactingWriter): a
+// plan or an apply prints the restore source and the backup endpoint it was given,
+// and a credential written into either is printed with it, on every presenter.
 func (t *tofuExec) streaming(ctx context.Context, run func() error) error {
-	return t.streamingTo(ctx, out(ctx).stdout(), run)
+	w := installflow.NewURLRedactingWriter(out(ctx).stdout())
+	err := t.streamingTo(ctx, w, run)
+	if ferr := w.Flush(); ferr != nil && err == nil {
+		err = ferr
+	}
+	return err
 }
 
 // streamingTo is streaming with stdout sent to w instead of straight to the terminal.
@@ -317,7 +334,11 @@ func (t *tofuExec) streamingTo(ctx context.Context, w io.Writer, run func() erro
 	if errors.Is(err, errTofuAbandoned) {
 		t.parked = true
 	}
-	return err
+	if t.stderrFilter != nil {
+		_ = t.stderrFilter.Flush()
+	}
+	// A failed command's error carries what it wrote to stderr.
+	return installflow.RedactURLsInError(err)
 }
 
 // Init initialises the root and moves its lock file onto the provider versions the
@@ -412,14 +433,18 @@ func (t *tofuExec) Apply(ctx context.Context, opts ...applyOption) error {
 func (t *tofuExec) applyObserved(ctx context.Context, p *stageProgress, opts []applyOption) error {
 	c := out(ctx)
 	p.tofu(tofujson.Progress{}) // observed, total not yet known
-	o := tofujson.New(c.stdout(), c.stderr(), p.tofu)
+	// The observer's own lines pass the URL stream filter. The JSON it reads does not:
+	// cutting inside a JSON string could cut an escape, and change what it parses.
+	stdout, stderr := installflow.NewURLRedactingWriter(c.stdout()), installflow.NewURLRedactingWriter(c.stderr())
+	o := tofujson.New(stdout, stderr, p.tofu)
 	err := t.streamingTo(ctx, o, func() error { return t.observedApply(ctx, opts) })
 	// After streamingTo: the switch points at io.Discard again, so no command can
 	// still be writing to o.
 	o.Close()
+	_, _ = stdout.Flush(), stderr.Flush()
 	if err != nil {
 		if diags := o.Errors(); diags != "" {
-			err = fmt.Errorf("%w\n%s", err, diags)
+			err = fmt.Errorf("%w\n%s", err, installflow.RedactURLsInText(diags))
 		}
 	}
 	return err
@@ -485,10 +510,14 @@ func (t *tofuExec) Destroy(ctx context.Context, opts ...tfexec.DestroyOption) er
 	defer p.release()
 	path, kctx := pinVars(p)
 	opts = append(append([]tfexec.DestroyOption(nil), opts...), path, kctx)
-	f := newOutputsBlockFilter(out(ctx).stdout())
+	w := installflow.NewURLRedactingWriter(out(ctx).stdout())
+	f := newOutputsBlockFilter(w)
 	runFrom(ctx).mayChange()
 	err = t.streamingTo(ctx, f, func() error { return t.Terraform.Destroy(ctx, opts...) })
 	if ferr := f.Flush(); ferr != nil && err == nil {
+		err = ferr
+	}
+	if ferr := w.Flush(); ferr != nil && err == nil {
 		err = ferr
 	}
 	return err

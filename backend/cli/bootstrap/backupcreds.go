@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/devicechain-io/dcctl/internal/installflow"
 )
 
 // backupCredentialsSecretName is the Secret the backup plugin presents to an
@@ -108,7 +110,7 @@ func ParseBackupDestination(path string) (*BackupDestination, error) {
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return nil, fmt.Errorf("endpointUrl %q is not an http(s) URL with a host; the archiver "+
 			"dials this address and a malformed one fails at the first base backup rather than here",
-			d.EndpointURL)
+			installflow.RedactURL(d.EndpointURL))
 	}
 
 	// 🔴 THE TWO BUCKETS MUST DIFFER. One bucket for both stores means each archives
