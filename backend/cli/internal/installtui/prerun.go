@@ -136,11 +136,12 @@ func (p *prerun) tooSmall() bool { return p.width < prerunMinWidth || p.height <
 func (p *prerun) update(msg tea.Msg) (tea.Cmd, prerunOutcome) {
 	switch msg := msg.(type) {
 	case checkMsg:
-		if msg.settled != 0 {
-			p.reviewArmed(msg.settled)
-			return nil, stay
-		}
 		return p.checkResult(msg), stay
+	case settleMsg:
+		if p.screen == screenReview {
+			return p.rv.settled(msg), stay
+		}
+		return nil, stay
 	case tea.KeyPressMsg:
 		if p.tooSmall() {
 			return nil, stay

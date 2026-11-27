@@ -1,0 +1,20 @@
++----------------------------------------------------------------------------------------------------------------------+
+| DeviceChain - dcctl bootstrap - kind-devicechain - v1.11.0                                                           |
+| \x1b[2m--------------------------------------------------------------------------------------------------------------------\x1b[m |
+| \x1b[1;34mCluster installed\x1b[m                                                                                                    |
+|                                                                                                                      |
+| \x1b[32mThe shared cluster prerequisites are installed. No instance has been created yet.\x1b[m                                    |
+|   \x1b[1mCluster\x1b[m   kind cluster devicechain (Standard footprint, Single)                                                    |
+|                                                                                                                      |
+| Next: create an instance on this cluster. It is a separate step, with its own choices, its own review and its own    |
+| approval; nothing of it runs until you approve it.                                                                   |
+|                                                                                                                      |
+| If you exit here, the cluster stays installed. To create an instance later, run:                                     |
+|   \x1b[1mdcctl bootstrap local <instance> --cluster=devicechain\x1b[m                                                             |
+|                                                                                                                      |
+|   [ Exit (the cluster stays installed) ]                                                                             |
+| > \x1b[7m[ Continue to the instance ]\x1b[m                                                                                       |
+|                                                                                                                      |
+| \x1b[2m--------------------------------------------------------------------------------------------------------------------\x1b[m |
+| \x1b[2mTab next - Enter activate\x1b[m                                                                                            |
++----------------------------------------------------------------------------------------------------------------------+

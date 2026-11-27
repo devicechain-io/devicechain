@@ -1,0 +1,4 @@
+This terminal is too small to show this screen. Make it
+larger to continue: nothing is chosen or changed while it is
+this small. F1 shows the keys; Ctrl+C stops. Or run the same
+command with --ui=plain.

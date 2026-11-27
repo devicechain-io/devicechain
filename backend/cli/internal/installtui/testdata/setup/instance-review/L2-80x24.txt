@@ -1,0 +1,23 @@
+DeviceChain - dcctl bootstrap - instance acme - kind-devicechain - v1.11.0
+----------------------------------------------------------------------------
+Review the instance
+
+This is the instance the bootstrap will build, as the command line would
+resolve it. Nothing of it has been created yet. Approve starts it; Back
+returns to the choices.
+  Instance      acme
+  Cluster       kind cluster devicechain (Standard footprint, Single),
+                installed by the first stage
+  Profile       default
+  Escrow        /home/op/.devicechain/escrow/acme-rootkey.escrow; passphrase
+                asked for when the run reaches its escrow step, twice, and
+                never shown
+Equivalent command (template)
+  dcctl bootstrap local acme --cluster=devicechain
+  --escrow-passphrase-file=<file holding the escrow passphrase> --yes
+> [ Back ]
+  [ Approve and create the instance ]
+  [ Exit ]
+
+----------------------------------------------------------------------------
+Tab next - Enter activate - Esc back

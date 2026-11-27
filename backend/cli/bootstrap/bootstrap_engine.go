@@ -57,6 +57,13 @@ type BootstrapEngine struct {
 	// the command layer releases the claim and unwinds a local record that describes
 	// nothing.
 	Finish func(ctx context.Context, con Console, st *State, runErr error) error
+	// PersonAtTerminal, when set, reports whether a person is at a terminal to be asked
+	// for the escrow passphrase, in place of looking at the process's stdin. A
+	// presenter that owns the terminal while the run is live (the terminal UI, which
+	// puts the null device on stdin so no child can read it) sets it; nil keeps the
+	// stdin check every plain run has always made. It never moves the file and the
+	// environment from ahead of a person.
+	PersonAtTerminal func() bool
 }
 
 // Console is where the command-layer callbacks of an engine print: the run's stdout,
@@ -176,6 +183,7 @@ func (e *BootstrapEngine) Run(ctx context.Context, req installflow.Request, rt i
 	flags := e.Escrow
 	flags.con = r.con
 	flags.ask = func(q escrowQuestion) (string, error) { return r.askPassphrase(ctx, q) }
+	flags.atTerminal = e.PersonAtTerminal
 	plan, err := ResolveEscrowPlan(e.Instance, flags)
 	if err != nil {
 		return r.close(ctx, err)

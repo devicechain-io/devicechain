@@ -213,3 +213,44 @@ como estaban.
 
 El código de salida es el mismo que el de la instalación en texto: 0 si la instalación tuvo éxito, 1
 si falló, se rechazó o se detuvo. Salir de una pantalla nunca lo cambia.
+
+## Clúster y después instancia: `dcctl setup local` (Preview) {#setup-local}
+
+`dcctl setup local` ejecuta la instalación del clúster y después el bootstrap de una primera
+instancia en una sola sesión guiada. Está en Preview. `dcctl install` y `dcctl bootstrap` no cambian
+y siguen siendo la forma de automatizar cada paso.
+
+Tiene dos etapas, cada una con su propia revisión y su propia aprobación:
+
+1. **El clúster.** Las mismas pantallas que `dcctl install local --ui=tui`, desde la bienvenida
+   hasta la revisión. **Aprobar e instalar** instala el clúster. Cuando termina, Intro continúa.
+2. **La instancia.** Una pantalla de traspaso indica que el clúster está instalado y muestra el
+   comando `dcctl bootstrap` que crea una instancia más adelante. **Continuar con la instancia**
+   lleva a las opciones de la instancia y del depósito de la clave raíz, y después a la revisión
+   propia de la instancia. **Aprobar y crear la instancia** inicia el bootstrap. La frase de paso
+   del depósito se pide en pantalla cuando la ejecución llega a su paso de depósito, y nunca se
+   muestra. Tras una ejecución correcta llegan el comprobante del depósito, la contraseña de primer
+   inicio de sesión de un solo uso y el resumen de la instancia.
+
+Nada de la instancia se ejecuta sin su propia aprobación, y la aprobación del clúster no responde
+a nada de lo que pregunte la ejecución de la instancia. Cada pantalla que lleva más allá (el
+traspaso y las dos revisiones) no acepta teclas hasta llevar un momento en pantalla, así que las
+teclas escritas por adelantado no pueden aprobar nada.
+
+`dcctl setup local` es solo guiado. Necesita que stdin, stdout y stderr sean un terminal
+interactivo (no CI, no `TERM=dumb`), y no tiene `--yes`. Sin un terminal no cambia nada y sale con
+2, indicando los dos comandos que se deben ejecutar en su lugar. Sus opciones (`--kube-context`,
+`--cluster`, `--compact`, `--ha`, `--no-splash`) solo fijan dónde empiezan las pantallas; cada una
+se puede cambiar en ellas.
+
+Si sales o la instancia falla después de la etapa del clúster, el clúster sigue instalado. Setup lo
+indica e imprime el comando `dcctl bootstrap` exacto que crea la instancia: con las opciones que
+elegiste, si ya las elegiste.
+
+| Código de salida | Significado |
+| --- | --- |
+| 0 | El clúster está instalado y la instancia se creó |
+| 1 | La etapa del clúster falló, o se detuvo después de su aprobación, igual que `dcctl install` sale con 1 |
+| 2 | No se cambió nada: se detuvo antes de la aprobación del clúster, o se rechazó antes de empezar |
+| 3 | El clúster está instalado; no se creó ninguna instancia (se salió antes de la aprobación de la instancia) |
+| 4 | El clúster está instalado; la creación de la instancia falló, o se detuvo después de su aprobación |

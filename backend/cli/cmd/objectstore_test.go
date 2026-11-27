@@ -63,19 +63,17 @@ func TestTheBootstrapCommandWiresTheObjectStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var runE *ast.FuncLit
+	// The run a bootstrap command line describes is built by bootstrapRun, which
+	// bootstrapCmd's RunE (and dcctl setup local) call.
+	var runE *ast.BlockStmt
 	ast.Inspect(f, func(n ast.Node) bool {
-		if kv, ok := n.(*ast.KeyValueExpr); ok {
-			if id, ok := kv.Key.(*ast.Ident); ok && id.Name == "RunE" {
-				if fl, ok := kv.Value.(*ast.FuncLit); ok && runE == nil {
-					runE = fl
-				}
-			}
+		if fd, ok := n.(*ast.FuncDecl); ok && fd.Name.Name == "bootstrapRun" && runE == nil {
+			runE = fd.Body
 		}
 		return true
 	})
 	if runE == nil {
-		t.Fatal("bootstrap.go no longer declares bootstrapCmd's RunE")
+		t.Fatal("bootstrap.go no longer declares bootstrapRun")
 	}
 
 	// stateParam maps each parameter name of bootstrapStateFor to its position.

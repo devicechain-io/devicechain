@@ -671,7 +671,7 @@ FLEET_RUNNER_INPUTS = [
 # The `tui-windows` job: the install terminal UI's packages and the cmd package (its entry
 # selection and the ConPTY smoke test), run natively on windows-latest. It runs when a changed file
 # reaches a package the TUI roots below compile THAT IS IN backend/cli, or is one of the
-# TUI_WINDOWS_INPUTS (the install command's own files in cmd, its preflight, Execute's signal
+# TUI_WINDOWS_INPUTS (the install and setup commands' own files in cmd, its preflight, Execute's signal
 # handling in root.go, the install characterisation goldens), or is a Go file in backend/cli that
 # only a Windows build compiles (windows_only).
 #
@@ -699,6 +699,7 @@ TUI_WINDOWS_ROOTS = [
 TUI_WINDOWS_INPUTS = [
     "backend/cli/cmd/install*",
     "backend/cli/cmd/preflight*",
+    "backend/cli/cmd/setup*",
     "backend/cli/cmd/root.go",
     "backend/cli/cmd/testdata/install_golden/**",
 ]

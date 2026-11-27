@@ -16,7 +16,7 @@ import (
 )
 
 // sweptGoldens are the golden directories whose every file some test must compare.
-var sweptGoldens = []string{"testdata/prerun", "testdata/progress", "testdata/bootstrap"}
+var sweptGoldens = []string{"testdata/prerun", "testdata/progress", "testdata/bootstrap", "testdata/setup"}
 
 // comparedGoldens records each golden a test compared (slash paths under this package).
 var comparedGoldens sync.Map

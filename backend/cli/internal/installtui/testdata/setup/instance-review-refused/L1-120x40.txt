@@ -1,0 +1,18 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ DeviceChain · dcctl bootstrap · instance acme · kind-devicechain · v1.11.0                                           │
+│ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│ Review the instance                                                                                                  │
+│                                                                                                                      │
+│ This is the instance the bootstrap will build, as the command line would resolve it. Nothing of it has been created  │
+│ yet. Approve starts it; Back returns to the choices.                                                                 │
+│                                                                                                                      │
+│ Approve is unavailable: this plan could not be built. Go back and change it.                                         │
+│   --size: compact is the cluster's; this instance follows it                                                         │
+│                                                                                                                      │
+│ › [ Back ]                                                                                                           │
+│   [ Approve and create the instance ]                                                                                │
+│   [ Exit ]                                                                                                           │
+│                                                                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│ Tab next · Enter activate · Esc back                                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

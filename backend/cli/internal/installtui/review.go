@@ -4,8 +4,6 @@
 package installtui
 
 import (
-	"time"
-
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
@@ -30,15 +28,6 @@ const (
 	reviewApprovalPending = "Approve becomes available once this screen has settled; a key pressed before then does nothing."
 )
 
-// reviewSettle is how long the review screen takes no key after it appears.
-//
-// 🔴 A KEY TYPED BEFORE THE REVIEW WAS ON SCREEN NEVER APPROVES IT. Keys the operator
-// typed ahead (a second Enter after Continue, a Tab and an Enter queued while the
-// screen was being drawn) arrive after the screen has changed, faster than anyone
-// could read it; every key is dropped until this has passed. It is a variable only so
-// that tests need not wait for it.
-var reviewSettle = 500 * time.Millisecond
-
 // The review screen's actions, in order. Focus starts on Back.
 const (
 	reviewBack = iota
@@ -48,10 +37,10 @@ const (
 
 // reviewState is the review screen.
 type reviewState struct {
-	// gen counts the visits to the screen. Each visit is armed by its own settle
-	// message; one left over from an earlier visit arms nothing.
-	gen   int
-	armed bool
+	// settleGate arms each visit to the screen: only once the visit and the keyboard
+	// have both been quiet for the settle period (see settleGate). Nothing left over from
+	// an earlier visit arms a later one.
+	settleGate
 	focus int
 	// offset is the first line of the plan shown, when it does not fit.
 	offset int
@@ -71,24 +60,16 @@ type approval struct {
 func (p *prerun) enterReview() tea.Cmd {
 	p.screen = screenReview
 	p.approval = nil
-	gen := p.rv.gen + 1
-	p.rv = reviewState{gen: gen, focus: reviewBack}
-	return tea.Tick(reviewSettle, func(time.Time) tea.Msg { return checkMsg{settled: gen} })
-}
-
-// reviewArmed arms the review when visit gen, the one on screen, has settled: keys
-// count from now on.
-func (p *prerun) reviewArmed(gen int) {
-	if p.screen == screenReview && gen == p.rv.gen {
-		p.rv.armed = true
-	}
+	p.rv.focus, p.rv.offset = reviewBack, 0
+	return p.rv.enter()
 }
 
 // leaveReview goes back to the choices. Nothing is approved, and the next visit is a
 // new one, which settles again before it takes a key.
 func (p *prerun) leaveReview() {
 	p.screen = screenChoices
-	p.rv.armed, p.rv.focus, p.rv.offset = false, reviewBack, 0
+	p.rv.leave()
+	p.rv.focus, p.rv.offset = reviewBack, 0
 	p.approval = nil
 }
 
@@ -102,8 +83,8 @@ func (p *prerun) reviewActive() []key.Binding {
 }
 
 func (p *prerun) reviewKey(k tea.KeyPressMsg) (tea.Cmd, prerunOutcome) {
-	if !p.rv.armed {
-		return nil, stay // typed before the screen settled: dropped, whatever it was
+	if ok, cmd := p.rv.admit(); !ok {
+		return cmd, stay // typed before the screen settled: dropped, whatever it was
 	}
 	switch {
 	case key.Matches(k, p.keys.next):

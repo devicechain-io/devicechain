@@ -43,6 +43,7 @@ dcctl [command]
 * [dcctl resgen](#dcctl-resgen)	 - Generate configuration resources
 * [dcctl restore](#dcctl-restore)	 - Verify a backup and print a read-only restore plan
 * [dcctl secrets](#dcctl-secrets)	 - Inspect and verify instance secret material
+* [dcctl setup](#dcctl-setup)	 - Preview. Guided set-up: a cluster, then an instance on it
 * [dcctl sim](#dcctl-sim)	 - Create and drive DeviceChain simulations
 * [dcctl tenant-deletion](#dcctl-tenant-deletion)	 - Check whether a deleted tenant's data is established as erased
 * [dcctl test](#dcctl-test)	 - Run rule unit tests against a tenant's detection rules (preview)
@@ -3062,6 +3063,90 @@ dcctl secrets escrow verify <file> [flags]
 ### SEE ALSO
 
 * [dcctl secrets escrow](#dcctl-secrets-escrow)	 - Work with root-key escrow artifacts
+
+## dcctl setup {#dcctl-setup}
+
+Preview. Guided set-up: a cluster, then an instance on it
+
+### Synopsis
+
+Preview. Guided set-up of DeviceChain on one terminal. See "dcctl setup local".
+
+dcctl install and dcctl bootstrap are unchanged by it, and stay the way to script either step.
+
+### Options
+
+```
+  -h, --help   help for setup
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl setup local](#dcctl-setup-local)	 - Preview. A guided install, then bootstrap, each with its own approval
+
+## dcctl setup local {#dcctl-setup-local}
+
+Preview. A guided install, then bootstrap, each with its own approval
+
+### Synopsis
+
+Preview. Prepares a cluster and creates an instance on it, in two stages on one terminal
+screen, each with its own review and its own approval:
+
+```
+  1. the cluster: the same screens as "dcctl install local --ui=tui", ending on its review;
+     Approve installs the cluster.
+  2. the instance: once the cluster is installed, a hand-over screen, then the instance and
+     root-key escrow choices, ending on the instance's review; Approve creates the instance.
+```
+
+Nothing of the instance runs without its own approval, and no key typed before a review has
+settled approves it. Leaving after the cluster stage leaves the cluster installed, and setup
+prints the dcctl bootstrap command that creates the instance later.
+
+It is guided only. It needs stdin, stdout and stderr to be an interactive terminal (not CI,
+not TERM=dumb), has no --yes, and refuses rather than approve anything on its own. To script
+the same result, run "dcctl install local" and then "dcctl bootstrap local".
+
+Exit status:
+```
+  0  the cluster is installed and the instance was created
+  1  the cluster stage failed, or was interrupted after its approval (as dcctl install exits 1)
+  2  nothing was changed: stopped before the cluster's approval, or refused before starting
+  3  the cluster is installed; no instance was created (left before the instance's approval)
+  4  the cluster is installed; creating the instance failed, or was interrupted after its approval
+```
+
+```
+dcctl setup local [flags]
+```
+
+### Examples
+
+```
+  # a local kind cluster named "devicechain", then an instance on it
+  dcctl setup local
+  # a small-footprint cluster, for a laptop
+  dcctl setup local --compact
+  # an existing cluster: dcctl never creates or deletes it
+  dcctl setup local --kube-context prod
+```
+
+### Options
+
+```
+      --cluster string        Preview. Start from this local kind cluster, created if it does not exist; it can be changed on screen (default "devicechain")
+      --compact               Preview. Start with the small-footprint cluster preset (as dcctl install --compact); it can be changed on screen
+      --ha                    Preview. Start with the HA cluster topology (as dcctl install --ha); it can be changed on screen
+  -h, --help                  help for local
+      --kube-context string   Preview. Start from this existing cluster instead of a local kind cluster (never created or deleted by dcctl); it can be changed on screen
+      --no-splash             Preview. Skip the DeviceChain logo shown before the first screen
+```
+
+### SEE ALSO
+
+* [dcctl setup](#dcctl-setup)	 - Preview. Guided set-up: a cluster, then an instance on it
 
 ## dcctl sim {#dcctl-sim}
 
