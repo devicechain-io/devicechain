@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -95,14 +96,31 @@ const commandWaitDelay = 2 * time.Second
 // screen, which an Exit or an interrupt ends. The command is killed when ctx ends,
 // and waited for at most commandWaitDelay after that. Only the screen uses it; see
 // doctorRunner.
+//
+// 🔴 ENDING THE CONTEXT ENDS THE COMMAND'S WHOLE PROCESS TREE, NOT ONLY THE COMMAND.
+// kubectl's exec credential plugin, docker's credential helper: a descendant the
+// command started would otherwise outlive the kill as an orphan, still running after
+// the screen (and dcctl) had gone. startTree starts the command so that everything it
+// spawns can be ended with it: a process group of its own on Unix, a job object on
+// Windows.
+//
+// Stdin and stderr are left nil, so the command reads the null device and its
+// diagnostics go to the null device, as Output's did for a caller that discards them:
+// nothing a check runs reads the terminal the screen owns.
 func runContext(ctx context.Context, name string, args ...string) string {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.WaitDelay = commandWaitDelay
-	out, err := cmd.Output()
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	end, err := startTree(cmd)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	defer end()
+	if err := cmd.Wait(); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out.String())
 }
 
 // run is a host command: under the doctor's context when it has one (the screen's

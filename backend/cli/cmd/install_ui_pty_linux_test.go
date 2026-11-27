@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -192,4 +194,125 @@ func openCmdPTY(t *testing.T) (master, slave *os.File) {
 	t.Cleanup(func() { _ = m.Close(); _ = s.Close() })
 	var _ io.Reader = m
 	return m, s
+}
+
+// 🔴 A SIGNAL TO DCCTL WHILE THE PREFLIGHT SCREEN'S CHECKS RUN LEAVES NONE OF THEIR
+// PROCESSES BEHIND. The terminal is raw, so this is not Ctrl+C (a keypress): it is an
+// external SIGTERM, to dcctl alone, as `kill` or a supervisor sends it. dcctl cancels the
+// screen, and the cancel ends each running check's whole process tree: here a docker that
+// spawned a grandchild holding its output (a credential helper) and then stalled. Neither
+// gets the signal itself, so only dcctl can end them.
+func TestPTYSigtermDuringThePreflightScreenEndsItsCommandsTrees(t *testing.T) {
+	if os.Getenv(plainPTYChildEnv) != "" {
+		return
+	}
+	bin := t.TempDir()
+	pids := filepath.Join(t.TempDir(), "pids")
+	// Every tool the doctor looks for is this script. `docker info` is the screen's first
+	// command for a local install; it spawns a sleeper holding its output, records both
+	// pids, and stalls. Anything else fails at once, as an absent daemon would.
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = info ]; then\n" +
+		"  /bin/sleep 120 &\n" +
+		"  echo \"$$ $!\" >> \"$DCCTL_PTY_TOOL_PIDS\"\n" +
+		"  wait\n" +
+		"fi\n" +
+		"exit 1\n"
+	for _, tool := range []string{"docker", "kubectl", "kind", "tofu", "terraform", "ko", "cloud-provider-kind"} {
+		if err := os.WriteFile(filepath.Join(bin, tool), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m, s := openCmdPTY(t)
+	var out bytes.Buffer
+	var mu sync.Mutex
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := m.Read(buf)
+			mu.Lock()
+			out.Write(buf[:n])
+			mu.Unlock()
+			if err != nil {
+				return
+			}
+		}
+	}()
+	screen := func() string { mu.Lock(); defer mu.Unlock(); return out.String() }
+	args := []string{"install", "local", "--ui=tui", "--no-splash", "--version", "v1.0.0"}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestPlainPTYChild$", "-test.count=1")
+	cmd.Env = []string{plainPTYChildEnv + "=" + fmt.Sprint(len(args)), "PATH=" + bin + ":/usr/bin:/bin",
+		"HOME=" + t.TempDir(), "TERM=xterm-256color", "LANG=C.UTF-8", "DCCTL_PTY_TOOL_PIDS=" + pids}
+	for i, a := range args {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s_%d=%s", plainPTYChildEnv, i, a))
+	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = s, s, s
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan struct{})
+	var waitErr error
+	go func() { waitErr = cmd.Wait(); close(exited) }()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		<-exited
+	})
+	// until waits for ok. Before the signal, dcctl exiting is a failure of its own.
+	until := func(what string, d time.Duration, ok func() bool, dcctlMayExit bool) {
+		t.Helper()
+		for deadline := time.Now().Add(d); !ok(); time.Sleep(20 * time.Millisecond) {
+			select {
+			case <-exited:
+				if !dcctlMayExit {
+					t.Fatalf("dcctl exited (%v) while waiting for %s; terminal:\n%q", waitErr, what, screen())
+				}
+			default:
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("waited %v for %s; terminal:\n%q", d, what, screen())
+			}
+		}
+	}
+
+	// The welcome screen; Enter goes on to the preflight screen, whose checks start.
+	until("the welcome screen", 30*time.Second, func() bool { return strings.Contains(screen(), "Enter") }, false)
+	if _, err := m.Write([]byte("\r")); err != nil {
+		t.Fatal(err)
+	}
+	var recorded []byte
+	until("the screen's checks to run docker info", 30*time.Second, func() bool {
+		recorded, _ = os.ReadFile(pids)
+		return len(recorded) > 0 && recorded[len(recorded)-1] == '\n'
+	}, false)
+	var tree []int
+	for _, f := range strings.Fields(string(recorded)) {
+		var pid int
+		if _, err := fmt.Sscan(f, &pid); err != nil {
+			t.Fatalf("the tool recorded %q", recorded)
+		}
+		tree = append(tree, pid)
+	}
+	gone := make([]func() bool, len(tree))
+	for i, pid := range tree {
+		gone[i] = watchExit(t, pid)
+		if gone[i]() {
+			t.Fatalf("process %d of the check ended before the signal", pid)
+		}
+	}
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	signalled := time.Now()
+	t.Logf("signalled dcctl with the check tree %v running", tree)
+	for i, pid := range tree {
+		until(fmt.Sprintf("process %d of the stalled check to end", pid), commandWaitDelay-time.Since(signalled), gone[i], true)
+	}
+	// dcctl itself leaves with nothing confirmed; a second interrupt is never needed for it.
+	select {
+	case <-exited:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("dcctl did not exit after the signal; terminal:\n%q", screen())
+	}
 }
