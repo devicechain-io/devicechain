@@ -324,6 +324,50 @@ func TestCloudDiagnosticsTheLocalBuildRegistryIsAskedOverHTTP(t *testing.T) {
 			}
 		})
 	}
+
+	// 🔴 ONLY A REQUEST TO THIS MACHINE GOES OUT IN PLAIN HTTP, AND NO CREDENTIAL EVER DOES.
+	// Whether a registry is local is decided on the host the request would reach, with an
+	// explicit numeric port; one written with userinfo is never asked at all.
+	for _, tc := range []struct {
+		registry   string
+		want       string // the only registry request allowed, or "" for none
+		notChecked bool   // the row is NOT CHECKED for the credentials
+	}{
+		{"localhost:secret@registry.example", "", true},
+		{"localhost:secret@registry.example/team", "", true},
+		{"127.0.0.1@evil", "", true},
+		{"127.0.0.1:5000@evil.example", "", true},
+		{"[::1]", "HEAD https://[::1]/v2/", false},
+		{"[::1]:5000", "HEAD http://[::1]:5000/v2/", false},
+		{"localhost.evil.example", "HEAD https://localhost.evil.example/v2/", false},
+		{"localhost.evil.example:5000", "HEAD https://localhost.evil.example:5000/v2/", false},
+		{"localhost:99999", "HEAD https://localhost:99999/v2/", false},
+		{"localhost:notaport", "", false}, // not a URL at all: nothing can be sent
+	} {
+		f := newCloudFakes(t)
+		var rows []installflow.PreflightObservation
+		r := cloudDiagnosticsRunner(cloudTarget{KubeContext: "prod", ImageRegistry: tc.registry, Build: true}, f.probes(testServer))
+		_, _ = r.RunPreflight(context.Background(), func(o installflow.PreflightObservation) { rows = append(rows, o) })
+		var asks []string
+		for _, m := range f.methods {
+			if strings.HasSuffix(m, "/v2/") {
+				asks = append(asks, m)
+			}
+			if strings.Contains(m, "secret") || strings.Contains(m, "@") {
+				t.Errorf("%s: a credential was sent: %s", tc.registry, m)
+			}
+		}
+		if (tc.want == "" && len(asks) != 0) || (tc.want != "" && (len(asks) != 1 || asks[0] != tc.want)) {
+			t.Errorf("%s: asked %q, want %q", tc.registry, asks, tc.want)
+		}
+		if tc.notChecked {
+			got := row(t, rows, "image registry: not checked")
+			if got.Verdict != installflow.CheckNotChecked || strings.Contains(got.Text.String()+got.Fix.String(), "secret") {
+				t.Errorf("%s: %s %q / %q", tc.registry, got.Verdict, got.Text, got.Fix)
+			}
+		}
+	}
+
 	// A loopback registry the install does not build into is the nodes' to pull from, as before.
 	f := newCloudFakes(t)
 	var rows []installflow.PreflightObservation

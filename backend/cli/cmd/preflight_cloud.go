@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -476,6 +477,8 @@ type cloudRegistry struct {
 	// itself and pushes what it builds to. Asked over http://; not running yet is
 	// expected, not a fault.
 	localBuild bool
+	// notProbed, when set, is why the row is NOT CHECKED without any request being sent.
+	notProbed string
 }
 
 // The Helm chart repositories the cluster root installs from, each with the component
@@ -533,7 +536,14 @@ func (t cloudTarget) registries(p cloudProbes, fe frontEnd) []cloudRegistry {
 		regs = append(regs, monitoringCharts)
 	}
 	if host := registryHost(t.ImageRegistry); host != "" {
-		if t.Build && loopbackHost(host) {
+		if strings.Contains(host, "@") {
+			// 🔴 A REGISTRY WRITTEN WITH USERINFO IS NEVER ASKED. Go would send it as Basic
+			// auth, over plain HTTP if the row chose http://; the row neither sends it nor
+			// repeats it.
+			regs = append(regs, cloudRegistry{what: "image registry",
+				notProbed: "image registry: not checked, its reference carries credentials (user@host), which these checks never send"})
+		} else if local, ok := localBuildHost(host); t.Build && ok {
+			host = local
 			// 🔴 THE LOCAL BUILD REGISTRY SPEAKS PLAIN HTTP. --build pushes to a registry
 			// container the install starts on this machine (localhost:5000 unless
 			// --registry names another loopback address), and it has no TLS: asked over
@@ -546,18 +556,29 @@ func (t cloudTarget) registries(p cloudProbes, fe frontEnd) []cloudRegistry {
 	return regs
 }
 
-// loopbackHost reports whether a registry host ("localhost:5000", "127.0.0.1:5000",
-// "[::1]:5000") names this machine.
-func loopbackHost(host string) bool {
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
+// localBuildHost reports whether a registry host is one the install's local build
+// registry can be: exactly "localhost" or a loopback IP, with an explicit numeric port
+// and nothing else ("localhost:5000", "127.0.0.1:5000", "[::1]:5000"). It is decided on
+// the URL that would be requested, not on the string: "localhost:secret@registry.example"
+// is a request to registry.example, and is not local.
+func localBuildHost(host string) (string, bool) {
+	u, err := url.Parse("http://" + host + "/v2/")
+	if err != nil || u.User != nil || u.Host != host || u.Opaque != "" {
+		return "", false
 	}
-	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
-	if strings.EqualFold(host, "localhost") {
-		return true
+	port := u.Port()
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port {
+		return "", false
 	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	name := u.Hostname()
+	if !strings.EqualFold(name, "localhost") {
+		ip := net.ParseIP(name)
+		if ip == nil || !ip.IsLoopback() {
+			return "", false
+		}
+	}
+	return u.Host, true
 }
 
 // registryHost is the host part of an image registry reference ("ghcr.io/org" is ghcr.io).
@@ -576,6 +597,9 @@ func (d *doctor) checkRegistries(ctx context.Context, t cloudTarget, p cloudProb
 	var wg sync.WaitGroup
 	proxied := make([]bool, len(regs))
 	for i, r := range regs {
+		if r.notProbed != "" {
+			continue
+		}
 		if u, err := url.Parse(r.url); err == nil {
 			if pu, _ := envProxy(u); pu != nil {
 				proxied[i] = true
@@ -608,6 +632,10 @@ func (d *doctor) checkRegistries(ctx context.Context, t cloudTarget, p cloudProb
 			fix = "the cluster's nodes pull images from " + host + "; check that they can reach it"
 		}
 		err := errs[i]
+		if r.notProbed != "" {
+			d.notChecked(r.notProbed, "write --registry as host[:port]/path, and give the registry's credentials to docker login instead")
+			continue
+		}
 		if r.localBuild {
 			d.localBuildRegistry(r, codes[i], err)
 			continue
