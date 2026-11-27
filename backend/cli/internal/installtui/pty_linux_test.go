@@ -4,6 +4,7 @@
 package installtui
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -234,10 +235,11 @@ func TestPTYHangupThenCtrlCRestoresTheTerminal(t *testing.T) {
 	}
 }
 
-// Bubble Tea returns from Run without restoring anything when its input reader cannot
-// start, after it has put the terminal in raw mode. With no file descriptor to spare (the
-// reader needs an epoll instance), that is what happens; the presenter must restore the
-// terminal itself, and the run carries on in plain output.
+// With no file descriptor to spare, Bubble Tea's input reader cannot start (it needs an
+// epoll instance), and Run fails after the terminal has been put in raw mode. Before
+// v2.2.0 it returned without restoring anything; the presenter restores the modes it saved
+// whatever happened, the terminal comes back as it was, and the run carries on in plain
+// output.
 func TestPTYAnInputReaderThatCannotStartLeavesTheTerminalRestored(t *testing.T) {
 	r := startPTYChild(t, "nofds")
 	if code := r.wait(); code != 0 {
@@ -245,6 +247,28 @@ func TestPTYAnInputReaderThatCannotStartLeavesTheTerminalRestored(t *testing.T) 
 	}
 	if !strings.Contains(r.out.String(), "continuing with plain output") {
 		t.Fatalf("the program did start, so this did not test the failure path:\n%q", r.out.String())
+	}
+}
+
+// 🔴 BUBBLE TEA'S SHUTDOWN READS STDIN. From v2.2.0, a program that wrote a terminal query
+// in its last second sends a device-attributes request on the way out and reads the
+// terminal's replies, for up to half a second, so they do not reach the shell. That read
+// must end inside Run: on a terminal that never answers (this one), the presenter still
+// returns, and what is typed after it returns is the process's, not a read the program
+// left behind. Each run here writes a query with its first frame, so it ends in the drain.
+func TestPTYNothingReadsStdinAfterThePresenterReturnsWithAQueryInFlight(t *testing.T) {
+	r := startPTYChild(t, "readafter")
+	waitFor(t, "the presenter's return", r.out, func() bool { return strings.Contains(r.markers(), "returned") })
+	if !strings.Contains(r.out.String(), "\x1b[c") {
+		t.Fatalf("the program never asked for the terminal's attributes on the way out, so its "+
+			"shutdown read was not exercised:\n%q", r.out.String())
+	}
+	r.press("z\n")
+	if code := r.wait(); code != 0 {
+		t.Fatalf("exit %d; terminal:\n%q", code, r.out.String())
+	}
+	if m := r.markers(); !strings.Contains(m, `read "z\n" <nil>`) {
+		t.Fatalf("the process did not read what was typed after the presenter returned: %q", m)
 	}
 }
 
@@ -309,7 +333,7 @@ func TestPTYChild(t *testing.T) {
 			return installflow.Summary{}, err
 		}
 		switch scenario {
-		case "success", "nofds":
+		case "success", "nofds", "readafter":
 			return succeeded, endRun(rt)
 		case "failure":
 			return installflow.Summary{Outcome: installflow.RunFailed, InstallRecord: installflow.RecordUnknown,
@@ -379,6 +403,13 @@ func TestPTYChild(t *testing.T) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", strings.TrimSpace(err.Error()))
 		os.Exit(1)
+	}
+	if scenario == "readafter" {
+		// The process reads the terminal itself once the presenter has returned, as the
+		// shell does once dcctl exits.
+		mark("returned")
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		mark(fmt.Sprintf("read %q %v", line, err))
 	}
 	os.Exit(0)
 }

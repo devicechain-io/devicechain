@@ -120,9 +120,5 @@ func TestStdinGatePassesInputToTheProgram(t *testing.T) {
 
 func programInputOf(t *testing.T, g *stdinGate) io.Reader {
 	t.Helper()
-	in, err := g.programInput()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return in
+	return g.programInput()
 }

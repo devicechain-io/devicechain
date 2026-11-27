@@ -216,18 +216,17 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	var startOnce sync.Once
 	start := func() { startOnce.Do(func() { close(started) }) }
 
-	// A screen that stops accepting writes is a failed renderer. Bubble Tea discards its
-	// write errors, so they are caught here: the program is stopped and the run falls back.
+	// A screen that stops accepting writes is a failed renderer. Bubble Tea reports only
+	// the first write error, and only once Run returns, so they are caught here as they
+	// happen: the program is stopped and the run falls back.
 	var screenFailed atomic.Bool
 	screen := &latchWriter{w: p.Stdout, failed: func() {
 		if screenFailed.CompareAndSwap(false, true) {
 			go prog.Kill() // this write is the renderer's, which the shutdown waits for
 		}
 	}}
-	// Made before the program, so an input reader that cannot start leaves it unrun.
-	input, inputErr := gate.programInput()
 	opts := append([]tea.ProgramOption{
-		tea.WithInput(input), tea.WithOutput(screenOutput(screen, p.Stdout)),
+		tea.WithInput(gate.programInput()), tea.WithOutput(screenOutput(screen, p.Stdout)),
 		// The root command owns the signals; this presenter dedupes them with Ctrl+C.
 		tea.WithoutSignalHandler(),
 		// The size the probe saw. On a terminal Bubble Tea reads the real size itself and
@@ -309,19 +308,15 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	}()
 
 	saved := saveTerminal(p.Stdin, p.Stdout)
-	perr := inputErr
-	if perr == nil {
-		_, perr = prog.Run()
-	} else {
-		prog.Kill() // never run: this only releases a Send waiting on it
-	}
-	// Bubble Tea's input loop can outlive Run: the gate, not Bubble Tea, ends its read.
+	_, perr := prog.Run()
+	// Nothing of the program's reads stdin once Run has returned: a read of its input that
+	// outlived it ends at EOF at the gate.
 	gate.stopProgram()
 	close(sigDone)
 	stopSignals()
-	// 🔴 BUBBLE TEA DOES NOT RESTORE ON EVERY RETURN. When its input reader cannot start it
-	// returns after it has put the terminal in raw mode, and a screen it can no longer
-	// write never sees its own restore sequences. The modes saved before it ran are put
+	// 🔴 BUBBLE TEA DOES NOT RESTORE ON EVERY RETURN. Before v2.2.0, a program whose input
+	// reader could not start returned with the terminal still in raw mode, and a screen it
+	// can no longer write never sees its own restore sequences. The modes saved before it ran are put
 	// back here whatever happened; after any abnormal end the screen is also reset,
 	// through stderr when stdout is the stream that failed.
 	saved.restore()
