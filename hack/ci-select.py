@@ -402,6 +402,11 @@ SPLITS = {
 ALONE = {
     "backend/services/device-management": {
         "processor": {"envelope-kill": "TestKillBetweenRoundZeroPubAckAndAckLosesAndDuplicatesNothing"},
+        "model": {
+            "admission-budget": "TestAdmissionLineBudgetCountsPlannedLines",
+            "evict-bound": "TestEvictAfterCommitStartsNoEvictionPastTheBound",
+            "revoke-ceiling": "TestRevokeStopsAtThePerTenantCeiling",
+        },
     },
 }
 
