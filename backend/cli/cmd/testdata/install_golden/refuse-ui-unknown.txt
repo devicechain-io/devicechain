@@ -1,0 +1,11 @@
+args: install local --ui fancy
+stdin: ""
+exit: 1
+-- stdout (0 bytes) --
+
+-- stderr (53 bytes) --
+Error: --ui must be plain, tui or auto (got "fancy")
+
+-- engine (11 bytes) --
+not called
+

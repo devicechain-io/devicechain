@@ -3,7 +3,7 @@ stdin: ""
 exit: 0
 -- stdout (0 bytes) --
 
--- stderr (12002 bytes) --
+-- stderr (12531 bytes) --
 Prepares a cluster once, so that any number of instances can be built on it with
 "dcctl bootstrap".
 
@@ -82,6 +82,7 @@ Flags:
       --mqtt-gateway                       open TCP 8883 on the ingress controller (Traefik) so an instance can serve MQTT over TLS to devices outside the cluster through its Gateway (dcctl bootstrap|upgrade --mqtt-exposure gateway). It publishes a NEW port on the controller's load balancer, so it is off unless asked for. The broker terminates TLS itself; the controller passes the connection through by SNI. Left off, the install keeps whatever the controller's Service has; --mqtt-gateway=false closes it
       --no-cnpg                            skip the CloudNativePG operator and the database backup plugin — for a cluster that ALREADY runs CNPG, since Helm cannot adopt objects another installer created
       --no-monitoring                      skip the monitoring stack (Prometheus/Grafana); instances on the cluster render no ServiceMonitors or alerts
+      --no-splash                          with the terminal UI: skip the DeviceChain logo shown before the install starts
       --no-tls                             with --compact: instances serve plain HTTP, so cert-manager is not installed and database backups (whose plugin needs it) are off. --compact --no-tls=false keeps both
   -o, --output string                      output format: text (the output dcctl has always printed) or json (the install's events, one JSON object per line on stdout and nothing else there, for automation; it never reads stdin, so a confirmation is given with --yes or the run is refused before it changes anything) (default "text")
       --registry string                    pull the operator image from this registry (default: the published registry, or the local one with --build)
@@ -91,6 +92,7 @@ Flags:
       --restore-rdb-from string            disaster recovery: recover the RELATIONAL store from this archive path (the serverName inside the backup bucket, e.g. dc-rdb) instead of initialising an empty database. 🔴 Only takes effect when the store is CREATED — recover by installing into a cluster whose relational store is not there, not by re-running against a live one
       --size string                        cluster size: base (the default) or compact, which is the same as --compact. The perf sizes are chosen per instance with dcctl bootstrap --size
       --skip-preflight                     skip the local-system preflight checks
+      --ui string                          how the install presents itself: plain (the text output dcctl has always printed), tui (a full-screen terminal UI, when stdin, stdout and stderr are all an interactive terminal; otherwise plain, unchanged), or auto (the terminal UI on an interactive terminal, and plain everywhere else, including with --yes or --dev). --dry-run is always plain (default "plain")
       --version string                     install the operator at this released tag (default: the release this dcctl was built for). This is the CLUSTER's version — the instances on it carry their own
   -y, --yes                                assume yes for prompts
 

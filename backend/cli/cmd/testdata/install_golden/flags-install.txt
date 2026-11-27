@@ -1,5 +1,5 @@
 command: dcctl install
-flags: 38
+flags: 40
 
 --alert-config
   type: string
@@ -152,6 +152,12 @@ flags: 38
   no-value default: "true"
   usage: skip the monitoring stack (Prometheus/Grafana); instances on the cluster render no ServiceMonitors or alerts
 
+--no-splash
+  type: bool
+  default: "false"
+  no-value default: "true"
+  usage: with the terminal UI: skip the DeviceChain logo shown before the install starts
+
 --no-tls
   type: bool
   default: "false"
@@ -200,6 +206,11 @@ flags: 38
   default: "false"
   no-value default: "true"
   usage: skip the local-system preflight checks
+
+--ui
+  type: string
+  default: "plain"
+  usage: how the install presents itself: plain (the text output dcctl has always printed), tui (a full-screen terminal UI, when stdin, stdout and stderr are all an interactive terminal; otherwise plain, unchanged), or auto (the terminal UI on an interactive terminal, and plain everywhere else, including with --yes or --dev). --dry-run is always plain
 
 --version
   type: string
