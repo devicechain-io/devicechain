@@ -680,13 +680,17 @@ jobs:
 
       # Which packages (and, for a shard, which tests) this leg runs; the test and race steps both
       # read the result. hack/go-leg.sh derives a catch-all as `go list ./...` minus the split
-      # packages and proves the arithmetic, and deals a shard round-robin over `go test -list`.
+      # packages and proves the arithmetic, and deals a shard round-robin over `go test -list`,
+      # less the package's ALONE tests (LEG_SKIP_TESTS), each of which runs by name in a leg of
+      # its own (LEG_TESTS): a test too long for any shard to balance (hack/ci-select.py ALONE).
       - name: Resolve this leg's packages
         if: ${{ !matrix.entry.batch }}
         env:
           LEG_PKGS: ${{ matrix.entry.pkgs }}
           LEG_EXCLUDE: ${{ matrix.entry.exclude }}
           LEG_SHARD: ${{ matrix.entry.shard }}
+          LEG_TESTS: ${{ matrix.entry.tests }}
+          LEG_SKIP_TESTS: ${{ matrix.entry.skip_tests }}
         run: hack/go-leg.sh "${{ matrix.entry.module }}" "$RUNNER_TEMP/leg-args"
 
       - name: gofmt
