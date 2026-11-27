@@ -108,13 +108,10 @@ export function MetricDefinitionForm({
 
   const chooseDataType = (next: string) => {
     setDataType(next);
-    if (next === METRIC_TEXT_TYPE) {
-      // Clear what the numeric fields held so a stale value is never sent for a text metric.
-      setUnit('');
-      setMinValue('');
-      setMaxValue('');
-      if (!editing) setCalculated(false);
-    }
+    // The unit and bounds are KEPT while STRING is chosen, only hidden: switching back restores
+    // them, and a save while STRING is chosen sends none of them (see submit), so nothing stale
+    // reaches a text metric either way.
+    if (next === METRIC_TEXT_TYPE && !editing) setCalculated(false);
   };
 
   const submit = async () => {
