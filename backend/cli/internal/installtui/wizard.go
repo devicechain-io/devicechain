@@ -34,6 +34,12 @@ type Wizard struct {
 	Review  Review
 	Command result.Command
 	Shell   result.Shell
+	// Advisory is the plan's advisory diagnostics of an existing cluster, run on the
+	// preflight screen after the checks. 🔴 THEY NEVER BLOCK CONTINUE: a failure they
+	// report is shown as a warning, their tally is not the run's, and an error is one
+	// UNKNOWN row. The run's own preflight never runs them. Nil: there are none (a kind
+	// target, or --skip-preflight). A replan carries its own (Replanned.Advisory).
+	Advisory installflow.PreflightRunner
 }
 
 // Review is the plan as the review screen states it: built by the command from the
@@ -99,6 +105,8 @@ type Replanned struct {
 	Settings  []Setting
 	Review    Review
 	Command   result.Command
+	// Advisory is the new plan's advisory checks (see Wizard.Advisory); nil: none.
+	Advisory installflow.PreflightRunner
 }
 
 // Setting is one row of the advanced drawer. Every text is sanitised and redacted

@@ -86,6 +86,9 @@ type prerun struct {
 	// for the plan it was given on, and for no other.
 	plan     int
 	approval *approval
+	// advisory is the plan's advisory checks, run after runner, on this screen only;
+	// see Wizard.Advisory. A replan replaces it with the new plan's.
+	advisory installflow.PreflightRunner
 
 	// checks counts the screen's preflight runs still going; wait joins them.
 	checks sync.WaitGroup
@@ -106,7 +109,8 @@ func newPrerun(ctx context.Context, caps terminal.Capabilities, w *Wizard, runne
 	p := &prerun{caps: caps, theme: theme, keys: newPrerunKeys(theme.Glyphs),
 		redact: redact, ctx: ctx, width: caps.Width, height: caps.Height,
 		facts: w.Facts, settings: w.Settings, contexts: w.Contexts, replan: w.Replan, runner: runner,
-		review: w.Review, command: w.Command, shell: w.Shell}
+		review: w.Review, command: w.Command, shell: w.Shell,
+		advisory: w.Advisory}
 	p.pf = newPreflightState()
 	return p
 }

@@ -1,0 +1,24 @@
+╭─\x1b[1m DeviceChain · dcctl install · context prod \x1b[m─────────────────\x1b[38;5;109m dcctl v1.12.0 \x1b[m─╮
+│ \x1b[1mPreflight\x1b[m · read-only checks · footprint Standard                            │
+│                                                                              │
+│ … 6 lines above                                                              │
+│   \x1b[38;5;78mPASS\x1b[m        engine memory: 16Gi                                            │
+│ \x1b[1mKubernetes server version\x1b[m                                                    │
+│   \x1b[38;5;78mPASS\x1b[m        server v1.33.1                                                 │
+│ \x1b[1mExisting cluster (advisory)\x1b[m                                                  │
+│   \x1b[38;5;78mPASS\x1b[m        API server name api.prod.example resolves                      │
+│   \x1b[38;5;78mPASS\x1b[m        API server api.prod.example answered over verified TLS         │
+│   \x1b[38;5;78mPASS\x1b[m        authentication: this context's credentials are accepted        │
+│ › \x1b[7mWARN\x1b[m        may create secrets: not permitted                              │
+│               fix: installing the shared prerequisites needs cluster-admin   │
+│                    on this cluster; use a context that has it, or ask the    │
+│                    cluster's administrator                                   │
+│ … 4 lines below                                                              │
+│                                                                              │
+│ \x1b[38;5;221mPreflight: ready, with 1 warning and 1 check not determined. Review them\x1b[m     │
+│ \x1b[38;5;221mbefore you continue.\x1b[m                                                         │
+│                                                                              │
+│   Continue  › \x1b[7mRecheck\x1b[m    Switch to Compact    Exit                           │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;5;109m↑/↓ check · Tab action · Enter select · Esc back · q exit · Ctrl+C exit\x1b[m      │
+╰──────────────────────────────────────────────────────────────────────────────╯

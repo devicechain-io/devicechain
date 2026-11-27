@@ -127,6 +127,12 @@ var preScenarios = []struct {
 		press(p, "enter")
 		return p
 	}},
+	{"preflight-advisory", func(c terminal.Capabilities) *prerun {
+		w := &Wizard{Facts: prodFacts(), Replan: noReplan, Advisory: cloudAdvisory()}
+		p := newPrerun(context.Background(), c, w, healthyPreflight(), nil)
+		press(p, "enter")
+		return p
+	}},
 	{"preflight-switch", func(c terminal.Capabilities) *prerun {
 		p := newPrerun(context.Background(), c, &Wizard{Facts: preFacts(), Replan: noReplan}, laptopPreflight(), nil)
 		press(p, "enter", "tab", "enter")

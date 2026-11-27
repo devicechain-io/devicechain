@@ -1,0 +1,24 @@
+╭─ DeviceChain · dcctl install · context prod ───────────────── dcctl v1.12.0 ─╮
+│ Preflight · read-only checks · footprint Standard                            │
+│                                                                              │
+│ … 6 lines above                                                              │
+│   PASS        engine memory: 16Gi                                            │
+│ Kubernetes server version                                                    │
+│   PASS        server v1.33.1                                                 │
+│ Existing cluster (advisory)                                                  │
+│   PASS        API server name api.prod.example resolves                      │
+│   PASS        API server api.prod.example answered over verified TLS         │
+│   PASS        authentication: this context's credentials are accepted        │
+│ › WARN        may create secrets: not permitted                              │
+│               fix: installing the shared prerequisites needs cluster-admin   │
+│                    on this cluster; use a context that has it, or ask the    │
+│                    cluster's administrator                                   │
+│ … 4 lines below                                                              │
+│                                                                              │
+│ Preflight: ready, with 1 warning and 1 check not determined. Review them     │
+│ before you continue.                                                         │
+│                                                                              │
+│   Continue  › Recheck    Switch to Compact    Exit                           │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ ↑/↓ check · Tab action · Enter select · Esc back · q exit · Ctrl+C exit      │
+╰──────────────────────────────────────────────────────────────────────────────╯

@@ -1,0 +1,40 @@
++- DeviceChain - dcctl install - context prod --------------------------------------------------------- dcctl v1.12.0 -+
+| Preflight - read-only checks - footprint Standard                                                                    |
+|                                                                                                                      |
+| Tooling                                                                                                              |
+|   PASS        kubectl v1.33.1                                                                                        |
+|   PASS        tofu v1.10.6                                                                                           |
+| Docker engine                                                                                                        |
+|   PASS        docker daemon reachable                                                                                |
+|   PASS        engine CPUs: 8                                                                                         |
+|   PASS        engine memory: 16Gi                                                                                    |
+| Kubernetes server version                                                                                            |
+|   PASS        server v1.33.1                                                                                         |
+| Existing cluster (advisory)                                                                                          |
+|   PASS        API server name api.prod.example resolves                                                              |
+|   PASS        API server api.prod.example answered over verified TLS                                                 |
+|   PASS        authentication: this context's credentials are accepted                                                |
+| > WARN        may create secrets: not permitted                                                                      |
+|               fix: installing the shared prerequisites needs cluster-admin on this cluster; use a context that has   |
+|                    it, or ask the cluster's administrator                                                            |
+|   UNKNOWN     may create clusterroles.rbac.authorization.k8s.io: the API server could not decide                     |
+|   INFO        image registry ghcr.io answers from this machine (the cluster's nodes pull from it themselves)         |
+|                                                                                                                      |
+| Preflight: ready, with 1 warning and 1 check not determined. Review them before you continue.                        |
+|                                                                                                                      |
+|   Continue  > Recheck    Switch to Compact    Exit                                                                   |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
++----------------------------------------------------------------------------------------------------------------------+
+| up/down check - Tab action - Enter select - Esc back - q exit - Ctrl+C exit                                          |
++----------------------------------------------------------------------------------------------------------------------+

@@ -1,0 +1,20 @@
+\x1b[1mDeviceChain - dcctl install - context prod\x1b[m     dcctl v1.12.0
+------------------------------------------------------------
+\x1b[1mPreflight\x1b[m - read-only checks - footprint Standard
+
+... 14 lines above
+              accepted
+> \x1b[7mWARN\x1b[m        may create secrets: not permitted
+              fix: installing the shared prerequisites needs
+                   cluster-admin on this cluster; use a
+                   context that has it, or ask the cluster's
+                   administrator
+... 6 lines below
+
+Preflight: ready, with 1 warning and 1 check not determined.
+Review them before you continue.
+
+  Continue  > \x1b[7mRecheck\x1b[m    Switch to Compact    Exit
+------------------------------------------------------------
+up/down check - Tab action - Enter select - Esc back
+q exit - Ctrl+C exit
