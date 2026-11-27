@@ -184,13 +184,6 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	}, p.options...)
 	mo := modelOptions{}
 	if p.Wizard != nil {
-		// Registered before any screen draws: strictly when the hub takes the value,
-		// else as a whole token, as the engine registers what it finds.
-		for _, s := range p.Wizard.Secrets {
-			if hub.AddSecret(s) != nil {
-				_ = hub.AddRedaction(s)
-			}
-		}
 		mo.version = splashVersion(p.Wizard, hub.Redact)
 		if !p.Caps.ProgressOnly {
 			// The checks on screen run under the run's context, so an interrupt reaches them.

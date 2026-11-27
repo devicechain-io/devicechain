@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"unicode"
+
+	"github.com/devicechain-io/dcctl/internal/installflow"
 )
 
 type Shell uint8
@@ -29,8 +32,9 @@ const powerShellValue = "<value PowerShell cannot pass exactly: supply it yourse
 // parsed arguments by its legacy rules, and the program splits that line by the
 // Microsoft C runtime's:
 //
-//   - an argument containing whitespace is wrapped in double quotes, and nothing
-//     inside it is escaped;
+//   - an argument containing whitespace (any Unicode space, U+00A0 and U+2003
+//     included, not only the space and tab the runtime splits on) is wrapped in
+//     double quotes, and nothing inside it is escaped;
 //   - an embedded double quote is passed through raw, so the runtime reads it as
 //     the start or end of a quoted span and drops it (or splits the argument);
 //   - backslashes are passed through, and a run of them before the closing quote
@@ -38,14 +42,27 @@ const powerShellValue = "<value PowerShell cannot pass exactly: supply it yourse
 //   - an empty argument is dropped altogether.
 //
 // So an argument is passed exactly when it is not empty, holds no double quote,
-// and, when it is wrapped, does not end in a backslash. PowerShell 7.3 and later
-// escape correctly, but the command must be right in 5.1 too, so anything else is
-// never rendered as runnable.
+// and, when it is wrapped, does not end in a backslash. And since how a non-ASCII
+// character survives the console's code page beside the characters the runtime
+// gives meaning to is not something to bet a command on, a non-ASCII character
+// next to a backslash is refused too. PowerShell 7.3 and later escape correctly,
+// but the command must be right in 5.1 too, so anything else is never rendered as
+// runnable.
 func nativeSafe(arg string) bool {
 	if arg == "" || strings.Contains(arg, `"`) {
 		return false
 	}
-	return !(strings.ContainsAny(arg, " \t") && strings.HasSuffix(arg, `\`))
+	rs := []rune(arg)
+	wrapped := false
+	for i, r := range rs {
+		if unicode.IsSpace(r) {
+			wrapped = true
+		}
+		if r > unicode.MaxASCII && ((i > 0 && rs[i-1] == '\\') || (i+1 < len(rs) && rs[i+1] == '\\')) {
+			return false
+		}
+	}
+	return !(wrapped && strings.HasSuffix(arg, `\`))
 }
 
 // Command contains only display-safe arguments. Template means credentials must
@@ -171,4 +188,60 @@ func secretFlagValue(name, value string) bool {
 		}
 	}
 	return false
+}
+
+// redactedPart replaces a URL's userinfo, query or fragment in a display.
+const redactedPart = "<redacted>"
+
+// DisplayValue is a flag's value as a screen may state it. A value SecretValue
+// passes is itself. A webhook flag's value is never shown (false). Otherwise each
+// URL in it is shown with its userinfo, query and fragment replaced by a
+// placeholder, and the result is checked against every credential part of the
+// value, as written and as decoded: one that survives, or a URL that cannot be
+// parsed, means nothing can be shown (false).
+func DisplayValue(name, value string) (string, bool) {
+	if !secretFlagValue(name, value) {
+		return value, true
+	}
+	if name == "alert-webhook" || name == "alert-watchdog-webhook" {
+		return "", false
+	}
+	words := strings.Fields(value)
+	for i, word := range words {
+		u, err := url.Parse(word)
+		if err != nil {
+			if strings.Contains(word, "://") {
+				return "", false
+			}
+			continue
+		}
+		if u.Scheme == "" && u.Host == "" {
+			continue
+		}
+		if u.User == nil && u.RawQuery == "" && u.Fragment == "" {
+			continue
+		}
+		var b strings.Builder
+		if u.Scheme != "" {
+			b.WriteString(u.Scheme + "://")
+		}
+		if u.User != nil {
+			b.WriteString(redactedPart + "@")
+		}
+		b.WriteString(u.Host + u.EscapedPath())
+		if u.RawQuery != "" || u.ForceQuery {
+			b.WriteString("?" + redactedPart)
+		}
+		if u.Fragment != "" {
+			b.WriteString("#" + redactedPart)
+		}
+		words[i] = b.String()
+	}
+	shown := strings.Join(words, " ")
+	for _, part := range installflow.URLCredentials(value) {
+		if strings.Contains(shown, part) {
+			return "", false
+		}
+	}
+	return shown, true
 }

@@ -25,7 +25,23 @@ func CommandLines(c Command, shell Shell, redact func(string) string, width int)
 	in := Input{Shell: shell, Redact: redact}
 	words := c.words(shell)
 	joined := strings.Join(words, " ")
-	if s := in.shown(joined); s != joined {
+	// 🔴 NEVER CUT. The words were each checked as drawable already; the whole is
+	// checked against redaction UNCAPPED (as a composed line is, see unredacted),
+	// since sanitising's length cap would cut a long command inside an argument and
+	// drop what follows it.
+	if redact != nil && !in.unredacted(joined) {
+		s, settled := joined, false
+		for range maxRedactPasses {
+			next := redact(s)
+			if next == s {
+				settled = true
+				break
+			}
+			s = next
+		}
+		if !settled {
+			return nil, false
+		}
 		words = splitCommand(s, shell)
 	}
 	cont := " \\"

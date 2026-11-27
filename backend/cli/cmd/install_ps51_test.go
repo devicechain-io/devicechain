@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // ps51Native is what dcctl.exe receives when Windows PowerShell 5.1 runs it with argv
@@ -17,12 +18,13 @@ import (
 //
 // 5.1 builds the command line:
 //   - an empty argument is dropped;
-//   - an argument containing a space or a tab is wrapped in double quotes;
+//   - an argument containing whitespace is wrapped in double quotes: any Unicode
+//     space (char.IsWhiteSpace), U+00A0 and U+2003 included;
 //   - nothing is escaped: an embedded double quote, or backslashes before the closing
 //     quote it added, reach the program raw.
 //
 // The C runtime splits it:
-//   - whitespace outside quotes separates arguments;
+//   - a space or a tab outside quotes separates arguments (no other whitespace does);
 //   - a double quote toggles quoting and is not kept; inside quotes, two double
 //     quotes in a row are one literal quote;
 //   - 2n backslashes before a quote are n backslashes and the quote does its work;
@@ -33,7 +35,7 @@ func ps51Native(argv []string) []string {
 	for _, a := range argv {
 		switch {
 		case a == "":
-		case strings.ContainsAny(a, " \t"):
+		case strings.IndexFunc(a, unicode.IsSpace) >= 0:
 			parts = append(parts, `"`+a+`"`)
 		default:
 			parts = append(parts, a)
@@ -107,6 +109,11 @@ func TestPS51ModelReproducesTheKnownFailures(t *testing.T) {
 		{[]string{`--alert-email=""`}, []string{"--alert-email="}},
 		{[]string{`C:\dir with space\`, "next"}, []string{`C:\dir with space" next`}},
 		{[]string{"", "after"}, []string{"after"}},
+		// Unicode spaces get the argument wrapped, so a trailing backslash escapes the
+		// closing quote, though the runtime does not split on them.
+		{[]string{"team prod\\", "next"}, []string{"team prod\" next"}},
+		{[]string{"team prod\\", "next"}, []string{"team prod\" next"}},
+		{[]string{"team prod"}, []string{"team prod"}},
 	} {
 		if got := ps51Native(c.in); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("ps51Native(%q) = %q, want %q", c.in, got, c.want)

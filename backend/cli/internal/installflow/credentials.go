@@ -10,9 +10,8 @@ import (
 
 // URLCredentials are the credential parts of every URL in s: its userinfo (as
 // written and decoded, and the password alone), its query and its fragment, the
-// parts a URL carries a token in. A value with no such part gives none. They are
-// for registration with a hub, so that a text that echoes the URL is redacted of
-// them, whichever surface it reaches.
+// parts a URL carries a token in, each as written and as decoded. A value with no
+// such part gives none. A display of the URL that holds any of them is not safe.
 func URLCredentials(s string) []string {
 	var out []string
 	add := func(v string) {
@@ -36,8 +35,16 @@ func URLCredentials(s string) []string {
 				add(p)
 			}
 		}
+		// Each in the form it was written and decoded: a percent-encoded token is
+		// still the token.
 		add(u.RawQuery)
+		if q, err := url.QueryUnescape(u.RawQuery); err == nil && q != u.RawQuery {
+			add(q)
+		}
 		add(u.Fragment)
+		if f := u.EscapedFragment(); f != u.Fragment {
+			add(f)
+		}
 	}
 	return out
 }

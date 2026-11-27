@@ -473,25 +473,6 @@ func TestATooWideCommandIsNotDrawnSplit(t *testing.T) {
 	}
 }
 
-// The request's credentials are registered with the hub before any screen draws: a
-// value that turns up in any text the screens show is redacted.
-func TestTheWizardsSecretsAreRedactedFromEveryScreen(t *testing.T) {
-	const canary = "dcCanaryWizardSecret_x81Lq"
-	f := preFacts()
-	f.Images = "published images v1.12.0 from https://op:" + canary + "@registry.example.test"
-	w := &Wizard{Facts: f, Review: testReview(f), Command: testCommand(f), Secrets: []string{canary}}
-	h := wizardHarness(t, w)
-	done := h.runWith(engineFunc(func(context.Context, installflow.Runtime) (installflow.Summary, error) {
-		return succeeded, nil
-	}), runnerOf(preCheck(installflow.CheckPass, "kubectl", "")))
-	waitFor(t, "the welcome screen", h.out, screenShows(h.out, welcomeNoChanges))
-	h.press("q\r")
-	_ = h.result(done)
-	if strings.Contains(h.out.String(), canary) || !strings.Contains(h.out.String(), "registry.example.test") {
-		t.Fatalf("the secret was drawn, or the screen did not show the row:\n%q", h.out.String())
-	}
-}
-
 // The approval answers for the kind cluster the screens' facts name, which is the
 // name the plan resolved (an empty --cluster= is the default cluster).
 func TestTheApprovalAnswersForTheResolvedClusterName(t *testing.T) {

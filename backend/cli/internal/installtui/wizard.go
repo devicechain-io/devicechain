@@ -34,10 +34,6 @@ type Wizard struct {
 	Review  Review
 	Command result.Command
 	Shell   result.Shell
-	// Secrets are the credential values the request carries (a webhook, a URL's
-	// userinfo). The presenter registers them with its hub before anything is drawn,
-	// so no screen, log line or event shows them, whichever text they turn up in.
-	Secrets []string
 }
 
 // Review is the plan as the review screen states it: built by the command from the

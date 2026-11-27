@@ -8,8 +8,6 @@ import (
 	"strconv"
 
 	"github.com/spf13/pflag"
-
-	"github.com/devicechain-io/dcctl/internal/installflow"
 )
 
 // PresentationFlags are the install flags that choose how a run is shown, never
@@ -338,21 +336,3 @@ func (c Choices) Flags() []Flag {
 // URL carrying userinfo, a query or a fragment. The equivalent command replaces exactly
 // these with a placeholder.
 func SecretValue(name, value string) bool { return secretFlagValue(name, value) }
-
-// Credentials are the values among the choices that SecretValue says must never be
-// shown, and the credential parts of each URL among them (userinfo, query and
-// fragment). A presenter registers them with its hub before it draws anything, so the
-// screens, the log ring and every event are redacted of them, not only the
-// equivalent command.
-func (c Choices) Credentials() []string {
-	var out []string
-	for _, f := range c.flagValues() {
-		for _, v := range f.values {
-			if secretFlagValue(f.name, v) {
-				out = append(out, v)
-				out = append(out, installflow.URLCredentials(v)...)
-			}
-		}
-	}
-	return out
-}

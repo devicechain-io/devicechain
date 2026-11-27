@@ -147,28 +147,25 @@ func TestTheReviewHidesCredentials(t *testing.T) {
 	}
 }
 
-// 🔴 A URL'S CREDENTIAL NEVER REACHES THE REVIEW. --restore-rdb-from carrying userinfo
-// passes preparation; the review row hides it by the serialiser's own classification,
-// the command has a placeholder and is a template, and its credential parts are handed
-// to the presenter to register, so every other surface is redacted of them too.
-func TestTheReviewHidesAURLsUserinfo(t *testing.T) {
-	saveChoiceFlags(t)
-	const uri = "s3://dcuser:dcCanaryRestorePw_93Kq@bucket/archive"
-	w, _ := wizardFor(t, "--restore-rdb-from", uri)
-	text := reviewText(w.Review)
-	if strings.Contains(text, "dcCanaryRestorePw_93Kq") || strings.Contains(text, "dcuser") ||
-		!strings.Contains(text, configuredHidden) {
-		t.Fatalf("the review shows the restore source:\n%s", text)
-	}
-	if !w.Command.Template || strings.Contains(w.Command.Line, "dcCanaryRestorePw_93Kq") {
-		t.Fatalf("command %+v", w.Command)
-	}
-	var registered bool
-	for _, s := range w.Secrets {
-		registered = registered || s == "dcCanaryRestorePw_93Kq"
-	}
-	if !registered {
-		t.Fatalf("the password is not handed to the hub: %q", w.Secrets)
+// 🔴 A URL'S CREDENTIAL NEVER REACHES THE REVIEW. --restore-rdb-from carrying userinfo,
+// a query or a fragment (percent-encoded or not) passes preparation; the review row
+// shows the URL with those parts replaced, by the serialiser's own classification, and
+// the command has a placeholder and is a template.
+func TestTheReviewHidesAURLsCredentials(t *testing.T) {
+	for _, c := range []struct{ uri, want string }{
+		{"s3://dcuser:dcCanaryRestorePw_93Kq@bucket/archive", "s3://<redacted>@bucket/archive"},
+		{"s3://bucket/archive?token=dcCanaryRestoreTok_71Mz", "s3://bucket/archive?<redacted>"},
+		{"s3://bucket/archive#dcCanary%52estoreFrag_44Pw", "s3://bucket/archive#<redacted>"},
+	} {
+		saveChoiceFlags(t)
+		w, _ := wizardFor(t, "--restore-rdb-from", c.uri)
+		text := reviewText(w.Review)
+		if strings.Contains(text, "dcCanary") || strings.Contains(text, "dcuser") || !strings.Contains(text, c.want) {
+			t.Fatalf("%s: the review shows:\n%s", c.uri, text)
+		}
+		if !w.Command.Template || strings.Contains(w.Command.Line, "dcCanary") {
+			t.Fatalf("%s: command %+v", c.uri, w.Command)
+		}
 	}
 }
 

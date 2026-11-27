@@ -141,3 +141,46 @@ func TestPowerShellRefusesWhatItCannotPassExactly(t *testing.T) {
 		t.Fatalf("POSIX %+v", sh)
 	}
 }
+
+// A URL is displayed with its userinfo, query and fragment replaced, whether they were
+// written raw or percent-encoded; a webhook, or a URL that cannot be parsed, is not
+// displayed at all.
+func TestDisplayValueReplacesEveryURLCredential(t *testing.T) {
+	for _, c := range []struct{ name, in, want string }{
+		{"registry", "registry.example.test/dc", "registry.example.test/dc"},
+		{"restore-rdb-from", "dc-rdb", "dc-rdb"},
+		{"registry", "https://u:p%40ssw0rd@registry.example.test/dc", "https://<redacted>@registry.example.test/dc"},
+		{"restore-rdb-from", "s3://bucket/rdb?token=t%6Fken99", "s3://bucket/rdb?<redacted>"},
+		{"restore-rdb-from", "s3://bucket/rdb#fr%61gment99", "s3://bucket/rdb#<redacted>"},
+	} {
+		got, ok := DisplayValue(c.name, c.in)
+		if !ok || got != c.want {
+			t.Errorf("DisplayValue(%s, %q) = %q %v, want %q", c.name, c.in, got, ok, c.want)
+		}
+	}
+	for _, c := range [][2]string{{"alert-webhook", "https://hooks.example.test/x"}, {"registry", "https://u:p@[::1"}} {
+		if got, ok := DisplayValue(c[0], c[1]); ok {
+			t.Errorf("DisplayValue(%s, %q) shows %q", c[0], c[1], got)
+		}
+	}
+}
+
+// Unicode whitespace gets an argument wrapped by PowerShell 5.1 just as a space does,
+// so a trailing backslash then escapes the closing quote; and a non-ASCII character
+// beside a backslash is not bet on. Both are placeholders in a template.
+func TestPowerShellRefusesUnicodeSpacesBeforeABackslash(t *testing.T) {
+	for _, ctx := range []string{"team\u00a0prod\\", "team\u2003prod\\", "prod\\équipe"} {
+		c := Choices{Given: Presence{"kube-context": true}, KubeContext: ctx}
+		ps, err := Plan{choices: c}.Command(PowerShell, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ps.Template || !strings.Contains(ps.Line, powerShellValue) {
+			t.Errorf("%q: PowerShell %+v", ctx, ps)
+		}
+	}
+	c := Choices{Given: Presence{"kube-context": true}, KubeContext: "team\u00a0prod"}
+	if ps, _ := (Plan{choices: c}).Command(PowerShell, false); ps.Template {
+		t.Errorf("a Unicode space with no backslash is passed exactly: %+v", ps)
+	}
+}

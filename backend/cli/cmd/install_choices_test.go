@@ -102,6 +102,9 @@ func TestInstallChoicesCobraRoundTrip(t *testing.T) {
 		{"size alias", []string{"--size=compact", "--no-tls=false"}},
 		{"remaining flags", []string{"--allow-legacy-db-removal=false", "--aws-nlb=traefik", "--build=false", "--clear-alert-routing=false", "--compact=false", "--dev=false", "--dry-run=false", "--ha=false", "--help=false", "--no-cnpg=false", "--no-monitoring=false", "--no-tls=false", "--remove-legacy-ingress=false", "--alert-webhook=", "--alert-watchdog-webhook=", "--version=v1.9.0", "-y"}},
 		{"empty repeatable", []string{"--alert-email=", "--database-node-selector=", "--database-toleration="}},
+		{"unicode spaces before a trailing backslash", []string{"--kube-context=team prod\\",
+			"--registry=registry.example.test/team lab\\"}},
+		{"unicode spaces alone", []string{"--kube-context=team prod", "--cluster=team lab"}},
 	}
 	covered := map[string]bool{}
 	// How a run is shown is not a choice, so no plan carries it.

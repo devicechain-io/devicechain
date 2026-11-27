@@ -133,7 +133,6 @@ func installWizardFor(provider bootstrap.Provider, choices installchoice.Choices
 		Review:   wizardReview(prepared),
 		Command:  wizardCommand(prepared, shell),
 		Shell:    shell,
-		Secrets:  choices.Credentials(),
 		Contexts: kubeContextNames,
 		Replan: func(ed installtui.Edits) (installtui.Replanned, error) {
 			c, err := applyWizardEdits(choices, ed)
@@ -191,14 +190,15 @@ func wizardCommand(prepared installchoice.Prepared, shell result.Shell) result.C
 // not known until the install has read it from the cluster.
 const assignedAfterIdentification = "<assigned after identification>"
 
-// reviewValue is a flag's value as the review may state it: hidden whenever the
-// equivalent command would replace it with a placeholder (installchoice.SecretValue,
-// the serialiser's own classification).
+// reviewValue is a flag's value as the review may state it, structurally: a URL the
+// equivalent command would replace with a placeholder (installchoice.SecretValue, the
+// serialiser's own classification) is shown with its userinfo, query and fragment
+// replaced, and a value that cannot be shown that way safely is hidden whole.
 func reviewValue(flag, value string) string {
-	if installchoice.SecretValue(flag, value) {
-		return configuredHidden
+	if shown, ok := installchoice.DisplayValue(flag, value); ok {
+		return shown
 	}
-	return value
+	return configuredHidden
 }
 
 // wizardReview is the plan as the review screen states it, from the resolved request:
