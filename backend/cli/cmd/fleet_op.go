@@ -31,11 +31,13 @@ executable operation kinds and orphaned device attribute and generation rows in 
 Requires fleet:operate; scoped members are refused.
 
 Exit status is zero only when enforcement is ENFORCED and orphanedAttributeRows is zero; that
-says the database enforces the writer protocol, not that any operation kind is executable. If the
-orphan count cannot be read the command reports the error and exits non-zero. The query is an
-expensive diagnostic (it counts rows); run it when you need the answer, do not poll it.
-In v1.9 enforcement is not installed and no kind is executable. The non-zero exit is
-expected until the release that installs enforcement. Use -o json for the four facts as JSON.`,
+says the database enforces the writer protocol.
+From v1.10, an upgraded instance with enforcement ENFORCED and zero orphaned rows lists
+config.set as executable. In v1.9 enforcement is not installed and no kind is executable, so
+the command exits non-zero.
+If the orphan count cannot be read the command reports the error and exits non-zero. The query
+is an expensive diagnostic (it counts rows); run it when you need the answer, do not poll it.
+Use -o json for the four facts as JSON.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE:         runFleetOpReadiness,

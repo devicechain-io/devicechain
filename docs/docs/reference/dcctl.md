@@ -34,7 +34,7 @@ dcctl [command]
 * [dcctl instances](#dcctl-instances)	 - Inspect the DeviceChain instances on this machine
 * [dcctl preflight](#dcctl-preflight)	 - Check local prerequisites for installing a cluster
 * [dcctl presence](#dcctl-presence)	 - Inspect and repair device presence
-* [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files (preview)
+* [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files
 * [dcctl relationship](#dcctl-relationship)	 - Add, list and remove typed entity relationships
 * [dcctl resgen](#dcctl-resgen)	 - Generate configuration resources
 * [dcctl restore](#dcctl-restore)	 - Verify a backup and print a read-only restore plan
@@ -42,7 +42,7 @@ dcctl [command]
 * [dcctl setup](#dcctl-setup)	 - Preview. Guided set-up: a cluster, then an instance on it
 * [dcctl sim](#dcctl-sim)	 - Create and drive DeviceChain simulations
 * [dcctl tenant-deletion](#dcctl-tenant-deletion)	 - Check whether a deleted tenant's data is established as erased
-* [dcctl test](#dcctl-test)	 - Run rule unit tests against a tenant's detection rules (preview)
+* [dcctl test](#dcctl-test)	 - Run rule unit tests against a tenant's detection rules
 * [dcctl upgrade](#dcctl-upgrade)	 - Move a live instance onto a released version
 * [dcctl version](#dcctl-version)	 - Get version info
 
@@ -904,11 +904,13 @@ executable operation kinds and orphaned device attribute and generation rows in 
 Requires fleet:operate; scoped members are refused.
 
 Exit status is zero only when enforcement is ENFORCED and orphanedAttributeRows is zero; that
-says the database enforces the writer protocol, not that any operation kind is executable. If the
-orphan count cannot be read the command reports the error and exits non-zero. The query is an
-expensive diagnostic (it counts rows); run it when you need the answer, do not poll it.
-In v1.9 enforcement is not installed and no kind is executable. The non-zero exit is
-expected until the release that installs enforcement. Use -o json for the four facts as JSON.
+says the database enforces the writer protocol.
+From v1.10, an upgraded instance with enforcement ENFORCED and zero orphaned rows lists
+config.set as executable. In v1.9 enforcement is not installed and no kind is executable, so
+the command exits non-zero.
+If the orphan count cannot be read the command reports the error and exits non-zero. The query
+is an expensive diagnostic (it counts rows); run it when you need the answer, do not poll it.
+Use -o json for the four facts as JSON.
 
 ```
 dcctl bulk-change readiness [flags]
@@ -2447,7 +2449,7 @@ dcctl presence demote [flags]
 
 ## dcctl product {#dcctl-product}
 
-Export, plan and apply a tenant's product as files (preview)
+Export, plan and apply a tenant's product as files
 
 ### Synopsis
 
@@ -2460,8 +2462,8 @@ dashboards, outbound connectors and inbound integrations. Everything is read and
 the same tenant GraphQL the console uses, as the identity you sign in with, so the server
 authorizes every call; this command checks no permission itself.
 
-This command tree is PREVIEW: the bundle format (apiVersion product.devicechain.io/v1alpha1)
-is new and may change in a later minor release.
+The command tree and bundle format are covered by the versioning policy from v1.10; the bundle
+format keeps the version product.devicechain.io/v1alpha1.
 
 SECRETS ARE HANDLES, NEVER VALUES. The platform never reveals a stored connector credential or
 an integration's bearer token, so an export cannot contain one. A connector's credential is
@@ -2558,7 +2560,7 @@ dcctl product apply <dir> [flags]
 
 ### SEE ALSO
 
-* [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files (preview)
+* [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files
 
 ## dcctl product export {#dcctl-product-export}
 
@@ -2614,7 +2616,7 @@ dcctl product export <dir> [flags]
 
 ### SEE ALSO
 
-* [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files (preview)
+* [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files
 
 ## dcctl product plan {#dcctl-product-plan}
 
@@ -2671,7 +2673,7 @@ dcctl product plan <dir> [flags]
 
 ### SEE ALSO
 
-* [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files (preview)
+* [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files
 
 ## dcctl product rotate-integration-token {#dcctl-product-rotate-integration-token}
 
@@ -2717,7 +2719,7 @@ dcctl product rotate-integration-token <integration-token> [flags]
 
 ### SEE ALSO
 
-* [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files (preview)
+* [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files
 
 ## dcctl relationship {#dcctl-relationship}
 
@@ -3647,7 +3649,7 @@ dcctl tenant-deletion status <token> [flags]
 
 ## dcctl test {#dcctl-test}
 
-Run rule unit tests against a tenant's detection rules (preview)
+Run rule unit tests against a tenant's detection rules
 
 ### Synopsis
 
@@ -3687,8 +3689,8 @@ A directory with no test file is an error, because a run that checks nothing mus
 expectation about a rule the evaluation did not run is an error, never a pass. When the platform
 is busy, dcctl waits and retries a few times before reporting it.
 
-The file formats are in the preview tier (apiVersion devicechain.io/ruletest/v1alpha1) and may
-change in a minor release, with the change in the release notes.
+Rule testing is covered by the versioning policy from v1.10; the scenario and test file formats
+keep the version devicechain.io/ruletest/v1alpha1.
 
 The server authorizes the evaluation as the identity you sign in with (device:read). The password
 may be given in the DCCTL_PASSWORD environment variable instead of --password, which keeps it out

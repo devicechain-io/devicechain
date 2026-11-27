@@ -180,7 +180,8 @@ output "database_restored_from" {
 # module already gives for exporting its key names one level down: they are this
 # root's contract, and a caller that hard-codes them keeps working right up until
 # they change. dcctl reads these between the two applies; anyone applying the roots
-# by hand reads them with `tofu output`.
+# by hand reads each with `tofu output -raw <name>` (for example,
+# `tofu output -raw backup_endpoint_url`).
 output "backup_endpoint_url" {
   description = "S3 endpoint an instance root should archive to. Empty when backups are off here, which is the same thing as there being nothing to archive into."
   value       = local.backup_endpoint
