@@ -92,7 +92,8 @@ type cloudProbes struct {
 // Its result never carries a failure.
 func cloudDiagnosticsRunner(t cloudTarget, probes func(cloudTarget) (cloudProbes, error)) installflow.PreflightRunner {
 	return installflow.PreflightFunc(func(ctx context.Context, observe func(installflow.PreflightObservation)) (installflow.PreflightResult, error) {
-		d := &doctor{observe: observe}
+		// Bound to the screen's context, like the doctor the screen runs.
+		d := &doctor{observe: observe, ctx: ctx}
 		d.section(installplain.SectionCloud)
 		p, err := probes(t)
 		if err != nil {
@@ -164,8 +165,10 @@ const (
 )
 
 func (d *doctor) checkAPIAnswers(ctx context.Context, p cloudProbes, host, kubeContext string) apiAnswer {
-	_, err := within(ctx, cloudAPITimeout, func(context.Context) (struct{}, error) {
-		_, err := p.kube.Discovery().ServerVersion()
+	_, err := within(ctx, cloudAPITimeout, func(ctx context.Context) (struct{}, error) {
+		// Under the probe's context, so an Exit or the deadline cancels the request
+		// itself; ServerVersion() would run it on context.Background().
+		_, err := p.kube.Discovery().ServerVersionWithContext(ctx)
 		return struct{}{}, err
 	})
 	what := "API server " + host
@@ -459,6 +462,11 @@ func (d *doctor) checkRegistries(ctx context.Context, t cloudTarget, p cloudProb
 // whichever is first, so a probe that ignores its context still costs no more than d.
 // Its answer comes back over a channel, so a probe still running after its deadline
 // writes nothing the caller reads.
+//
+// 🔴 A PROBE IS JOINED, BOUNDEDLY, as the screen's commands are: past the deadline its
+// context is cancelled and within waits up to probeJoinDelay for it to stop, so a probe
+// that honours its context (every real one does) never outlives the run it belongs
+// to, and one that does not costs at most the deadline plus that delay.
 func within[T any](ctx context.Context, d time.Duration, f func(context.Context) (T, error)) (T, error) {
 	type answer struct {
 		v   T
@@ -484,10 +492,21 @@ func within[T any](ctx context.Context, d time.Duration, f func(context.Context)
 	case a := <-done:
 		return a.v, a.err
 	case <-ctx.Done():
+		err := ctx.Err()
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(probeJoinDelay):
+		}
 		var zero T
-		return zero, ctx.Err()
+		return zero, err
 	}
 }
+
+// probeJoinDelay is how long within waits for a probe it gave up on to stop: the same
+// budget the screen gives a command it killed. A variable only so a test can make a
+// probe that ignores its context give up in milliseconds.
+var probeJoinDelay = commandWaitDelay
 
 // probeClass is the kind of error a probe met, which is all a row ever says of it.
 type probeClass uint8

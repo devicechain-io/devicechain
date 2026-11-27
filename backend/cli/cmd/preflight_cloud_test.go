@@ -421,6 +421,9 @@ func TestCloudDiagnosticsHungProbesAreBounded(t *testing.T) {
 	oldConnect, oldAPI := cloudConnectTimeout, cloudAPITimeout
 	t.Cleanup(func() { cloudConnectTimeout, cloudAPITimeout = oldConnect, oldAPI })
 	cloudConnectTimeout, cloudAPITimeout = 30*time.Millisecond, 60*time.Millisecond
+	oldJoin := probeJoinDelay
+	t.Cleanup(func() { probeJoinDelay = oldJoin })
+	probeJoinDelay = 10 * time.Millisecond // the fakes ignore their cancel
 
 	f := newCloudFakes(t)
 	f.hang = true
@@ -444,6 +447,9 @@ func TestCloudDiagnosticsReviewsShareOneBudget(t *testing.T) {
 	oldAPI := cloudAPITimeout
 	t.Cleanup(func() { cloudAPITimeout = oldAPI })
 	cloudAPITimeout = 100 * time.Millisecond
+	oldJoin := probeJoinDelay
+	t.Cleanup(func() { probeJoinDelay = oldJoin })
+	probeJoinDelay = 10 * time.Millisecond // the fake ignores its cancel
 	f := newCloudFakes(t)
 	f.kube.PrependReactor("create", "selfsubjectreviews", func(a ktesting.Action) (bool, runtime.Object, error) {
 		f.block()

@@ -1,19 +1,19 @@
 +- DeviceChain - dcctl install - context prod ----------------- dcctl v1.12.0 -+
 | Preflight - read-only checks - footprint Standard                            |
 |                                                                              |
-| ... 6 lines above                                                            |
-|   PASS        engine memory: 16Gi                                            |
-| Kubernetes server version                                                    |
-|   PASS        server v1.33.1                                                 |
-| Existing cluster (advisory)                                                  |
+| ... 10 lines above                                                           |
 |   PASS        API server name api.prod.example resolves                      |
 |   PASS        API server api.prod.example answered over verified TLS         |
-|   PASS        authentication: this context's credentials are accepted        |
+|   PASS        authentication: the API server accepts this context's          |
+|               credentials                                                    |
 | > WARN        may create secrets: not permitted                              |
 |               fix: installing the shared prerequisites needs cluster-admin   |
 |                    on this cluster; use a context that has it, or ask the    |
 |                    cluster's administrator                                   |
-| ... 4 lines below                                                            |
+|   UNKNOWN     may create clusterroles.rbac.authorization.k8s.io: the API     |
+|               server could not decide                                        |
+|   INFO        image registry ghcr.io answers from this machine (the          |
+|               cluster's nodes pull from it themselves)                       |
 |                                                                              |
 | Preflight: ready, with 1 warning and 1 check not determined. Review them     |
 | before you continue.                                                         |

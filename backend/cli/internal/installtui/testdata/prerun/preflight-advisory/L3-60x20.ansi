@@ -2,14 +2,14 @@
 ────────────────────────────────────────────────────────────
 \x1b[1mPreflight\x1b[m · read-only checks · footprint Standard
 
-… 14 lines above
-              accepted
+… 15 lines above
 › \x1b[7mWARN\x1b[m        may create secrets: not permitted
               fix: installing the shared prerequisites needs
                    cluster-admin on this cluster; use a
                    context that has it, or ask the cluster's
                    administrator
-… 6 lines below
+  \x1b[38;5;221mUNKNOWN\x1b[m     may create
+… 5 lines below
 
 \x1b[38;5;221mPreflight: ready, with 1 warning and 1 check not determined.\x1b[m
 \x1b[38;5;221mReview them before you continue.\x1b[m

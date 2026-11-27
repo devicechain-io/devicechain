@@ -21,7 +21,7 @@ func cloudAdvisory() *preRunner {
 		preSection(installplain.SectionCloud),
 		preCheck(installflow.CheckPass, "API server name api.prod.example resolves", ""),
 		preCheck(installflow.CheckPass, "API server api.prod.example answered over verified TLS", ""),
-		preCheck(installflow.CheckPass, "authentication: this context's credentials are accepted", ""),
+		preCheck(installflow.CheckPass, "authentication: the API server accepts this context's credentials", ""),
 		preCheck(installflow.CheckWarn, "may create secrets: not permitted",
 			"installing the shared prerequisites needs cluster-admin on this cluster; use a context that has it, or ask the cluster's administrator"),
 		preCheck(installflow.CheckUnknown, "may create clusterroles.rbac.authorization.k8s.io: the API server could not decide", "Recheck"),

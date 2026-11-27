@@ -13,7 +13,7 @@
 │ \x1b[1mExisting cluster (advisory)\x1b[m                                                                                          │
 │   \x1b[38;5;78mPASS\x1b[m        API server name api.prod.example resolves                                                              │
 │   \x1b[38;5;78mPASS\x1b[m        API server api.prod.example answered over verified TLS                                                 │
-│   \x1b[38;5;78mPASS\x1b[m        authentication: this context's credentials are accepted                                                │
+│   \x1b[38;5;78mPASS\x1b[m        authentication: the API server accepts this context's credentials                                      │
 │ › \x1b[7mWARN\x1b[m        may create secrets: not permitted                                                                      │
 │               fix: installing the shared prerequisites needs cluster-admin on this cluster; use a context that has   │
 │                    it, or ask the cluster's administrator                                                            │

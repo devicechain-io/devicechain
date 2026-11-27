@@ -1,0 +1,16 @@
+\x1b[1mDeviceChain · dcctl install · context prod\x1b[m     \x1b[38;2;138;166;182mdcctl v1.12.0\x1b[m
+────────────────────────────────────────────────────────────
+\x1b[1mPreflight\x1b[m · read-only checks · footprint Standard
+
+… 15 lines above
+› \x1b[7mWARN\x1b[m        may create secrets: not permitted
+              fix: installing the shared prerequisites needs
+… 9 lines below
+
+\x1b[38;2;245;196;81mPreflight: ready, with 1 warning and 1 check not determined.\x1b[m
+\x1b[38;2;245;196;81mReview them before you continue.\x1b[m
+
+  Continue  › \x1b[7mRecheck\x1b[m    Switch to Compact    Exit
+────────────────────────────────────────────────────────────
+\x1b[38;2;138;166;182m↑/↓ check · Tab action · Enter select · Esc back · q exit\x1b[m
+\x1b[38;2;138;166;182mCtrl+C exit\x1b[m

@@ -13,7 +13,7 @@
 | \x1b[1mExisting cluster (advisory)\x1b[m                                                                      |
 |   PASS        API server name api.prod.example resolves                                          |
 |   PASS        API server api.prod.example answered over verified TLS                             |
-|   PASS        authentication: this context's credentials are accepted                            |
+|   PASS        authentication: the API server accepts this context's credentials                  |
 | > \x1b[7mWARN\x1b[m        may create secrets: not permitted                                                  |
 |               fix: installing the shared prerequisites needs cluster-admin on this cluster; use  |
 |                    a context that has it, or ask the cluster's administrator                     |
