@@ -520,20 +520,35 @@ dcctl bootstrap local devicechain
 
 最近三条发布线的完整说明按从新到旧排列。同一发布线内，补丁版本的说明位于其所修补版本的说明之前。
 
-### v1.10.0 — 开发中 {#v1100-upgrade}
+### v1.10.0 — 设备可接受批量变更，指标可携带文本，安装可以引导完成 {#v1100-upgrade}
 
-这些说明针对开发中的版本，会持续补充直到发布。
+`v1.10.0` 是从 `v1.9.x` 就地升级：先为集群执行 `dcctl install`，再为每个实例执行一次 `dcctl upgrade`，详见[滚动升级](#rolling-upgrades)。两条命令都要使用 **v1.10.0 的 `dcctl`**，并配合 OpenTofu 或 Terraform 1.10 及以上版本；除 `--version` 外，还要向 `dcctl install` 提供集群的设置，例如 `--cluster`、`--kube-context`、`--ha`、`--compact` 和 `--database-node-selector`。本版本追加九个迁移，在各服务首次启动时运行：`device-management` 六个，`device-state` 一个，`event-management` 一个，`update-management` 一个。每个迁移在失败后都可以重新运行。它们创建表、索引、两个函数和一个触发器，并添加可为空的列。本版本新增的配置键均为可选，除非你设置，否则不会出现，因此升级滚动期间，`v1.9.x` 的 Pod 可与 `v1.10.0` 的 Pod 并存运行。升级只能向前：无法降级回 `v1.9.x`。`dcctl upgrade` 会拒绝跳过次版本。如果你来自 `v1.8.x` 或更早版本，请先逐个升级中间的次版本，每个版本都使用其自己的 `dcctl` 和 `--version`，并遵循各自的说明（参见[受支持的升级路径](./versioning-policy.md#upgrade-paths)）。对于 `v1.9.0`，请见 [`v1.9.0` 说明](#v190-upgrade)。
+
+```bash
+dcctl install local --version v1.10.0
+dcctl upgrade local devicechain --version v1.10.0 --dry-run
+dcctl upgrade local devicechain --version v1.10.0
+```
+
+适用[版本与升级策略](./versioning-policy.md)。本版本新增受保障的接口，且不移除任何接口。它弃用了 `fleetOperationReadiness` 及其 `FleetOperationReadiness` 和 `FleetOperationEnforcement` 类型、`dcctl fleet-op readiness`、通知策略的 `deviceTypeToken` 字段，以及嵌入在备份 `endpointUrl` 中的凭据。这些都会继续可用，直到弃用期结束后，在之后的某个主版本中被拒绝。由规则发送的命令现在计入租户的出站速率，回放也按进程设有上限；请在[升级到 v1.10.0 之前](#v1100-before-upgrade)中检查这两项。Helm values 和实例配置不在受保障的兼容范围内。
+
+亮点：设备批量变更可在最多 10,000 台设备上设置一个已声明的共享配置键，并且只有设备自己上报后才算完成（预览功能）。指标可以声明为 `STRING`，其文本会显示在设备页面、仪表板中并提供给 AI 代理，但绝不会作为数字绘图。`dcctl install` 和 `dcctl bootstrap` 提供可选的终端界面，在安装任何内容之前需要你批准审核，`dcctl setup local`（预览功能）会继续创建第一个实例。`dcctl install --output json` 以事件流的形式报告安装过程，dcctl 会隐去写在 URL 中的凭据。`Instance` 资源现在也以 `core.devicechain.io/v1` 提供（预览功能），大于 64 MiB 的更新制品可以存储在 S3 上，较早的小时汇总会在后台补全。
+
+新增内容：
+
+- [升级到 v1.10.0 之前](#v1100-before-upgrade)
+- [v1.10.0 的新增内容](#v1100-whats-new)
 
 #### 升级到 v1.10.0 前 {#v1100-before-upgrade}
 
 - **数据库现在会拒绝绕过写入协议的设备属性写入。** device-management 数据库的属性表上带有一个触发器：任何对设备 `SHARED` 属性的写入，只要不是在已将 `devicechain.attr_protocol` 设为 `1` 的事务内完成，就会被以 SQLSTATE `DCAP1` 拒绝。所有 v1.9 的 Pod 本来就这样做，因此从 v1.9 正常升级不受影响。若跳过了次要版本（从 v1.8 或更早版本直接升级到本版本，这是不受支持的），尚未升级的 Pod 在滚动更新完成之前，其设备 `SHARED` 属性写入会以 `DCAP1` 失败，所有 Pod 都运行本版本后即恢复正常；期间不会写入任何错误数据。其他属性作用域和其他所有者（资产、区域、客户）不受影响。对设备共享属性手工执行的 SQL 必须改为通过 API，或在自己的事务中用 `SELECT set_config('devicechain.attr_protocol', '1', true)` 设置该标记。升级后的实例上，`bulkChangeReadiness`（以及已弃用的 `fleetOperationReadiness`）现在会报告 `enforcement: ENFORCED`。
-- **备份端点中嵌入凭据的用法已弃用。** `dcctl install` 仍接受包含用户信息、查询字符串或片段的 `endpointUrl`，但现在会发出警告，且不会显示凭据。这些值将在之后的某个主版本中被拒绝，且须在弃用期结束之后。请使用不含凭据的 `endpointUrl`，并在 `--backup-credentials-file` 中使用 `accessKeyId` 和 `secretAccessKey` 字段。端点仍会原样存储在 `dc-infra/dc-install` ConfigMap 中，因为后续的 bootstrap 和 destroy 操作需要它。
+- **备份端点中嵌入凭据的用法已弃用。** `dcctl install` 仍接受包含用户信息、查询字符串或片段的 `endpointUrl`，但现在会发出警告，且不会显示凭据。这些值将在弃用期结束后，在之后的某个主版本中被拒绝。请使用不含凭据的 `endpointUrl`，并在 `--backup-credentials-file` 中使用 `accessKeyId` 和 `secretAccessKey` 字段。端点仍会原样存储在 `dc-infra/dc-install` ConfigMap 中，因为后续的 bootstrap 和 destroy 操作需要它。
 - **设备批量变更（Preview）。** 从 v1.10 起，设备“群操作”称为“批量变更”。请使用 GraphQL `bulkChangeReadiness`（`BulkChangeReadiness`、`BulkChangeEnforcement`）和 `dcctl bulk-change readiness`。已弃用的 `fleetOperationReadiness` 字段、其 `FleetOperationReadiness` / `FleetOperationEnforcement` 类型以及 `dcctl fleet-op readiness` 仍可使用，包括 v1.9 客户端。旧命令会向 stderr 输出一行弃用提示。`fleet:operate` 权限保持不变。预览期限仍从 v1.9 开始。
 - **批量变更只在已升级的 Pod 上应用行。** device-management 从 v1.9 滚动升级到 v1.10 期间，仍运行 v1.9 的 Pod 会把批量变更调用视为未知字段，`dcctl bulk-change` 会报告 **still upgrading; retry**。整个过程中，设备仍接受来自两个版本的普通属性写入。无需任何操作：滚动升级完成后，当强制执行状态为 `ENFORCED` 且租户没有孤立属性行时，`dcctl bulk-change readiness` 会列出 `config.set`。
 - **请轮换您曾在传给 dcctl 的 URL 中携带的凭据，并以新的方式读取两个 OpenTofu 输出。** 如果您曾向 dcctl 提供带有用户名、密码或令牌的恢复源、镜像仓库、备份端点、对象存储端点或 broker URL，请将之前运行的日志和 CI 输出视为已记录了该凭据，并轮换它。另外，OpenTofu 根模块的 `backup_endpoint_url` 和 `database_restored_from` 输出以及计划中的恢复源现在属于敏感值，显示为 `(sensitive value)`。dcctl 的读取方式不变；直接读取 `tofu output` 的脚本需改用 `tofu output -raw <名称>` 或 `tofu output -json`。
 - **`Instance` 资源现在也以 `core.devicechain.io/v1`（预览版）提供服务。** `dcctl install` 应用的 CRD 在 `v1beta1` 之外同时提供 `v1`，两者的 schema 完全相同，存储形式仍为 `v1beta1`，因此不会重写任何对象，也无需转换。`dcctl` 和 operator 继续读写 `v1beta1`，现有清单照常应用。发生变化的是资源发现：Kubernetes 优先选择较新的版本，因此不带版本限定的 `kubectl get dci`，以及任何向 API 服务器请求首选版本的通用客户端，现在使用的是 `v1`。输出中会打印 `apiVersion` 的命令（例如 `kubectl get dci -o yaml`）将显示 `core.devicechain.io/v1`。只有 `Instance` 新增了 `v1`：该组的其他类型（`InstanceOperation`、`ExecutorEnrollment`、`InstanceConfiguration`）仍然只以 `v1beta1` 提供，因此把该组的首选版本套用到组内所有类型的工具必须按类型分别查询。如果脚本依赖旧版本，请使用 `kubectl get instances.v1beta1.core.devicechain.io` 固定版本。只要两个版本同时提供服务，它们在结构上就保持一致：新增字段要么同时加入两者，要么都不加。
 - **Instance 与执行器兼容性策略。** 版本策略现承诺从 v2.0 起将 `core.devicechain.io/v1 Instance` 纳入保障；v1 在 v1.10 中为预览。Instance `v1beta1` 在整个 v2.x 系列继续提供服务。v2.0 不会移除 `spec.grafanaSSO`、`spec.compact` 或 `InstanceConfiguration`。`ExecutorEnrollment` 和 `InstanceOperation` 在 v2.0 及之前保持 v1beta1；它们从预览提升的触发条件是在已发布版本中启用操作执行，并且拒绝不安全实例操作的检查已发布、已具备明确的提供方权限，而非通常的两个次版本期限。存储迁移和可执行操作尚未发布。参见[版本与升级策略](./versioning-policy.md#instance-api-compatibility)。
-- **通知策略的 `deviceTypeToken` 自 v1.10 起弃用。** 设备类型作用域从未生效。该字段在创建输入、策略输出和搜索条件中继续保留，并在之后的某个主版本拒绝它之前完全保持原有行为，且须在弃用期结束之后：非空白值写入被拒绝，已接受的策略读取时该字段为 null，筛选器只要提供了值，就不会匹配任何通过 API 创建的策略。租户级策略请省略该字段和筛选器。计划支持按锚点或组限定作用域，但不承诺发布版本。
+- **通知策略的 `deviceTypeToken` 自 v1.10 起弃用。** 设备类型作用域从未生效。该字段在创建输入、策略输出和搜索条件中继续保留，并完全保持原有行为，直到弃用期结束后在之后的某个主版本中被拒绝：非空白值写入被拒绝，已接受的策略读取时该字段为 null，筛选器只要提供了值，就不会匹配任何通过 API 创建的策略。租户级策略请省略该字段和筛选器。计划支持按锚点或组限定作用域，但不承诺发布版本。
 - **重放现在默认设有上限。** 每个 event-processing 进程同时最多运行 8 个规则预览、版本比较和 `dcctl test` 评估（`preview.maxConcurrent`），无需任何设置。因此繁忙的实例在升级后可能出现此前没有的 BUSY 拒绝或降级的预览结果；作者重试即可。如果租户需要更多，请在所有 Pod 都运行此版本后提高 `preview.maxConcurrent`。
 - **预览提升条件。** 预览规则现按接口分别规定提升条件，默认是进入预览后经过两个次版本。规则测试和产品即代码从 v1.10 起受兼容性承诺保障。代理操作和自动化审查从 v2.0 起受兼容性承诺保障，届时审批将采用通用审批模型。新列出的接口包括 command-delivery 的提议操作（含 `proposeCommand`）；MCP 的 `propose_alarm_action`、`propose_command`、`get_proposal`、`list_my_proposals`；device-management 的自动化审查操作；以及 event-processing 中仅供服务调用的 `compareRuleVersions`。升级前请阅读版本策略中各接口的条件。
 - **规则发送的命令现在计入租户的出站速率。** `sendCommand` 动作现在获得与连接器调用（`httpCall` 和 `publish`）大小相同的独立预算，沿用相同的出站设置和租户自定义上限：除非租户有自己的自定义上限，否则为每秒 100 个动作、突发 200。若某租户的规则发送的命令超过该上限，超出部分将被拒绝，而上一版本会照常发送。升级前，请仅将各租户的 sendCommand 峰值与其上限比较。筛选为 `sendCommand` 的 `react_actions_dispatched_total` 可供参考。该指标没有租户标签，因此是任一租户速率的上界。若某租户可能超过其上限，请提高该租户的自定义上限或平台默认值（检测引擎设置中的 `outboundCallsPerSecond` 和 `outboundBurst`，与 outbound-connectors 的值保持一致）。此外，同一规则一分钟内最多向同一设备发送 120 条命令，以切断通过所控制的设备不断重新触发自身的规则；该限制是固定的。两项限制都由每个副本保存在内存中，重启或故障转移后重新开始。检测引擎在重启后重新推导出的命令仍会发送，在下游只生效一次，且不占用任何一项额度。被拒绝的命令不会发送。它被记录为原因为 `shed`、详细信息为 `command_rate_limited`、`command_loop` 或 `command_guard_full` 的死信（见 `dcctl dead-letters`），并计入 `result="unwanted"` 的 `react_command_refused_total`。因租户上限尚未解析而按平台默认值放行的命令，按 `cause` 在 `react_command_governance_unresolved_admissions_total` 中单独计数。超出死信预算的拒绝会被计数，并按租户每分钟汇总为一条死信。

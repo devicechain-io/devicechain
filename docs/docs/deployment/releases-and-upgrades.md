@@ -764,9 +764,24 @@ Once you are on a release that records a declaration, ordinary in-place upgrades
 
 The three most recent release lines are documented in full, newest first. Within a line, a patch release's notes come before those of the release it patches.
 
-### v1.10.0 — in development {#v1100-upgrade}
+### v1.10.0 — devices take bulk changes, metrics carry text, and install can be guided {#v1100-upgrade}
 
-These notes are for the release in development and grow until it ships.
+`v1.10.0` is an in-place upgrade from `v1.9.x`: `dcctl install` for the cluster, then one `dcctl upgrade` for each instance, as described in [Rolling upgrades](#rolling-upgrades). Use **the v1.10.0 `dcctl` for both commands** with OpenTofu or Terraform 1.10 or later, and give `dcctl install` the cluster's settings, such as `--cluster`, `--kube-context`, `--ha`, `--compact` and `--database-node-selector`, as well as `--version`. Nine migrations are appended and run at each service's first start: six in `device-management`, one in `device-state`, one in `event-management` and one in `update-management`. Each can be re-run after a failure. They create tables, indexes, two functions and a trigger, and add nullable columns. The configuration keys this release adds are optional and absent unless you set them, so `v1.9.x` pods keep working beside `v1.10.0` pods while the upgrade rolls. The upgrade is forward-only: there is no downgrade to `v1.9.x`. `dcctl upgrade` refuses to skip a minor release. Coming from `v1.8.x` or earlier, upgrade through each intervening minor first, following each release's notes with that release's own `dcctl` and `--version` (see [Supported upgrade paths](./versioning-policy.md#upgrade-paths)). For `v1.9.0`, those are the [`v1.9.0` notes](#v190-upgrade).
+
+```bash
+dcctl install local --version v1.10.0
+dcctl upgrade local devicechain --version v1.10.0 --dry-run
+dcctl upgrade local devicechain --version v1.10.0
+```
+
+The [versioning and upgrade policy](./versioning-policy.md) applies. This release adds covered interfaces and removes none. It deprecates `fleetOperationReadiness` with its `FleetOperationReadiness` and `FleetOperationEnforcement` types, `dcctl fleet-op readiness`, the notification-policy `deviceTypeToken` field, and credentials embedded in a backup `endpointUrl`. All of them keep working until they are refused in a later major release, after the deprecation period. Rules that send commands now count against the tenant's outbound rate, and replays are capped per process; check both under [Before you upgrade to v1.10.0](#v1100-before-upgrade). Helm values and instance configuration are outside the covered compatibility surface.
+
+Highlights: device bulk changes set one declared shared configuration key on up to 10,000 devices and count a device as done only on its own report (Preview). A metric can be declared `STRING`, and its text reaches the device page, dashboards and AI agents without ever being charted as a number. `dcctl install` and `dcctl bootstrap` have an opt-in terminal UI with a review you approve before anything is installed, and `dcctl setup local` (Preview) carries on to a first instance. `dcctl install --output json` reports an install as a stream of events, and dcctl redacts credentials written into URLs. The `Instance` resource is also served as `core.devicechain.io/v1` (Preview), update artifacts larger than 64 MiB can be stored on S3, and older hour rollups are filled in the background.
+
+What is new:
+
+- [Before you upgrade to v1.10.0](#v1100-before-upgrade)
+- [What is new in v1.10.0](#v1100-whats-new)
 
 #### Before you upgrade to v1.10.0 {#v1100-before-upgrade}
 

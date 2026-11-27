@@ -809,9 +809,24 @@ Cuando esté en una versión que registra una declaración, las actualizaciones 
 
 Las tres líneas de versiones más recientes se documentan completas, de la más nueva a la más antigua. Dentro de una línea, las notas de una versión de parche van antes que las de la versión que corrige.
 
-### v1.10.0 — en desarrollo {#v1100-upgrade}
+### v1.10.0 — los dispositivos reciben cambios masivos, las métricas llevan texto y la instalación puede ser guiada {#v1100-upgrade}
 
-Estas notas son de la versión en desarrollo y crecen hasta su publicación.
+`v1.10.0` es una actualización in situ desde `v1.9.x`: `dcctl install` para el clúster y después un `dcctl upgrade` para cada instancia, como se describe en [Actualizaciones graduales](#rolling-upgrades). Usa **el `dcctl` de v1.10.0 para ambos comandos** con OpenTofu o Terraform 1.10 o posterior, y proporciona a `dcctl install` los ajustes del clúster, como `--cluster`, `--kube-context`, `--ha`, `--compact` y `--database-node-selector`, además de `--version`. Se añaden nueve migraciones, que se ejecutan en el primer arranque de cada servicio: seis en `device-management`, una en `device-state`, una en `event-management` y una en `update-management`. Cada una puede volver a ejecutarse tras un fallo. Crean tablas, índices, dos funciones y un disparador, y añaden columnas que admiten valores nulos. Las claves de configuración que añade esta versión son opcionales y no existen salvo que las establezcas, de modo que los pods de `v1.9.x` siguen funcionando junto a los de `v1.10.0` mientras avanza la actualización. La actualización solo avanza: no hay vuelta atrás a `v1.9.x`. `dcctl upgrade` se niega a saltarse una versión menor. Si vienes de `v1.8.x` o anterior, actualiza antes a través de cada versión menor intermedia, siguiendo las notas de cada versión con su propio `dcctl` y `--version` (consulta [Rutas de actualización admitidas](./versioning-policy.md#upgrade-paths)). Para `v1.9.0`, son las [notas de `v1.9.0`](#v190-upgrade).
+
+```bash
+dcctl install local --version v1.10.0
+dcctl upgrade local devicechain --version v1.10.0 --dry-run
+dcctl upgrade local devicechain --version v1.10.0
+```
+
+Se aplica la [política de versiones y actualizaciones](./versioning-policy.md). Esta versión añade interfaces cubiertas y no elimina ninguna. Declara obsoletos `fleetOperationReadiness` con sus tipos `FleetOperationReadiness` y `FleetOperationEnforcement`, `dcctl fleet-op readiness`, el campo `deviceTypeToken` de las políticas de notificación y las credenciales incluidas en un `endpointUrl` de copia de seguridad. Todos siguen funcionando hasta que se rechacen en una versión mayor posterior, una vez transcurrido el período de obsolescencia. Las reglas que envían comandos cuentan ahora contra la tasa de salida del tenant, y las reproducciones tienen un límite por proceso; revisa ambas cosas en [Antes de actualizar a v1.10.0](#v1100-before-upgrade). Los valores de Helm y la configuración de instancia quedan fuera de la compatibilidad cubierta.
+
+Lo más destacado: los cambios masivos de dispositivos establecen una clave de configuración compartida declarada en hasta 10.000 dispositivos y solo dan por terminado un dispositivo con su propio informe (Preview). Una métrica puede declararse `STRING`, y su texto llega a la página del dispositivo, a los paneles y a los agentes de IA sin graficarse nunca como número. `dcctl install` y `dcctl bootstrap` tienen una interfaz de terminal opcional con una revisión que apruebas antes de instalar nada, y `dcctl setup local` (Preview) continúa hasta una primera instancia. `dcctl install --output json` informa de una instalación como un flujo de eventos, y dcctl oculta las credenciales escritas en URL. El recurso `Instance` también se sirve como `core.devicechain.io/v1` (Preview), los artefactos de actualización de más de 64 MiB pueden almacenarse en S3 y los rollups horarios antiguos se completan en segundo plano.
+
+Novedades:
+
+- [Antes de actualizar a v1.10.0](#v1100-before-upgrade)
+- [Novedades de v1.10.0](#v1100-whats-new)
 
 #### Antes de actualizar a v1.10.0 {#v1100-before-upgrade}
 
