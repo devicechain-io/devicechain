@@ -29,7 +29,7 @@ import (
 // stops the group.
 //
 // RunWith is Run with Options (see each).
-func RunWith(ctx context.Context, cmd *exec.Cmd, o Options) error {
+func RunWith(ctx context.Context, cmd *exec.Cmd, o Options) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -44,7 +44,15 @@ func RunWith(ctx context.Context, cmd *exec.Cmd, o Options) error {
 	}
 	if o.Sweep {
 		if m := mark(cmd); m != "" {
-			defer sweep(m)
+			defer func() {
+				// The sweep's own budget, not ctx: an Exit has ended ctx, and is exactly
+				// when what the command left must be ended.
+				sctx, cancel := context.WithTimeout(context.Background(), sweepBudget)
+				defer cancel()
+				if !sweep(sctx, m) {
+					err = errors.Join(err, ErrSweepIncomplete)
+				}
+			}()
 		}
 	}
 	if err := cmd.Start(); err != nil {

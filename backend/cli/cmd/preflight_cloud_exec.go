@@ -246,6 +246,9 @@ func (x execPlugin) runBounded(ctx context.Context) (execResult, error) {
 	var exitErr *exec.ExitError
 	switch {
 	case runErr == nil:
+	case errors.Is(runErr, proctree.ErrSweepIncomplete):
+		// What it left may still be running: never taken for a clean run.
+		return failed("left processes that could not all be confirmed ended"), nil
 	case errors.As(runErr, &exitErr):
 		return failed(fmt.Sprintf("exited with status %d", exitErr.ExitCode())), nil
 	case errors.Is(runErr, exec.ErrDot):

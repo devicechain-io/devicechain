@@ -5,5 +5,8 @@
 
 package proctree
 
-// sweep has no way here to read another process's environment, so it ends nothing.
-func sweep(string) {}
+import "context"
+
+// sweep has no way here to read another process's environment, so it ends nothing, and
+// says it looked at everything there is to see: there is nothing it could have found.
+func sweep(context.Context, string) bool { return true }

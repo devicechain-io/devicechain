@@ -25,8 +25,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"os"
 	"os/exec"
+	"time"
 )
 
 // Run is RunWith with no options: what the doctor's commands get.
@@ -54,6 +56,16 @@ type Options struct {
 	// leaves the group and drops its environment is out of its reach.
 	Sweep bool
 }
+
+// ErrSweepIncomplete is joined to RunWith's error when the sweep (Options.Sweep) stopped
+// before it had looked at every process: at its budget, or waiting for another sweep.
+// Whatever carried the mark may still be running, so a caller does not treat the run as
+// clean.
+var ErrSweepIncomplete = errors.New("the sweep for processes the command left did not finish")
+
+// sweepBudget is how long a sweep may take, after the command has ended: inside the
+// screen's join of a stopped command (commandWaitDelay in cmd, two seconds).
+const sweepBudget = time.Second
 
 // sweepEnv is the variable Options.Sweep marks a command's environment with.
 const sweepEnv = "DCCTL_PROCTREE_RUN"

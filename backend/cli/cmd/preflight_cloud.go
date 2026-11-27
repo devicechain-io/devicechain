@@ -731,9 +731,16 @@ const ingressClassesPath = "/apis/networking.k8s.io/v1/ingressclasses"
 // secret is in), and POST to the two review endpoints. A suffix would let a proxy subresource
 // (.../services/x/proxy/apis/...) through to a service that can write; so nothing is
 // matched by suffix, and a path that is not already clean, or that was sent escaped,
-// is refused rather than interpreted.
+// is refused rather than interpreted. And no request may carry a query parameter.
 func kubeRequestPermitted(server *url.URL, method string, u *url.URL) bool {
 	if u.Scheme != server.Scheme || u.Host != server.Host || u.Opaque != "" || u.User != nil {
+		return false
+	}
+	// 🔴 THE QUERY POLICY: each of the four requests may carry only client-go's own
+	// timeout (rest.Config.Timeout), once, as a duration. Anything else (a watch, which
+	// would hold a stream open, ?watch=true or ?watch=1; a follow; a limit; an empty "?")
+	// is refused. A request that needs another parameter adds it here, by name.
+	if !queryPermitted(u) {
 		return false
 	}
 	// An escaped path is refused, never decoded into one of ours. An unclean one (a dot
@@ -750,6 +757,20 @@ func kubeRequestPermitted(server *url.URL, method string, u *url.URL) bool {
 		return method == http.MethodPost
 	}
 	return false
+}
+
+// queryPermitted is kubeRequestPermitted's query policy: no query, or timeout=<duration>
+// alone.
+func queryPermitted(u *url.URL) bool {
+	if u.RawQuery == "" {
+		return !u.ForceQuery
+	}
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil || len(q) != 1 || len(q["timeout"]) != 1 {
+		return false
+	}
+	_, err = time.ParseDuration(q["timeout"][0])
+	return err == nil
 }
 
 // kubeGuard lets out only what kubeRequestPermitted allows. It sits under client-go's

@@ -180,6 +180,34 @@ func TestKubeRequestPermitted(t *testing.T) {
 	}
 }
 
+// 🔴 NO ALLOWLISTED REQUEST TAKES A QUERY IT DOES NOT NEED: each may carry only the
+// timeout client-go adds (rest.Config.Timeout), once, as a duration. A watch (which would
+// hold a stream open, ?watch=true or ?watch=1), a follow, a limit, any other parameter, a
+// repeated or malformed timeout, or an empty "?" is refused on every allowlisted path.
+func TestKubeRequestPermittedRefusesQueries(t *testing.T) {
+	server, _ := url.Parse("https://api.example:6443")
+	for _, r := range []struct{ method, path string }{
+		{"GET", "/version"}, {"GET", ingressClassesPath}, {"POST", ssarPath}, {"POST", ssrPath},
+	} {
+		for _, q := range []string{"?watch=true", "?watch=1", "?follow=true", "?limit=1", "?unknown=x", "?",
+			"?timeout=15s&watch=true", "?watch=true&timeout=15s", "?timeout=15s&timeout=1s", "?timeout=soon", "?timeout="} {
+			u, err := url.Parse("https://api.example:6443" + r.path + q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kubeRequestPermitted(server, r.method, u) {
+				t.Errorf("%s %s%s is permitted", r.method, r.path, q)
+			}
+		}
+		for _, q := range []string{"", "?timeout=15s"} {
+			u, _ := url.Parse("https://api.example:6443" + r.path + q)
+			if !kubeRequestPermitted(server, r.method, u) {
+				t.Errorf("%s %s%s is refused", r.method, r.path, q)
+			}
+		}
+	}
+}
+
 // connCounter counts a test server's connections opened and closed.
 type connCounter struct{ opened, closed atomic.Int32 }
 

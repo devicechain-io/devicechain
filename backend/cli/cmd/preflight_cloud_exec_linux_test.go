@@ -54,6 +54,9 @@ func execPluginHelperOS(mode string, credential func(string, time.Time, string, 
 		}
 		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
 			if _, err := os.Stat(os.Getenv(pluginPIDFileEnv) + ".child"); err == nil {
+				if os.Getenv("DCCTL_TEST_ESCAPER_HANGS") != "" {
+					time.Sleep(time.Hour)
+				}
 				defer stampExit()
 				return credential(pluginToken, time.Now().Add(time.Hour), "", "")
 			}
@@ -149,4 +152,21 @@ func TestAnEscapedDescendantDoesNotHoldTheRun(t *testing.T) {
 	if r := authRow(t, run); r.Verdict != installflow.CheckPass {
 		t.Errorf("authentication reads %s %q (%s)", r.Verdict, r.Text, r.Fix)
 	}
+}
+
+// 🔴 AN EXIT STILL SWEEPS: the sweep runs on its own budget, not the cancelled context, so
+// a descendant that left the group is ended when the screen is left mid-run too.
+func TestAnExitSweepsAnEscapedDescendant(t *testing.T) {
+	srv, _ := pluginCluster(t, false)
+	cfg, pidFile := pluginConfig(t, srv.URL, "escaper", clientcmdapi.ExecEnvVar{Name: "DCCTL_TEST_ESCAPER_HANGS", Value: "1"})
+	t.Cleanup(func() {
+		for _, pid := range pids(pidFile) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+	run := runWithPlugin(t, cfg, func() bool { return len(pids(pidFile)) == 2 })
+	if run.took >= commandWaitDelay {
+		t.Errorf("the run returned %v after the Exit", run.took)
+	}
+	assertNoProcessLeft(t, pidFile, 2)
 }
