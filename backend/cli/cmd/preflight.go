@@ -101,22 +101,40 @@ const commandWaitDelay = 2 * time.Second
 // 🔴 ENDING THE CONTEXT ENDS THE COMMAND'S WHOLE PROCESS TREE, NOT ONLY THE COMMAND.
 // kubectl's exec credential plugin, docker's credential helper: a descendant the
 // command started would otherwise outlive the kill as an orphan, still running after
-// the screen (and dcctl) had gone. proctree.Run binds the command and everything it
-// spawns to ctx: a process group of its own on Unix, a job object on Windows.
+// the screen (and dcctl) had gone. proctree.RunWith binds the command and everything it
+// spawns to ctx: a session (and so a process group) of its own on Unix, a job object
+// on Windows.
 //
 // Stdin and stderr are left nil, so the command reads the null device and its
 // diagnostics go to the null device, as Output's did for a caller that discards them:
 // nothing a check runs reads the terminal the screen owns.
+//
+// 🔴 A SCREEN COMMAND CAN NEVER PROMPT, AND NEVER RUNS UNBOUNDED. kubectl runs the
+// context's exec credential plugin, and a plugin that asks for an MFA code opens the
+// terminal itself, whatever its stdin is. In a process group of dcctl's session it
+// would be a background group touching the terminal, stopped by SIGTTOU where it stands,
+// and the check would wait on it for ever; on Windows it would read the console the
+// screen is reading. So the command runs in a session of its own (Unix: no controlling
+// terminal, so opening /dev/tty fails at once; Windows: no console of dcctl's), and
+// under hostCommandTimeout besides, so nothing it runs can hold a check open past it.
 func runContext(ctx context.Context, name string, args ...string) string {
+	ctx, cancel := context.WithTimeout(ctx, hostCommandTimeout)
+	defer cancel()
 	cmd := exec.Command(name, args...)
 	cmd.WaitDelay = commandWaitDelay
 	var out bytes.Buffer
 	cmd.Stdout = &out
-	if err := proctree.Run(ctx, cmd); err != nil {
+	if err := proctree.RunWith(ctx, cmd, proctree.Options{NewSession: true}); err != nil {
 		return ""
 	}
 	return strings.TrimSpace(out.String())
 }
+
+// hostCommandTimeout bounds each of the screen's host commands: generous for a slow
+// `docker info` or an API server across the world, and still an end to one that will
+// never answer. A command cut off by it reads as one that failed. A variable only so a
+// test can bound a command in milliseconds.
+var hostCommandTimeout = 30 * time.Second
 
 // run is a host command: under the doctor's context when it has one (the screen's
 // checks), and exactly as always when it does not.
