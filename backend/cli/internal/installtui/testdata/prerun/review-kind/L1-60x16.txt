@@ -13,4 +13,4 @@ needs its own checks and its own review.
 › Back    Approve and install    Exit
 ────────────────────────────────────────────────────────────
 Tab action · Enter select · ↑/↓ scroll · Esc back · q exit
-Ctrl+C exit
+?/F1 help · Ctrl+C exit

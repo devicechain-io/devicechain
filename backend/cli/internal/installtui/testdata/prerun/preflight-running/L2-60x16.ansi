@@ -13,4 +13,4 @@ working: the read-only checks are running (4 checks so far)
   Continue (unavailable)  > \x1b[7mRecheck (unavailable)\x1b[m    Exit
 ------------------------------------------------------------
 up/down check - Tab action - Enter select - Esc back
-q exit - Ctrl+C exit
+q exit - ?/F1 help - Ctrl+C exit

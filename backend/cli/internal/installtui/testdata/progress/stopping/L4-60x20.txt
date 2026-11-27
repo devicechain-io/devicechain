@@ -17,4 +17,4 @@
  
  
  
- l logs  Ctrl+C again force exit
+ l logs  Ctrl+C again force exit  ?/F1 help

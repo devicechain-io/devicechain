@@ -20,5 +20,5 @@
 │ … 302 earlier lines kept · 0 aged out · 5 newer                              │
 │                                                                              │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ l logs  PgUp/PgDn scroll  f follow  Ctrl+C stop                              │
+│ l logs  PgUp/PgDn scroll  f follow  Ctrl+C stop  ?/F1 help                   │
 ╰──────────────────────────────────────────────────────────────────────────────╯

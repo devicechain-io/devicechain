@@ -1,8 +1,7 @@
 +-\x1b[1m DeviceChain - dcctl install - context prod \x1b[m----------------- dcctl v1.12.0 -+
 | \x1b[1mPreflight\x1b[m - read-only checks - footprint Standard                            |
 |                                                                              |
-| ... 10 lines above                                                           |
-|   PASS        API server name api.prod.example resolves                      |
+| ... 11 lines above                                                           |
 |   PASS        API server api.prod.example answered over verified TLS         |
 |   PASS        authentication: the API server accepts this context's          |
 |               credentials                                                    |
@@ -20,5 +19,6 @@
 |                                                                              |
 |   Continue  > \x1b[7mRecheck\x1b[m    Switch to Compact    Exit                           |
 +------------------------------------------------------------------------------+
-| up/down check - Tab action - Enter select - Esc back - q exit - Ctrl+C exit  |
+| up/down check - Tab action - Enter select - Esc back - q exit - ?/F1 help    |
+| Ctrl+C exit                                                                  |
 +------------------------------------------------------------------------------+

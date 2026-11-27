@@ -17,4 +17,4 @@ Database placement, connection budget and WAL
 
 Preflight: all checks passed.
 ────────────────────────────────────────────────────────────
-↑/↓ setting · Esc close · Ctrl+C exit
+↑/↓ setting · Esc close · ?/F1 help · Ctrl+C exit

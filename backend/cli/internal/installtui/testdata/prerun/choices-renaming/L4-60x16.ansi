@@ -11,6 +11,6 @@
 
 \x1b[1mName the local kind cluster\x1b[m
 
-
 ────────────────────────────────────────────────────────────
-\x1b[38;2;138;166;182mEnter use · Backspace erase · Esc close · Ctrl+C exit\x1b[m
+\x1b[38;2;138;166;182mEnter use · Backspace erase · Esc close · F1 help\x1b[m
+\x1b[38;2;138;166;182mCtrl+C exit\x1b[m

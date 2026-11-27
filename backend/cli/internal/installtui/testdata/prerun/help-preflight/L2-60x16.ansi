@@ -1,0 +1,16 @@
+\x1b[1mDeviceChain - dcctl install - kind devicechain\x1b[m dcctl v1.12.0
+------------------------------------------------------------
+\x1b[1mHelp\x1b[m - Preflight
+
+up/down     check
+Tab         action
+Enter       select
+Esc         back
+q           exit
+?/F1        help
+Ctrl+C      exit
+
+The checks are read-only: they never install software or
+... 6 lines below
+------------------------------------------------------------
+Esc close help - up/down scroll - Ctrl+C exit

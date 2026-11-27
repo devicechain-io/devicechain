@@ -13,4 +13,4 @@ key pressed before then does nothing.
 > Back    Approve and install (unavailable)    Exit
 ------------------------------------------------------------
 Tab action - Enter select - up/down scroll - Esc back
-q exit - Ctrl+C exit
+q exit - ?/F1 help - Ctrl+C exit

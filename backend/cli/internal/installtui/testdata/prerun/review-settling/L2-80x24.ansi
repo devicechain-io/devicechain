@@ -13,12 +13,12 @@
 |   TLS          on (cert-manager)                                             |
 |   Backups      on, to a store the cluster provisions for itself (no off-site |
 |                archive)                                                      |
-|   State        /home/op/.devicechain/clusters/<assigned after                |
-| ... 9 lines below                                                            |
+| ... 10 lines below                                                           |
 |                                                                              |
 | Approve becomes available once this screen has settled; a key pressed before |
 | then does nothing.                                                           |
 | > \x1b[7mBack\x1b[m    Approve and install (unavailable)    Exit                          |
 +------------------------------------------------------------------------------+
-| Tab action - Enter select - up/down scroll - Esc back - q exit - Ctrl+C exit |
+| Tab action - Enter select - up/down scroll - Esc back - q exit - ?/F1 help   |
+| Ctrl+C exit                                                                  |
 +------------------------------------------------------------------------------+

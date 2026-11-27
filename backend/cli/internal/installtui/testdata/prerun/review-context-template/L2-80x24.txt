@@ -15,10 +15,10 @@
 |                archive)                                                      |
 |   State        /home/op/.devicechain/clusters/<assigned after                |
 |                identification>/infra                                         |
-|                                                                              |
-| ... 12 lines below                                                           |
+| ... 13 lines below                                                           |
 |                                                                              |
 |   Back  > Approve and install    Exit                                        |
 +------------------------------------------------------------------------------+
-| Tab action - Enter select - up/down scroll - Esc back - q exit - Ctrl+C exit |
+| Tab action - Enter select - up/down scroll - Esc back - q exit - ?/F1 help   |
+| Ctrl+C exit                                                                  |
 +------------------------------------------------------------------------------+

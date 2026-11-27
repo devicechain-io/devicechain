@@ -96,6 +96,8 @@ type model struct {
 	// continues says the cluster journey is followed by another: its verdict's Enter
 	// leads on rather than out.
 	continues bool
+	// help is the help over the progress screen. It never pauses the run.
+	help helpState
 }
 
 // modelOptions are the parts of the screen that exist only for some runs.
@@ -115,8 +117,13 @@ type modelOptions struct {
 
 func newModel(caps terminal.Capabilities, intr *interrupter, start func(), logs logSource, redact func(string) string,
 	o modelOptions) model {
+	theme := newTheme(caps)
+	updown := "↑/↓"
+	if theme.g != unicodeGlyphs {
+		updown = "up/down"
+	}
 	m := model{caps: caps, intr: intr, start: start, logs: logs, redact: redact, splash: caps.Splash != terminal.NoArt,
-		theme: newTheme(caps), keys: newKeyMap(), progress: newProgressState(),
+		theme: theme, keys: newKeyMap(updown), progress: newProgressState(),
 		// The pane opens on its own only where there is room for it beside the rows.
 		pane:  newLogPane(caps.Layout == terminal.Full),
 		width: caps.Width, height: caps.Height,
@@ -344,6 +351,11 @@ func (m model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.abandon()
 		}
 		return m, cmd
+	}
+	if m.help.open || key.Matches(k, m.keys.help) {
+		// 🔴 HELP TAKES THE KEY WHOLE: it answers no question (Esc closes help, it does
+		// not answer no), moves no pane and leaves no screen. The run goes on under it.
+		return m.helpKey(k), nil
 	}
 	if m.prompt != nil {
 		switch k.String() {

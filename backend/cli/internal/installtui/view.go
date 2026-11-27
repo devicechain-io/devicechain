@@ -329,12 +329,19 @@ func (m model) renderProgress() string {
 	line := (result.Input{Redact: m.redact}).Line
 	f := newFrame(m.width, m.height)
 	t := m.theme
-	if f.layout == terminal.Minimal {
+	if f.layout == terminal.Minimal && !m.help.open {
 		return m.renderMinimal(f)
 	}
-	body := m.progressLines(f)
-	pane := m.pane // render records the rows it was given; the model's copy is set in Update
-	body = append(body, pane.render(m.logs, t, f.inner, paneHeight(f, len(body), m.pane.open), m.loc, line)...)
+	var body []string
+	if m.help.open {
+		// Help is drawn in the body's place, at every layout: the minimal one too, without
+		// a border, so it can be read and scrolled at any size.
+		body = m.helpBody(f)
+	} else {
+		body = m.progressLines(f)
+		pane := m.pane // render records the rows it was given; the model's copy is set in Update
+		body = append(body, pane.render(m.logs, t, f.inner, paneHeight(f, len(body), m.pane.open), m.loc, line)...)
+	}
 	for len(body) < f.rows {
 		body = append(body, "")
 	}

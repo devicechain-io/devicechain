@@ -17,4 +17,4 @@ and runs the read-only checks again for it.
   Continue (unavailable)    Advanced    Preflight    Exit
 ------------------------------------------------------------
 up/down/Space choose - Tab next - Esc back - q exit
-Ctrl+C exit
+?/F1 help - Ctrl+C exit

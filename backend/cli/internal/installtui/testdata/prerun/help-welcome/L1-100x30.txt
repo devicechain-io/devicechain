@@ -1,0 +1,30 @@
+╭─ DeviceChain · dcctl install · kind devicechain ───────────────────────────────── dcctl v1.12.0 ─╮
+│ Help · Welcome                                                                                   │
+│                                                                                                  │
+│ Enter       select                                                                               │
+│ Tab         action                                                                               │
+│ q           exit                                                                                 │
+│ ?/F1        help                                                                                 │
+│ Ctrl+C      exit                                                                                 │
+│                                                                                                  │
+│ Continue runs the read-only checks; Exit leaves. Nothing has been changed yet: nothing on these  │
+│ screens changes anything until you approve the plan on the review. Ctrl+C exits.                 │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Esc close help · Ctrl+C exit                                                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

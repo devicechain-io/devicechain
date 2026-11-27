@@ -20,4 +20,4 @@ Equivalent command (template)
   [ Exit ]
 
 ────────────────────────────────────────────────────────────────────────────
-Tab next · Enter activate · Esc back
+Tab next · Enter activate · Esc back · ?/F1 help

@@ -201,12 +201,18 @@ siguiente comando. No contiene credenciales.
 | Enter | Ejecutar la acción seleccionada | Ejecutar la acción seleccionada en la pantalla de resultado |
 | `y` / `n` | — | Responder a una pregunta que la instalación hace en pantalla (una ejecución que solo muestra el progreso) |
 | Esc | Volver a la pantalla anterior (tus cambios se conservan) | Cerrar la ayuda. Nunca detiene la instalación |
-| `?` / F1 | — | Ayuda, en la pantalla de resultado |
+| `?` / F1 | Ayuda de la pantalla: sus teclas y lo que hace. F1 también funciona mientras escribes un nombre | Ayuda, en todas las pantallas. Nunca pausa la instalación |
 | `l`, PgUp / PgDn, `f` / End | — | Abrir el panel de registro, desplazarlo, seguirlo |
 | `q` | Ir a Exit | Salir, una vez terminada la instalación |
 | Ctrl+C | Salir; no se ha cambiado nada | Detener la instalación de forma segura; una segunda pulsación sale de inmediato |
 
-El pie de cada pantalla enumera las teclas que funcionan en ella. El ratón no se captura, así que
+El pie de cada pantalla enumera las teclas que funcionan en ella, y su ayuda enumera exactamente
+las mismas, con unas palabras sobre lo que hace la pantalla. La ayuda no cambia nada: mientras está
+abierta, Esc, `?` o F1 la cierran, las flechas y PgUp / PgDn la desplazan, y cualquier otra tecla no
+hace nada salvo Ctrl+C, que conserva su significado. En una pantalla cuya aprobación pone algo en
+marcha (la revisión, y la entrega y la revisión de la instancia de `dcctl setup local`), abrir o
+cerrar la ayuda cuenta como una pulsación, así que la pantalla espera a que el teclado vuelva a
+estar en calma antes de aceptar otra. El ratón no se captura, así que
 seleccionar y copiar texto con el ratón funciona como en cualquier terminal. El control
 seleccionado se marca con `›` y se muestra invertido, nunca solo con color.
 

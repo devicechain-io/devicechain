@@ -1,0 +1,40 @@
+╭─ DeviceChain · Installing · kind-devicechain ────────────────────────────────────────────────────────────────────────╮
+│ \x1b[1mHelp\x1b[m · Install progress                                                                                              │
+│                                                                                                                      │
+│ \x1b[38;2;36;163;214ml           \x1b[mlogs                                                                                                     │
+│ \x1b[38;2;36;163;214mPgUp/PgDn   \x1b[mscroll                                                                                                   │
+│ \x1b[38;2;36;163;214mEnter       \x1b[mexit                                                                                                     │
+│ \x1b[38;2;36;163;214m?/F1        \x1b[mhelp                                                                                                     │
+│                                                                                                                      │
+│ The run is over, and nothing is running while this screen is open. Leaving it never changes dcctl's exit status, and │
+│ dcctl prints a short summary when it exits. l opens the log pane; while it is open PgUp and PgDn scroll it, and f    │
+│ follows it again.                                                                                                    │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;2;138;166;182mEsc\x1b[m close help                                                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

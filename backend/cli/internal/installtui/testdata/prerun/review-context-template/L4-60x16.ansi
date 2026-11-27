@@ -13,4 +13,4 @@ needs its own checks and its own review.
   Back  › \x1b[7mApprove and install\x1b[m    Exit
 ────────────────────────────────────────────────────────────
 \x1b[38;2;138;166;182mTab action · Enter select · ↑/↓ scroll · Esc back · q exit\x1b[m
-\x1b[38;2;138;166;182mCtrl+C exit\x1b[m
+\x1b[38;2;138;166;182m?/F1 help · Ctrl+C exit\x1b[m

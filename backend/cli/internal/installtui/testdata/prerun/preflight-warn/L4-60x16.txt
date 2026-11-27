@@ -13,4 +13,4 @@ continue.
   Continue  › Recheck    Switch to Compact    Exit
 ────────────────────────────────────────────────────────────
 ↑/↓ check · Tab action · Enter select · Esc back · q exit
-Ctrl+C exit
+?/F1 help · Ctrl+C exit

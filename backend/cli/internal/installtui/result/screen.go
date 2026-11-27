@@ -322,19 +322,13 @@ func (m *Model) helpLines(width int) []string {
 	if len(m.buttons()) < 2 {
 		keys = []key.Binding{m.keys.activate, m.keys.exit, m.keys.close}
 	}
-	out := []string{paint(m.theme.bd, "Help"), ""}
-	for _, k := range keys {
-		h := k.Help()
-		out = append(out, paint(m.theme.acc, padRight(h.Key, labelWidth))+h.Desc)
-	}
-	out = append(out, "")
 	text := "The run is over; nothing is running while this screen is open. Leaving it never " +
 		"changes dcctl's exit status, and dcctl prints a short summary when it exits."
 	if k := kindOf(m.in.Summary); k == kindFailed || k == kindStopped {
 		text += " Review for re-run starts a fresh run of the same request through review, " +
 			"only once the last run has settled. Nothing is rolled back."
 	}
-	return append(out, wrap(text, width)...)
+	return append([]string{paint(m.theme.bd, "Help"), ""}, helpLines(m.theme.acc, keys, text, width)...)
 }
 
 // bodyLines draws the title and the rows in at most budget lines, leaving out

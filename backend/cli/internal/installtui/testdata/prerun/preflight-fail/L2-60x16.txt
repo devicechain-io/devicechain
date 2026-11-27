@@ -13,4 +13,4 @@ while any check fails. Fix each failure, then Recheck.
   Exit
 ------------------------------------------------------------
 up/down check - Tab action - Enter select - Esc back
-q exit - Ctrl+C exit
+q exit - ?/F1 help - Ctrl+C exit

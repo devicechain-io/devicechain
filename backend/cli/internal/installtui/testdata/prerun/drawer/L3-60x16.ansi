@@ -13,4 +13,4 @@ other flag from the command line is carried as given.
 
 \x1b[38;5;78mPreflight: all checks passed.\x1b[m
 ────────────────────────────────────────────────────────────
-\x1b[38;5;109m↑/↓ setting · Esc close · Ctrl+C exit\x1b[m
+\x1b[38;5;109m↑/↓ setting · Esc close · ?/F1 help · Ctrl+C exit\x1b[m

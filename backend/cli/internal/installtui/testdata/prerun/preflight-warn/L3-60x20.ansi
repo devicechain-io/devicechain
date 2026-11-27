@@ -17,4 +17,4 @@
 
 ────────────────────────────────────────────────────────────
 \x1b[38;5;109m↑/↓ check · Tab action · Enter select · Esc back · q exit\x1b[m
-\x1b[38;5;109mCtrl+C exit\x1b[m
+\x1b[38;5;109m?/F1 help · Ctrl+C exit\x1b[m

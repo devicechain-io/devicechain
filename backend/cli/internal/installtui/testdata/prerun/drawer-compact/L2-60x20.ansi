@@ -12,9 +12,9 @@ other flag from the command line is carried as given.
   nothing set; the defaults apply
 
 \x1b[1mGateway, MQTT and legacy ingress\x1b[m
-  nothing set; the defaults apply
-... 3 lines below
+... 4 lines below
 
 Preflight: all checks passed.
 ------------------------------------------------------------
-up/down setting - Space toggle - Esc close - Ctrl+C exit
+up/down setting - Space toggle - Esc close - ?/F1 help
+Ctrl+C exit

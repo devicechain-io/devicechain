@@ -17,4 +17,4 @@ working: the read-only checks are running (4 checks so far)
 
 ────────────────────────────────────────────────────────────
 ↑/↓ check · Tab action · Enter select · Esc back · q exit
-Ctrl+C exit
+?/F1 help · Ctrl+C exit

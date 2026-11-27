@@ -174,10 +174,7 @@ func (g *settleGate) settled(m settleMsg) tea.Cmd {
 // was read before it (it waited behind the tick): it is dropped, and the visit settles
 // again.
 func (g *settleGate) admit() (bool, tea.Cmd) {
-	c := g.ensureClock()
-	if !c.readerStamps {
-		c.stamp() // nothing reads the terminal for us: this key is the latest input
-	}
+	c := g.input()
 	if !g.armed {
 		return false, nil
 	}
@@ -186,4 +183,32 @@ func (g *settleGate) admit() (bool, tea.Cmd) {
 		return false, g.ask()
 	}
 	return true, nil
+}
+
+// input records a key handled now as the latest input, where nothing reads the terminal
+// for us (a Windows console); elsewhere the reader has stamped it already.
+func (g *settleGate) input() *inputClock {
+	c := g.ensureClock()
+	if !c.readerStamps {
+		c.stamp() // nothing reads the terminal for us: this key is the latest input
+	}
+	return c
+}
+
+// interrupt is a key that does not act on the visit: one that opens, scrolls or closes
+// help over it. It is input like any other, so it restarts the quiet period; and a visit
+// that had armed is disarmed and settles again.
+//
+// 🔴 HELP NEVER MOVES A SCREEN TOWARDS ITS APPROVAL. Without this, a review that armed
+// while its help was open would take the key that follows the one closing help (an Esc
+// and an Enter typed together), on a screen that had not been seen since. Closing help
+// is a key, and the screen under it takes keys again only once the keyboard has been
+// quiet for the settle period since.
+func (g *settleGate) interrupt() tea.Cmd {
+	g.input()
+	if !g.armed {
+		return nil // unarmed: the visit's current ask stands, and now waits for quiet
+	}
+	g.armed = false
+	return g.ask()
 }

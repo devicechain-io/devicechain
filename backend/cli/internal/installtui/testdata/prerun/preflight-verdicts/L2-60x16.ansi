@@ -13,4 +13,4 @@ before you continue.
   Continue  > \x1b[7mRecheck\x1b[m    Exit
 ------------------------------------------------------------
 up/down check - Tab action - Enter select - Esc back
-q exit - Ctrl+C exit
+q exit - ?/F1 help - Ctrl+C exit

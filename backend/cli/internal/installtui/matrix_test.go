@@ -51,7 +51,10 @@ var clusterFlow = []struct {
 	{"stopping", []string{"testdata/progress/stopping", "result/testdata/stopped"}},
 	{"failure", []string{"result/testdata/failed", "result/testdata/readiness-timeout"}},
 	{"success", []string{"result/testdata/succeeded"}},
-	{"help", []string{"result/testdata/help"}},
+	{"help", []string{"result/testdata/help", "testdata/prerun/help-welcome", "testdata/prerun/help-preflight",
+		"testdata/prerun/help-switch", "testdata/prerun/help-choices", "testdata/prerun/help-renaming",
+		"testdata/prerun/help-drawer", "testdata/prerun/help-picker", "testdata/prerun/help-review",
+		"testdata/progress/help-applying", "testdata/progress/help-kind-prompt", "testdata/progress/help-verdict"}},
 }
 
 // The matrix: the four rungs a terminal UI runs at (L0 is plain output, pinned byte for

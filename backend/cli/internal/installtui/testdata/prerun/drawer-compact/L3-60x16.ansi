@@ -8,9 +8,9 @@ other flag from the command line is carried as given.
   Database backups: on \x1b[38;5;109m(follows the bundled CloudNativePG
   operator and, on Compact, TLS)\x1b[m
 
-\x1b[1mRelational recovery\x1b[m
-… 7 lines below
+… 8 lines below
 
 \x1b[38;5;78mPreflight: all checks passed.\x1b[m
 ────────────────────────────────────────────────────────────
-\x1b[38;5;109m↑/↓ setting · Space toggle · Esc close · Ctrl+C exit\x1b[m
+\x1b[38;5;109m↑/↓ setting · Space toggle · Esc close · ?/F1 help\x1b[m
+\x1b[38;5;109mCtrl+C exit\x1b[m

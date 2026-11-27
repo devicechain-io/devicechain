@@ -26,5 +26,5 @@
 │ The plan changes to this footprint and every check runs again for it.                            │
 │ \x1b[1mSwitch to Compact?\x1b[m                                                                               │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ \x1b[38;5;109mEnter switch · Esc keep · Ctrl+C exit\x1b[m                                                            │
+│ \x1b[38;5;109mEnter switch · Esc keep · ?/F1 help · Ctrl+C exit\x1b[m                                                │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

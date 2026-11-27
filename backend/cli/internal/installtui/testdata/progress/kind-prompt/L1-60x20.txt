@@ -17,4 +17,4 @@
  
  
  
- y/n answer  l logs  Ctrl+C stop
+ y/n answer  l logs  Ctrl+C stop  ?/F1 help

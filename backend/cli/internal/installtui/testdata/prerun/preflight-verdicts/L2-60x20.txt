@@ -17,4 +17,4 @@ before you continue.
   Continue  > Recheck    Exit
 ------------------------------------------------------------
 up/down check - Tab action - Enter select - Esc back
-q exit - Ctrl+C exit
+q exit - ?/F1 help - Ctrl+C exit

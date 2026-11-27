@@ -1,8 +1,7 @@
 ╭─ DeviceChain · dcctl install · kind devicechain ───────────── dcctl v1.12.0 ─╮
 │ Preflight · read-only checks · footprint Standard                            │
 │                                                                              │
-│ … 6 lines above                                                              │
-│   PASS        docker context = default (native engine)                       │
+│ … 7 lines above                                                              │
 │ › FAIL        engine memory: 6.0Gi                                           │
 │               fix: give Docker >= 4 CPUs and >= 8Gi, or re-run install with  │
 │                    --compact                                                 │
@@ -20,5 +19,6 @@
 │                                                                              │
 │   Continue (unavailable)  › Recheck    Switch to Compact    Exit             │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ ↑/↓ check · Tab action · Enter select · Esc back · q exit · Ctrl+C exit      │
+│ ↑/↓ check · Tab action · Enter select · Esc back · q exit · ?/F1 help        │
+│ Ctrl+C exit                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯

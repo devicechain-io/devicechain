@@ -16,4 +16,4 @@ back and change it.
   [ Exit ]
 
 ------------------------------------------------------------
-Tab next - Enter activate - Esc back
+Tab next - Enter activate - Esc back - ?/F1 help

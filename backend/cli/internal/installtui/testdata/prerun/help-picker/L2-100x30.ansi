@@ -1,0 +1,30 @@
++-\x1b[1m DeviceChain - dcctl install - kind devicechain \x1b[m--------------------------------- dcctl v1.12.0 -+
+| \x1b[1mHelp\x1b[m - Choose a context                                                                          |
+|                                                                                                  |
+| up/down     context                                                                              |
+| Enter       use                                                                                  |
+| Esc         close                                                                                |
+| ?/F1        help                                                                                 |
+| Ctrl+C      exit                                                                                 |
+|                                                                                                  |
+| Choosing a context makes it the target and runs the checks against it. dcctl never creates or    |
+| deletes a context's cluster. Esc keeps the target it had. Nothing has been changed yet: nothing  |
+| on these screens changes anything until you approve the plan on the review. Ctrl+C exits.        |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
++--------------------------------------------------------------------------------------------------+
+| Esc close help - Ctrl+C exit                                                                     |
++--------------------------------------------------------------------------------------------------+

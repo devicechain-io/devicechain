@@ -12,5 +12,5 @@ while any check fails. Fix each failure, then Recheck.
 
   Continue (unavailable)    Advanced    Preflight    Exit
 ────────────────────────────────────────────────────────────
-↑/↓/Space choose · Tab next · Esc back · q exit
+↑/↓/Space choose · Tab next · Esc back · q exit · ?/F1 help
 Ctrl+C exit

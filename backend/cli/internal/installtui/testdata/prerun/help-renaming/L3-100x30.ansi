@@ -1,0 +1,30 @@
+╭─\x1b[1m DeviceChain · dcctl install · kind devicechain \x1b[m─────────────────────────────────\x1b[38;5;109m dcctl v1.12.0 \x1b[m─╮
+│ \x1b[1mHelp\x1b[m · Name the local kind cluster                                                               │
+│                                                                                                  │
+│ \x1b[38;5;38mEnter       \x1b[muse                                                                                  │
+│ \x1b[38;5;38mBackspace   \x1b[merase                                                                                │
+│ \x1b[38;5;38mEsc         \x1b[mclose                                                                                │
+│ \x1b[38;5;38mF1          \x1b[mhelp                                                                                 │
+│ \x1b[38;5;38mCtrl+C      \x1b[mexit                                                                                 │
+│                                                                                                  │
+│ Type the local kind cluster's name: Enter uses it and runs the checks again, Esc keeps the name  │
+│ it had. ? is part of a name here, so F1 opens help. Nothing has been changed yet: nothing on     │
+│ these screens changes anything until you approve the plan on the review. Ctrl+C exits.           │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;5;109mEsc close help · Ctrl+C exit\x1b[m                                                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

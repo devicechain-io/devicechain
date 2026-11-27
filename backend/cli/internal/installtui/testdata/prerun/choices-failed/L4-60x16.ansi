@@ -12,5 +12,5 @@
 
   \x1b[38;2;138;166;182mContinue (unavailable)\x1b[m    Advanced    Preflight    Exit
 ────────────────────────────────────────────────────────────
-\x1b[38;2;138;166;182m↑/↓/Space choose · Tab next · Esc back · q exit\x1b[m
+\x1b[38;2;138;166;182m↑/↓/Space choose · Tab next · Esc back · q exit · ?/F1 help\x1b[m
 \x1b[38;2;138;166;182mCtrl+C exit\x1b[m

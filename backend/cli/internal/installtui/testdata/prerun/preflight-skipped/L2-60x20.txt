@@ -15,6 +15,6 @@ Preflight - read-only checks - footprint Standard
 
 
 
-
 ------------------------------------------------------------
-Tab action - Enter select - Esc back - q exit - Ctrl+C exit
+Tab action - Enter select - Esc back - q exit - ?/F1 help
+Ctrl+C exit

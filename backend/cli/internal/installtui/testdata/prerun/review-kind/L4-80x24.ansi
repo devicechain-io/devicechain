@@ -15,10 +15,10 @@
 │                archive)                                                      │
 │   \x1b[38;2;138;166;182mState       \x1b[m /home/op/.devicechain/clusters/<assigned after                │
 │                identification>/infra                                         │
-│                                                                              │
-│ … 7 lines below                                                              │
+│ … 8 lines below                                                              │
 │                                                                              │
 │ › \x1b[7mBack\x1b[m    Approve and install    Exit                                        │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ \x1b[38;2;138;166;182mTab action · Enter select · ↑/↓ scroll · Esc back · q exit · Ctrl+C exit\x1b[m     │
+│ \x1b[38;2;138;166;182mTab action · Enter select · ↑/↓ scroll · Esc back · q exit · ?/F1 help\x1b[m       │
+│ \x1b[38;2;138;166;182mCtrl+C exit\x1b[m                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯

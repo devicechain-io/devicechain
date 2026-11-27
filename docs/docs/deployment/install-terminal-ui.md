@@ -187,12 +187,17 @@ target and the next command. It contains no credentials.
 | Enter | Activate the focused action | Activate the focused action on the result screen |
 | `y` / `n` | — | Answer a question the install asks on screen (a progress-only run) |
 | Esc | Back to the previous screen (your changes are kept) | Close help. Never stops the install |
-| `?` / F1 | — | Help, on the result screen |
+| `?` / F1 | Help for the screen: its keys and what it does. F1 also works while you type a name | Help, on every screen. It never pauses the install |
 | `l`, PgUp / PgDn, `f` / End | — | Open the log pane, scroll it, follow it |
 | `q` | Move to Exit | Exit, once the install has ended |
 | Ctrl+C | Exit; nothing has been changed | Stop the install safely; a second press exits at once |
 
-The footer of every screen lists the keys that work there. Mouse reporting is off, so selecting
+The footer of every screen lists the keys that work there, and its help lists exactly the same
+keys, with a few words on what the screen does. Help changes nothing: while it is open, Esc, `?`
+or F1 closes it, the arrows and PgUp / PgDn scroll it, and every other key does nothing except
+Ctrl+C, which keeps its meaning. On a screen whose approval starts something (the review, and
+`dcctl setup local`'s hand-over and instance review), opening or closing help counts as a key
+press, so the screen waits for the keyboard to be quiet again before it accepts one. Mouse reporting is off, so selecting
 and copying text with the mouse works as it does in any terminal. The focused control is marked
 with `›` and shown inverted, never by colour alone.
 

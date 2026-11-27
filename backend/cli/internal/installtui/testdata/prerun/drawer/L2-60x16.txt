@@ -13,4 +13,4 @@ Monitoring and alerts
 
 Preflight: all checks passed.
 ------------------------------------------------------------
-up/down setting - Esc close - Ctrl+C exit
+up/down setting - Esc close - ?/F1 help - Ctrl+C exit
