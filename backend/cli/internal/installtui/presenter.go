@@ -171,6 +171,7 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	// The one reader of stdin: the program reads through it, and so does the plain
 	// prompt after a fallback, never both at once.
 	gate := newStdinGate(p.Stdin)
+	gate.notice = con.Stdout
 	b.plainResponder = installplain.Responder{Out: con.Stdout, In: gate.handOverLater(), ReadHidden: gate.plainReadHidden}
 	broker := installflow.NewBroker(hub, b, req.AssumeYes)
 	// The instance journey: its screens, its passphrase form, and the inbox its one-time

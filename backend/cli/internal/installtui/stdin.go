@@ -4,6 +4,7 @@
 package installtui
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -51,6 +52,9 @@ type stdinGate struct {
 	// with the program's input and closed once no read of it can be under way.
 	cr      cancelreader.CancelReader
 	stopped bool // the program reads nothing more
+
+	// notice, when set, is where the plain prompt says typed-ahead input was discarded.
+	notice io.Writer
 
 	// input, when set, is stamped with every read that brings the program input: the
 	// settling screens' measure of when the keyboard was last used (see settleGate). It
@@ -164,8 +168,12 @@ func (g *stdinGate) plainRead(p []byte) (int, error) {
 }
 
 // errNoHiddenRead is a secret question after a fallback that cannot be asked safely.
-var errNoHiddenRead = fmt.Errorf("%w: after the terminal UI stopped, a secret is read only from the terminal, "+
-	"with nothing typed to the screen still unread; re-run with --ui=plain to answer it", installflow.ErrPromptUnavailable)
+var errNoHiddenRead = fmt.Errorf("%w: after the terminal UI stopped, a secret is read only from a terminal "+
+	"whose typed-ahead input can be discarded first; re-run with --ui=plain to answer it", installflow.ErrPromptUnavailable)
+
+// typeAheadNotice is what the person is told when input typed before the question was
+// thrown away rather than read as its answer.
+const typeAheadNotice = "\ndcctl: input typed before this question was discarded, so none of it is read as the answer; type the answer now: "
 
 // plainReadHidden is the plain prompt's read of a secret: one line from the terminal the
 // program was given, with echo off.
@@ -173,10 +181,18 @@ var errNoHiddenRead = fmt.Errorf("%w: after the terminal UI stopped, a secret is
 // 🔴 IT NEVER READS os.Stdin. While the engine runs, os.Stdin is the null device (see
 // processStreams), so a hidden read of the process's stdin fails, and a person at the
 // terminal could not answer. The terminal is the gate's own file, read under the gate's
-// lock. It fails closed, never asking, where an answer could be wrong or seen: a console
-// the program may still be reading (refused), a stdin that is not a terminal, or keys typed
-// to the screen that the program had read and not used, which may be half a passphrase
-// and are wiped.
+// lock.
+//
+// 🔴 NOTHING TYPED BEFORE THE QUESTION BECOMES ITS ANSWER. Two places can hold such input:
+// keys the program read and never used (the stash), and bytes still queued in the
+// terminal's own input buffer: a paste the program's reader was cancelled in the middle
+// of. term.ReadPassword changes modes with TCSETS, which keeps queued input, so it would
+// read those bytes as the passphrase. Both are discarded first (the stash wiped, the
+// kernel's queue flushed) and the person is told so and asked to type the answer now.
+// Discarding, rather than refusing, still lets the run that was approved finish; refusing
+// would fail it part-way over keys the person can simply type again. Where the queue
+// cannot be flushed, or stdin is not a terminal, or the console may still be read by the
+// program (refused), nothing is asked: it fails closed.
 func (g *stdinGate) plainReadHidden() ([]byte, error) {
 	if err := g.refusal(); err != nil {
 		return nil, err
@@ -188,15 +204,25 @@ func (g *stdinGate) plainReadHidden() ([]byte, error) {
 	clear(g.stash)
 	g.stash = nil
 	g.mu.Unlock()
-	if typed {
-		return nil, errNoHiddenRead
-	}
 	read, ok := terminalHiddenRead(g.r)
 	if !ok {
 		return nil, errNoHiddenRead
 	}
+	if beforeHiddenRead != nil {
+		beforeHiddenRead()
+	}
+	queued, err := discardTypeAhead(g.r)
+	if err != nil {
+		return nil, fmt.Errorf("%w (discarding typed-ahead input: %v)", errNoHiddenRead, err)
+	}
+	if (typed || queued) && g.notice != nil {
+		_, _ = io.WriteString(g.notice, typeAheadNotice)
+	}
 	return read()
 }
+
+// beforeHiddenRead, a test seam, runs just before the typed-ahead input is discarded.
+var beforeHiddenRead func()
 
 // terminalHiddenRead is the read of one line with echo off from r's terminal, when r is
 // one. Tests replace it.
@@ -206,6 +232,16 @@ var terminalHiddenRead = func(r io.Reader) (func() ([]byte, error), bool) {
 		return nil, false
 	}
 	return func() ([]byte, error) { return term.ReadPassword(int(f.Fd())) }, true
+}
+
+// discardTypeAhead throws away the input queued in r's terminal and reports whether there
+// was any. Tests replace it.
+var discardTypeAhead = func(r io.Reader) (bool, error) {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false, errors.New("stdin is not a terminal file")
+	}
+	return discardQueuedInput(f)
 }
 
 // handOver ends the program's reading and returns the plain prompt's reader.

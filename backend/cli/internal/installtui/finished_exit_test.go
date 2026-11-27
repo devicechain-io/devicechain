@@ -223,8 +223,8 @@ type shortWriter struct{}
 func (shortWriter) Write(p []byte) (int, error) { return len(p) / 2, nil }
 
 // 🔴 AFTER A FALLBACK A SECRET IS NEVER READ FROM os.Stdin (the null device while the
-// engine runs), and is never asked where the answer could be wrong: it fails closed as a
-// prompt nobody can answer.
+// engine runs), nothing typed before the question becomes its answer, and where that
+// cannot be made sure of it fails closed as a prompt nobody can answer.
 func TestTheFallbacksHiddenReadFailsClosed(t *testing.T) {
 	t.Run("not a terminal", func(t *testing.T) {
 		g := newStdinGate(strings.NewReader("hunter2\n"))
@@ -239,24 +239,51 @@ func TestTheFallbacksHiddenReadFailsClosed(t *testing.T) {
 			t.Fatalf("a refused gate: %v", err)
 		}
 	})
-	// From here stdin is a terminal, whose hidden read answers "hunter2".
-	save := terminalHiddenRead
-	t.Cleanup(func() { terminalHiddenRead = save })
+	// From here stdin is a terminal, whose hidden read answers "hunter2", and whose
+	// typed-ahead queue holds what queued says.
+	saveRead, saveDiscard := terminalHiddenRead, discardTypeAhead
+	t.Cleanup(func() { terminalHiddenRead, discardTypeAhead = saveRead, saveDiscard })
 	terminalHiddenRead = func(io.Reader) (func() ([]byte, error), bool) {
 		return func() ([]byte, error) { return []byte("hunter2"), nil }, true
 	}
+	var queued bool
+	var discardErr error
+	discards := 0
+	discardTypeAhead = func(io.Reader) (bool, error) { discards++; return queued, discardErr }
+	ask := func(g *stdinGate) (string, string, error) {
+		notice := &syncBuffer{}
+		g.notice = notice
+		got, err := g.plainReadHidden()
+		return string(got), notice.String(), err
+	}
 	t.Run("a terminal", func(t *testing.T) {
-		g := newStdinGate(strings.NewReader(""))
-		if got, err := g.plainReadHidden(); err != nil || string(got) != "hunter2" {
-			t.Fatalf("a hidden read of the terminal: %q, %v", got, err)
+		queued, discardErr, discards = false, nil, 0
+		got, notice, err := ask(newStdinGate(strings.NewReader("")))
+		if err != nil || got != "hunter2" || notice != "" || discards != 1 {
+			t.Fatalf("a hidden read of the terminal: %q, %v, notice %q, discards %d", got, err, notice, discards)
+		}
+	})
+	t.Run("input queued in the terminal", func(t *testing.T) {
+		queued, discardErr, discards = true, nil, 0
+		got, notice, err := ask(newStdinGate(strings.NewReader("")))
+		if err != nil || got != "hunter2" || !strings.Contains(notice, "discarded") || discards != 1 {
+			t.Fatalf("typed-ahead input: %q, %v, notice %q, discards %d", got, err, notice, discards)
+		}
+	})
+	t.Run("a queue that cannot be flushed", func(t *testing.T) {
+		queued, discardErr = true, errors.New("inappropriate ioctl for device")
+		if _, _, err := ask(newStdinGate(strings.NewReader(""))); !errors.Is(err, installflow.ErrPromptUnavailable) {
+			t.Fatalf("an unflushable queue was read: %v", err)
 		}
 	})
 	t.Run("keys typed to the screen", func(t *testing.T) {
-		g := newStdinGate(strings.NewReader("hunter2\n"))
+		queued, discardErr = false, nil
+		g := newStdinGate(strings.NewReader(""))
 		g.stash = []byte("hun")
 		stash := g.stash
-		if _, err := g.plainReadHidden(); !errors.Is(err, installflow.ErrPromptUnavailable) {
-			t.Fatalf("a stash: %v", err)
+		got, notice, err := ask(g)
+		if err != nil || got != "hunter2" || !strings.Contains(notice, "discarded") {
+			t.Fatalf("a stash: %q, %v, notice %q", got, err, notice)
 		}
 		if string(stash) != "\x00\x00\x00" || len(g.stash) != 0 {
 			t.Fatalf("the keys typed to the screen were not wiped: %q", stash)

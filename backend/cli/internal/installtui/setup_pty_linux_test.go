@@ -253,6 +253,32 @@ func TestSetupPTYAFallbackDuringTheInstanceRunStillAsksAndShows(t *testing.T) {
 	}
 }
 
+// 🔴 BYTES LEFT IN THE TERMINAL'S INPUT QUEUE WHILE THE SCREEN FAILS OVER NEVER BECOME
+// THE PASSPHRASE. The program's reader is cancelled without draining the queue, and the
+// hidden read keeps what is queued; so the fallback flushes it, says so, and only then
+// reads what the person types.
+func TestSetupPTYTypedAheadInputIsNotReadAsThePassphrase(t *testing.T) {
+	r := startSetupPTYChild(t, "instance-fallback-typeahead")
+	r.throughCluster()
+	r.toInstanceReview()
+	settled()
+	r.press("\t\r")
+	waitFor(t, "the hidden read", r.out, func() bool { return strings.Contains(r.markers(), "about to read") })
+	r.press("stale-typeahead\r")
+	waitFor(t, "the discard notice", r.out, screenShows(r.out, "input typed before this question was discarded"))
+	time.Sleep(200 * time.Millisecond)
+	r.press(setupPassphrase + "\r")
+	if code := r.wait(); code != SetupExitSucceeded {
+		t.Fatalf("exit %d; terminal:\n%q", code, r.out.String())
+	}
+	if m := r.markers(); !strings.HasSuffix(m, "asked\nabout to read\nanswered\n") {
+		t.Fatalf("the engines saw %q", m)
+	}
+	if strings.Contains(r.out.String(), setupPassphrase) {
+		t.Fatalf("the passphrase was echoed:\n%q", r.out.String())
+	}
+}
+
 // Ctrl+C before the cluster's approval exits 2: nothing was changed.
 func TestSetupPTYCtrlCBeforeTheClusterApprovalExitsTwo(t *testing.T) {
 	r := startSetupPTYChild(t, "success")
@@ -365,7 +391,7 @@ func TestSetupPTYChild(t *testing.T) {
 			return rt.Events.Emit(installflow.Event{Step: id, Attempt: 1,
 				Payload: installflow.StepFinished{Outcome: installflow.StepSucceeded}})
 		}
-		if scenario == "instance-fallback" {
+		if strings.HasPrefix(scenario, "instance-fallback") {
 			// Offered while the screen is up: it waits in the inbox for the first-login
 			// screen, which the screen will never reach.
 			rt.Reveals.Offer(installflow.RevealOffer{Subject: installflow.RevealSuperuserSeed,
@@ -429,7 +455,15 @@ func TestSetupPTYChild(t *testing.T) {
 			return BootstrapContinueCommand(p.Instance, p.Escrow, []string{"--cluster=devicechain"})
 		},
 	}
-	if scenario == "instance-fallback" {
+	if scenario == "instance-fallback-typeahead" {
+		// The hidden read waits here, after the screen has stopped and the terminal is back
+		// in its own mode, while the parent leaves bytes queued in its input buffer.
+		beforeHiddenRead = func() {
+			mark("about to read")
+			time.Sleep(700 * time.Millisecond)
+		}
+	}
+	if strings.HasPrefix(scenario, "instance-fallback") {
 		// As dcctl setup local runs: the process's streams are taken while each engine runs.
 		// The instance stage's screen stops when the passphrase question reaches it.
 		s.OwnProcessStreams = true
