@@ -113,6 +113,9 @@ var urlSecretCases = []struct {
 		"s3://REDACTED@bucket.example:9000", []string{"dcUser", "dcCanaryPw"}},
 	{"digit-leading password, a name that is no digest after the @", "s3://dcUser:2024/dcCanaryPw@Bucket.Example:abc",
 		"s3://REDACTED@Bucket.Example:abc", []string{"dcUser", "dcCanaryPw"}},
+	// Written exactly as "admin:5001/org@x" is: with no digest after the '@', it
+	// cannot be told from a user and a password holding a raw '/', so it is hidden.
+	{"name, port, path and a non-digest @", "localhost:5001/org@x", "REDACTED@x", []string{"5001/org", "localhost"}},
 	{"colon in the password, ipv6 host", "oci://dcUser:dc:CanaryPw@[2001:db8::1]:5000/org", "oci://REDACTED@[2001:db8::1]:5000/org",
 		[]string{"dcUser", "CanaryPw"}},
 }
@@ -126,6 +129,9 @@ var urlCleanCases = []string{
 	"nats://127.0.0.1:4222", "s3://bucket/a%20b", "C:\\backups\\set", "https://h/x?", "https://h/x#",
 	"s3://@bucket/x", "https://host/a@b/archive", "s3://bucket/a%2540dcHost", "s3://bucket/a%40b",
 	"ghcr.io/org/img@sha256:abc", "localhost:5001/frontend@sha256:abc",
+	"localhost:5001/org/img:tag", "ghcr.io/org/img", "registry.example:5000/org/img:1.2.3",
+	"localhost:5001/org/img@sha256:0d1f8a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7",
+	"localhost:5001/org/img:tag@sha256:0d1f8a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7",
 	// A digest after a port, and an '@' in the path of a bracketed IP literal, are
 	// not userinfo: the far side of the '@' is no host, or the authority cannot be a
 	// user name.
