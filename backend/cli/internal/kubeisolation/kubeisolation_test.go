@@ -172,7 +172,10 @@ func TestVerifyRefusesAPartialIsolation(t *testing.T) {
 func TestRunRefusesWhenIsolationFails(t *testing.T) {
 	cmd := exec.CommandContext(t.Context(), os.Args[0],
 		"-test.run=^TestApplyClearsEveryAmbientDoor$", "-test.v", "-test.count=1")
-	cmd.Env = append(os.Environ(), "TMPDIR="+filepath.Join(t.TempDir(), "absent"))
+	// os.TempDir reads $TMPDIR on Unix but TMP, TEMP then USERPROFILE on Windows, so name the
+	// missing directory through all three spellings or the child finds a temp dir on Windows.
+	absent := filepath.Join(t.TempDir(), "absent")
+	cmd.Env = append(os.Environ(), "TMPDIR="+absent, "TMP="+absent, "TEMP="+absent)
 	out, err := cmd.CombinedOutput()
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) || exit.ExitCode() != 1 {

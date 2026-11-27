@@ -15,6 +15,11 @@ import (
 )
 
 func isJSONScenario(sc installScenario) bool {
+	for _, a := range sc.args {
+		if a == "--help" || a == "-h" {
+			return false // help is not a run: it writes no stream
+		}
+	}
 	for i, a := range sc.args {
 		if a == "--output=json" || a == "-ojson" ||
 			((a == "-o" || a == "--output") && i+1 < len(sc.args) && sc.args[i+1] == "json") {
@@ -31,7 +36,7 @@ func isJSONScenario(sc installScenario) bool {
 // one run.summary, the exit status is the summary's, and no secret canary is anywhere.
 func TestInstallJSONStreamsAreStrict(t *testing.T) {
 	n := 0
-	for _, sc := range installScenarios {
+	for _, sc := range append(append([]installScenario{}, installScenarios...), installCheckScenarios...) {
 		if !isJSONScenario(sc) {
 			continue
 		}

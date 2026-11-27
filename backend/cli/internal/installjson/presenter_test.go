@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -375,5 +376,53 @@ func TestWriteFailureIsNotSuccess(t *testing.T) {
 	if err := (Presenter{Stdout: &failingWriter{}}).Refuse(context.Background(), installflow.OperationInstall,
 		installflow.StepInstallInputs); err == nil {
 		t.Fatal("a refusal that could not be written reported nothing")
+	}
+}
+
+// slowWriter takes its time over every line, so a caller that returned before the
+// stream was written would find it short.
+type slowWriter struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (w *slowWriter) Write(b []byte) (int, error) {
+	time.Sleep(20 * time.Millisecond)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(b)
+}
+
+// 🔴 AN ENGINE PANIC ENDS THE STREAM WITH ITS SUMMARY, AND RUN RETURNS ONLY AFTER IT IS
+// WRITTEN, AS AN ERROR: the command then exits 1, the failed summary's verdict, where an
+// unrecovered panic would exit 2 and might cut the stream before its last line.
+func TestEnginePanicEndsWithTheSummary(t *testing.T) {
+	e := engineFunc(func(_ context.Context, _ installflow.Request, rt installflow.Runtime) (installflow.Summary, error) {
+		emit(t, rt, installflow.Event{Payload: installflow.RunStarted{Target: installflow.Target{Mode: "managed-kind"}, Manifest: manifest()}})
+		emit(t, rt, installflow.Event{Step: "install.inputs", Attempt: 1, Payload: installflow.StepStarted{Message: "install.inputs"}})
+		panic("an engine bug")
+	})
+	w := &slowWriter{}
+	var err error
+	func() {
+		defer func() {
+			if p := recover(); p != nil {
+				t.Fatalf("Run panicked: %v", p)
+			}
+		}()
+		err = Presenter{Stdout: w, RunID: "run-1", Clock: testkit.NewManualClock(start)}.Run(context.Background(), e,
+			installflow.Request{Operation: installflow.OperationInstall}, nil)
+	}()
+	var pe *PanicError
+	if !errors.As(err, &pe) || pe.Value != "an engine bug" || len(pe.Stack) == 0 {
+		t.Fatalf("Run returned %v, want the panic as a *PanicError with its stack", err)
+	}
+	w.mu.Lock()
+	out := append([]byte(nil), w.buf.Bytes()...)
+	w.mu.Unlock()
+	envs := decodeAll(t, out)
+	sum, ok := envs[len(envs)-1].Payload.(installflow.Summary)
+	if !ok || sum.Outcome != installflow.RunFailed || sum.ExitCode() != 1 {
+		t.Fatalf("the last line is %+v, want a failed summary", envs[len(envs)-1].Payload)
 	}
 }

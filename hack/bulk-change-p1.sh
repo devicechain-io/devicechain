@@ -116,6 +116,17 @@ p1_deployed_areas() {
   printf '%s' "$out"
 }
 
+# p1_enable_clause <pg_trigger.tgenabled> prints the ALTER TABLE clause that puts a trigger back in that mode:
+# A -> ENABLE ALWAYS, R -> ENABLE REPLICA, O -> ENABLE. D (disabled) or anything else fails. Pure.
+p1_enable_clause() {
+  case "$1" in
+  A) echo "ENABLE ALWAYS" ;;
+  R) echo "ENABLE REPLICA" ;;
+  O) echo "ENABLE" ;;
+  *) return 1 ;;
+  esac
+}
+
 self_test() {
   local rows out rc
   rows='{"arm":"baseline","ok":true,"interactiveP99":100}
@@ -153,6 +164,9 @@ self_test() {
   out="$(p1_deployed_areas $'device-management\noutbound-connectors\nuser-management' $'user-management\n\ndevice-management\nevent-sources')"
   [[ "$out" == "device-management,user-management" ]] || die "SELF-TEST: the deployed areas are not the probe areas that run: '$out'"
   [[ -z "$(p1_deployed_areas 'outbound-connectors' 'outbound-connectors-x')" ]] || die "SELF-TEST: an area name was matched as a prefix"
+  [[ "$(p1_enable_clause A)" == "ENABLE ALWAYS" ]] || die "SELF-TEST: an ALWAYS trigger would not be restored ALWAYS"
+  [[ "$(p1_enable_clause O)" == "ENABLE" && "$(p1_enable_clause R)" == "ENABLE REPLICA" ]] || die "SELF-TEST: the origin/replica clauses are wrong"
+  for bad in D "" x; do p1_enable_clause "$bad" >/dev/null && die "SELF-TEST: trigger mode '$bad' was given a clause"; done
   rc=0
   "$ROOT/hack/perf-ab.sh" --self-test >/dev/null 2>&1 || rc=$?
   [[ "$rc" == 0 ]] || die "SELF-TEST: hack/perf-ab.sh --self-test failed (rc=$rc), and every arm runs through it"
@@ -274,13 +288,31 @@ forward_dm
 caps_tokens=()
 sampler="" capture_loop="" capture_file=""
 
-triggers_sql() { # <ENABLE|DISABLE>
-  local names
-  names="$(psql_q "SELECT tgname FROM pg_trigger WHERE tgrelid = '\"device-management\".entity_attributes'::regclass AND NOT tgisinternal AND tgname LIKE 'dc_%attr%'")"
-  [[ -n "$names" ]] || die "found no attribute guard trigger on entity_attributes"
-  while read -r t; do
-    psql_q "ALTER TABLE \"device-management\".entity_attributes $1 TRIGGER \"$t\"" >/dev/null || die "could not $1 trigger $t"
-  done <<<"$names"
+# The guard's triggers as the instance holds them, "name|tgenabled" per line, read once before the first arm.
+# An arm turns them off and back on; "back on" means exactly the mode read here. The migration installs the
+# guard ENABLE ALWAYS ('A'), and bulk-change activation accepts nothing else: a plain ENABLE ('O') still fires
+# for ordinary sessions but reads as not enforced, so restoring with it would leave the instance unable to
+# start a bulk change after the A/B, silently.
+trigger_modes=""
+triggers_read() {
+  psql_q "SELECT tgname || '|' || tgenabled::text FROM pg_trigger WHERE tgrelid = '\"device-management\".entity_attributes'::regclass AND NOT tgisinternal AND tgname LIKE 'dc_%attr%' ORDER BY tgname"
+}
+
+triggers_disable() {
+  local t
+  while IFS='|' read -r t _; do
+    psql_q "ALTER TABLE \"device-management\".entity_attributes DISABLE TRIGGER \"$t\"" >/dev/null || die "could not disable trigger $t"
+  done <<<"$trigger_modes"
+}
+
+triggers_restore() {
+  local t mode clause now
+  while IFS='|' read -r t mode; do
+    clause="$(p1_enable_clause "$mode")" || die "trigger $t was in mode '$mode' before the A/B; refusing to guess how to restore it"
+    psql_q "ALTER TABLE \"device-management\".entity_attributes $clause TRIGGER \"$t\"" >/dev/null || die "could not restore trigger $t ($clause)"
+  done <<<"$trigger_modes"
+  now="$(triggers_read)" || die "could not re-read the guard's triggers"
+  [[ "$now" == "$trigger_modes" ]] || die "the guard's triggers are not as they were before the A/B: before '$trigger_modes', now '$now'"
 }
 
 arm_down() {
@@ -295,16 +327,23 @@ arm_down() {
 
 cleanup() {
   arm_down
-  [[ "$treatment" == triggers ]] && triggers_sql ENABLE
+  [[ "$treatment" == triggers && -n "$trigger_modes" ]] && triggers_restore
   kill "$fwd" 2>/dev/null || true
 }
 trap cleanup EXIT
+if [[ "$treatment" == triggers ]]; then
+  trigger_modes="$(triggers_read)" || die "could not read the guard's triggers"
+  [[ -n "$trigger_modes" ]] || die "found no attribute guard trigger on entity_attributes"
+  while IFS='|' read -r t mode; do
+    p1_enable_clause "$mode" >/dev/null || die "trigger $t is in mode '$mode' before the A/B (disabled or unknown); the treatment arm would not be the shipped guard"
+  done <<<"$trigger_modes"
+fi
 
 arm_up() { # <arm> <run>
   local arm="$1" i="$2" t
   case "$treatment:$arm" in
-  triggers:baseline) triggers_sql DISABLE ;;
-  triggers:treatment) triggers_sql ENABLE ;;
+  triggers:baseline) triggers_disable ;;
+  triggers:treatment) triggers_restore ;;
   capture:baseline | caps:baseline) ;;
   capture:treatment)
     local tls_args=()
@@ -334,9 +373,12 @@ arm_up() { # <arm> <run>
     local tok
     for t in 1 2; do
       tok="p1-cap-$i-$t-$(date -u +%H%M%S)"
+      # Registered BEFORE the start: `bulkchange start` creates the change and then starts it, so a refused
+      # start leaves it READY with its lines counted against the tenant's waiting cap. arm_down aborts every
+      # registered token (an absent one is a no-op), so the next arm is not refused by a stranded change.
+      caps_tokens+=("$tok")
       "$apiprobe" bulkchange start "${api[@]}" --url "$dm_url" --bulk "$bulk" --token "$tok" --value "cap-$tok" \
         --first $((201 + (t - 1) * 10000)) --last $((200 + t * 10000)) --rate 50 >/dev/null || die "could not start caps change $tok"
-      caps_tokens+=("$tok")
     done
     ;;
   esac
@@ -391,6 +433,29 @@ one_arm() { # <arm> <run>
 
 [[ "$treatment" != capture || -n "${P1_NATS_URL:-}" ]] ||
   usage_err "the capture treatment publishes reports: set P1_NATS_URL (a port-forward to the broker), P1_NATS_USER and P1_NATS_PASSWORD (event-sources' login), and P1_NATS_CA (a PEM file; P1_NATS_SERVER_NAME, default dc-nats) when the broker serves TLS"
+# The caps arm fills the tenant's waiting-line cap exactly (2 x 10,000 against 20,000), so it needs the tenant
+# at zero waiting lines. A change the tenant seed leaves READY (the upgrade drill's never-started entity, on a
+# build that serves bulk changes) is one line too many and the second create is refused. Every non-terminal
+# change in P-1's own tenant is aborted first, by name, and the count is re-read.
+if [[ "$treatment" == caps ]]; then
+  open_changes="$(psql_q "SELECT token FROM \"device-management\".fleet_operations WHERE tenant_id = '$tenant' AND dispatch NOT IN ('DISPATCHED', 'ABORTED')")" ||
+    die "could not list the tenant's open bulk changes"
+  while read -r t; do
+    [[ -n "$t" ]] || continue
+    say "aborting $t, left open in the P-1 tenant: its lines count against the cap the caps arm fills"
+    "$apiprobe" bulkchange abort "${api[@]}" --url "$dm_url" --token "$t" >/dev/null || die "could not abort $t"
+  done <<<"$open_changes"
+  left="$(psql_q "SELECT count(*) FROM \"device-management\".fleet_operations WHERE tenant_id = '$tenant' AND dispatch NOT IN ('DISPATCHED', 'ABORTED')")"
+  [[ "$left" == 0 ]] || die "the P-1 tenant still has $left open bulk change(s); the caps arm would be refused"
+  # Every caps arm posts up to 20,000 lines that no device answers, so each settles AMBIGUOUS at its deadline
+  # and keeps counting against the tenant's evidence-open lines (100,000) until someone resolves it. That is
+  # the admission working as designed, and it means a tenant takes about five caps arms. Refuse up front,
+  # rather than spend a baseline arm and then fail on the treatment's create, when the runs asked for cannot fit.
+  open_lines="$(psql_q "SELECT count(*) FROM \"device-management\".fleet_operation_lines WHERE tenant_id = '$tenant' AND posting = 'POSTED' AND (settlement IS NULL OR settlement = 'AMBIGUOUS') AND code <> 'TARGET_ERASED'")" ||
+    die "could not count the tenant's evidence-open lines"
+  (( open_lines + 20000 * runs <= 100000 )) ||
+    die "the P-1 tenant holds $open_lines evidence-open line(s), and $runs caps arm(s) may add $((20000 * runs)) more against its limit of 100,000; seed a fresh tenant (a new --out) for these runs"
+fi
 for i in $(seq 1 "$runs"); do
   one_arm baseline "$i"
   one_arm treatment "$i"

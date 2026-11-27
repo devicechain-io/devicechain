@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
@@ -160,4 +161,138 @@ func TestASecretIsRefusedAsAnIdentifier(t *testing.T) {
 	out := testkit.Dump(f.wait(t), f.hub.Projection())
 	out = append(out, []byte(fmt.Sprint(err))...)
 	testkit.AssertNoCanary(t, "stream and error text", out)
+}
+
+// TestARedactOnlyValueIsRedactedButNeverRefusesAnIdentifier: a value registered
+// with AddRedaction (a short password, an exec-plugin setting that is also a common
+// word) is removed from text, down to MinRedactionBytes, but a code that happens to
+// spell it is accepted — refusing it would refuse ordinary runs. Below
+// MinRedactionBytes it is refused, so the caller can say it is not covered.
+func TestARedactOnlyValueIsRedactedButNeverRefusesAnIdentifier(t *testing.T) {
+	f := newFixture(t, installflow.Options{})
+	must(t, f.hub.AddRedaction("default"))
+	must(t, f.hub.AddRedaction("pw4x"))
+	if err := f.hub.AddRedaction("pw3"); !errors.Is(err, installflow.ErrSecretTooShort) {
+		t.Errorf("a 3-byte value: %v, want ErrSecretTooShort", err)
+	}
+	if err := f.hub.AddSecret("pw4x"); !errors.Is(err, installflow.ErrSecretTooShort) {
+		t.Errorf("AddSecret of a 4-byte value: %v, want ErrSecretTooShort", err)
+	}
+	must(t, f.hub.Emit(started(false, manifest("a"))))
+	must(t, f.hub.Emit(stepStart("a", 1)))
+	must(t, f.hub.Emit(installflow.Event{Step: "a", Attempt: 1, Payload: installflow.StepFailed{
+		Code: "install.default-profile", Retry: installflow.RetryUnknown, Effect: installflow.EffectNoneObserved}}))
+	must(t, f.hub.Emit(installflow.Event{Step: "a", Payload: installflow.LogLine{Level: installflow.LogInfo,
+		Source: "tool", Text: installflow.Text("profile default, password pw4x")}}))
+	must(t, f.hub.Finish(installflow.Summary{Outcome: installflow.RunFailed, InstallRecord: installflow.RecordUnknown,
+		Readiness: installflow.ReadinessUnknown, Claim: installflow.ClaimUnknown, PartialState: installflow.EffectMayHaveChanged}))
+	var text string
+	for _, e := range f.wait(t) {
+		if l, ok := e.Payload.(installflow.LogLine); ok {
+			text = l.Text.String()
+		}
+	}
+	if strings.Contains(text, "default") || strings.Contains(text, "pw4x") {
+		t.Errorf("the log line kept a redact-only value: %q", text)
+	}
+	if got := f.hub.Redact("pw4x and default"); strings.Contains(got, "pw4x") || strings.Contains(got, "default") {
+		t.Errorf("Redact kept a value: %q", got)
+	}
+}
+
+// TestATokenValueIsRedactedOnlyAsAWholeToken: a value registered with AddRedaction is
+// replaced where it stands as a token and nowhere inside a longer word, so a profile
+// named "prod" leaves "production" alone. A strict value is still replaced as a
+// substring.
+func TestATokenValueIsRedactedOnlyAsAWholeToken(t *testing.T) {
+	f := newFixture(t, installflow.Options{})
+	must(t, f.hub.AddRedaction("prod"))
+	must(t, f.hub.AddSecret("s3cr3tXYZ"))
+	for in, want := range map[string]string{
+		"current-context: production":       "current-context: production",
+		"--profile prod":                    "--profile [redacted]",
+		"AWS_PROFILE=prod; region=x":        "AWS_PROFILE=[redacted]; region=x",
+		"prod-eu and eu_prod and prod2":     "prod-eu and eu_prod and prod2",
+		"\"prod\"":                          "\"[redacted]\"",
+		"keyAs3cr3tXYZB is strict":          "keyA[redacted]B is strict",
+		"prod prod":                         "[redacted] [redacted]",
+		"reproduce the prod issue, prodigy": "reproduce the [redacted] issue, prodigy",
+	} {
+		if got := f.hub.Redact(in); got != want {
+			t.Errorf("Redact(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestAURLPasswordIsRedactedInItsUserinfoForm: a password in a server or proxy URL is
+// printed userinfo-escaped ("foo+bar:baz" as "foo+bar%3Abaz"), and that form is
+// redacted too.
+func TestAURLPasswordIsRedactedInItsUserinfoForm(t *testing.T) {
+	f := newFixture(t, installflow.Options{})
+	must(t, f.hub.AddRedaction("foo+bar:baz"))
+	in := "proxyconnect tcp: http://user:foo+bar%3Abaz@proxy:3128 refused"
+	if got := f.hub.Redact(in); strings.Contains(got, "foo+bar") || !strings.Contains(got, "user:[redacted]@proxy") {
+		t.Errorf("Redact(%q) = %q", in, got)
+	}
+}
+
+// TestTokensOnlyInErrorsLeavesTheEventsAlone: with TokensOnlyInErrors (text
+// output), an AddRedaction value is redacted from Redact and RedactError and from
+// nothing the events carry; a strict value is redacted from both.
+func TestTokensOnlyInErrorsLeavesTheEventsAlone(t *testing.T) {
+	f := newFixture(t, installflow.Options{TokensOnlyInErrors: true})
+	must(t, f.hub.AddRedaction("prod"))
+	must(t, f.hub.AddSecret("s3cr3tXYZ"))
+	must(t, f.hub.Emit(started(false, manifest("a"))))
+	must(t, f.hub.Emit(installflow.Event{Step: "a", Payload: installflow.LogLine{Level: installflow.LogInfo,
+		Source: "tool", Text: installflow.Text("context prod, key s3cr3tXYZ")}}))
+	must(t, f.hub.Finish(installflow.Summary{Outcome: installflow.RunFailed, InstallRecord: installflow.RecordUnknown,
+		Readiness: installflow.ReadinessUnknown, Claim: installflow.ClaimUnknown, PartialState: installflow.EffectMayHaveChanged}))
+	var text string
+	for _, e := range f.wait(t) {
+		if l, ok := e.Payload.(installflow.LogLine); ok {
+			text = l.Text.String()
+		}
+	}
+	if text != "context prod, key [redacted]" {
+		t.Errorf("the event carries %q", text)
+	}
+	if got := f.hub.RedactError(errors.New("context prod")).Error(); got != "context [redacted]" {
+		t.Errorf("the error is %q", got)
+	}
+}
+
+// TestTokenRegistrationRacesNoReader: values registered while other goroutines redact
+// never change what a reader already holds. A value registered before the readers
+// started is redacted by every one of them, however many are registered alongside.
+// Run it with -race: an in-place append and sort of the forms a reader still holds is
+// a data race as well as a missed redaction.
+func TestTokenRegistrationRacesNoReader(t *testing.T) {
+	f := newFixture(t, installflow.Options{})
+	const first = "firstFoundCredential01"
+	must(t, f.hub.AddRedaction(first))
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if got := f.hub.Redact("tool said " + first + " and more"); strings.Contains(got, first) {
+					t.Errorf("a reader missed a value registered before it started: %q", got)
+					return
+				}
+			}
+		}()
+	}
+	for i := 0; i < 300; i++ {
+		must(t, f.hub.AddRedaction(fmt.Sprintf("laterCredential%04dzz", i)))
+	}
+	close(stop)
+	wg.Wait()
 }
