@@ -3759,8 +3759,10 @@ versions must leave none."
 #      same unmarked write is accepted with the trigger switched off inside a rolled-back transaction. The third
 #      is what shows the refusal came from the trigger and not from something else about the write.
 #   4. the BASELINE pod's attribute DELETE passes under the trigger too (every write above is an INSERT or an
-#      UPDATE, and the trigger's DELETE arm is its own branch). Control: while the row is still there, the same
-#      delete made unmarked in SQL is refused with DCAP1, so the delete passing is the old pod's marker.
+#      UPDATE). The API's delete is a SOFT delete (deleted_at stamped, an UPDATE under the trigger), so the
+#      check is that the live row goes and exactly one tombstone appears. Control: while the row is still there,
+#      the same soft delete and a hard DELETE, both unmarked in SQL, are refused with DCAP1, so the delete
+#      passing is the old pod's marker.
 #   5. a TENANT PURGE run by the BASELINE's user-management, as the only user-management running, erases every
 #      SHARED attribute row of a throwaway tenant. The purge deletes a whole tenant's rows in one transaction it
 #      marks itself, and here it does so under a trigger its own release never installed. Controls: the tenant
@@ -3935,27 +3937,44 @@ $out"
 $out"
   note "control: with the trigger off (rolled back) the unmarked write is accepted, so the refusal is the trigger's ✓"
 
-  # 4. A baseline pod's attribute DELETE. Its control first, while the row is there to refuse a delete of.
-  local olddel=drill-guard-old-delete olddel_pred rows
+  # 4. A baseline pod's attribute DELETE. Its controls first, while the row is there to refuse a delete of.
+  #
+  # 🔴 THE API'S DELETE IS A SOFT DELETE. EntityAttribute embeds gorm.Model, and the writer's unset is
+  # tx.Where(...).Delete(&EntityAttribute{}) with no Unscoped, so the row stays with deleted_at stamped; every
+  # read filters deleted_at IS NULL, which is what "deleted" means to the API. So the live row must go (live
+  # count 1 -> 0) AND exactly one new tombstone must appear: a delete that was swallowed leaves the live row,
+  # and one that went some other way leaves no tombstone. Both arms of the trigger are shown refusing: the
+  # stamp is an UPDATE, a hard delete is a DELETE.
+  local olddel=drill-guard-old-delete olddel_pred live_pred dead_pred rows dead_before
   olddel_pred="AND entity_id = $dev_id AND attr_key = '$olddel'"
+  live_pred="$olddel_pred AND deleted_at IS NULL"
+  dead_pred="$olddel_pred AND deleted_at IS NOT NULL"
   "$apiprobe" attrwrite "${args[@]}" --url "http://127.0.0.1:$attrguard_port/graphql" --key "$olddel" >"$work/attrguard-olddel.log" 2>&1 ||
     fail "could not write $olddel through the $baseline_tag pod: $(cat "$work/attrguard-olddel.log")"
-  rows="$(attrlock_psql "$pod" "$(attrguard_count_sql "$tenant" "$olddel_pred")")"
-  [[ "$rows" == 1 ]] || fail "the $baseline_tag pod's write of $olddel left $rows row(s), not 1, so its delete below would prove nothing"
+  rows="$(attrlock_psql "$pod" "$(attrguard_count_sql "$tenant" "$live_pred")")"
+  [[ "$rows" == 1 ]] || fail "the $baseline_tag pod's write of $olddel left $rows live row(s), not 1, so its delete below would prove nothing"
+  dead_before="$(attrlock_psql "$pod" "$(attrguard_count_sql "$tenant" "$dead_pred")")"
+  out="$(attrguard_sql "$pod" "BEGIN; UPDATE \"device-management\".entity_attributes SET deleted_at = now() WHERE tenant_id = '$tenant' AND entity_type = 'device' AND scope = 'SHARED' $live_pred; ROLLBACK;")"
+  attrguard_refused "$out" ||
+    fail "AN UNMARKED SOFT DELETE WAS NOT REFUSED: the guard passed stamping deleted_at on a device's SHARED attribute outside the writer protocol:
+$out"
   out="$(attrguard_sql "$pod" "BEGIN; $(attrguard_delete_sql "$tenant" "$olddel_pred"); ROLLBACK;")"
   attrguard_refused "$out" ||
     fail "AN UNMARKED DELETE WAS NOT REFUSED: the guard passed a delete of a device's SHARED attribute that skips the writer protocol:
 $out"
-  note "control: an unmarked DELETE of a device's SHARED attribute is refused (DCAP1) ✓"
+  note "control: an unmarked soft delete (deleted_at stamped) and an unmarked hard DELETE of a device's SHARED attribute are both refused (DCAP1) ✓"
   rc=0
   "$apiprobe" attrwrite "${args[@]}" --url "http://127.0.0.1:$attrguard_port/graphql" --key "$olddel" --delete >>"$work/attrguard-olddel.log" 2>&1 || rc=$?
   [[ "$rc" -eq 0 ]] || fail "AN ATTRIBUTE DELETE THROUGH THE $baseline_tag POD WAS REFUSED under the guard (exit $rc):
 $(cat "$work/attrguard-olddel.log")
 A baseline pod marks its deletes, so the trigger must pass them; if it does not, every attribute delete that
 reaches an old pod during the roll fails."
-  rows="$(attrlock_psql "$pod" "$(attrguard_count_sql "$tenant" "$olddel_pred")")"
-  [[ "$rows" == 0 ]] || fail "the $baseline_tag pod answered that it deleted $olddel, and $rows row(s) of it are still there"
-  note "an attribute DELETE through a $baseline_tag pod, under the guard, accepted and the row gone ✓"
+  rows="$(attrlock_psql "$pod" "$(attrguard_count_sql "$tenant" "$live_pred")")"
+  [[ "$rows" == 0 ]] || fail "the $baseline_tag pod answered that it deleted $olddel, and $rows LIVE row(s) of it (deleted_at IS NULL) are still there"
+  rows="$(attrlock_psql "$pod" "$(attrguard_count_sql "$tenant" "$dead_pred")")"
+  [[ "$rows" == "$((dead_before + 1))" ]] || fail "the $baseline_tag pod's delete of $olddel left $rows tombstone(s) where $((dead_before + 1)) were expected
+($dead_before before it): the row went some way other than the API's soft delete"
+  note "an attribute delete through a $baseline_tag pod, under the guard, accepted: the live row gone, one tombstone stamped ✓"
 
   # And nothing was left: the control writes were all rolled back, and the trigger is still enforcing (read below).
   attrguard_cleanup
