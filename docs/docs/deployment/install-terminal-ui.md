@@ -201,3 +201,41 @@ including Ctrl+C and errors, the console's modes are put back as they were.
 
 The exit status is the same as the plain install's: 0 when the install succeeded, 1 when it
 failed, was refused, or was stopped. Leaving a screen never changes it.
+
+## Cluster, then instance: `dcctl setup local` (Preview) {#setup-local}
+
+`dcctl setup local` runs the cluster install and then the bootstrap of a first instance in one
+guided session. It is in Preview. `dcctl install` and `dcctl bootstrap` are unchanged by it and
+remain the way to script either step.
+
+It has two stages, each with its own review and its own approval:
+
+1. **The cluster.** The same screens as `dcctl install local --ui=tui`, from the welcome to the
+   review. **Approve and install** installs the cluster. When it has finished, Enter continues.
+2. **The instance.** A hand-over screen says the cluster is installed and shows the
+   `dcctl bootstrap` command that creates an instance later. **Continue to the instance** leads to
+   the instance and root-key escrow choices, then to the instance's own review.
+   **Approve and create the instance** starts the bootstrap. The escrow passphrase is asked for on
+   screen when the run reaches its escrow step, and is never shown. After a successful run come the
+   escrow receipt, the one-time first-login password and the instance summary.
+
+Nothing of the instance runs without its own approval, and the cluster's approval answers nothing
+the instance run asks. Every screen that leads on (the hand-over and both reviews) takes no key
+until it has been on screen for a moment, so keys typed ahead cannot approve anything.
+
+`dcctl setup local` is guided only. It needs stdin, stdout and stderr to be an interactive terminal
+(not CI, not `TERM=dumb`), and it has no `--yes`. Without a terminal it changes nothing and exits 2,
+naming the two commands to run instead. Its flags (`--kube-context`, `--cluster`, `--compact`,
+`--ha`, `--no-splash`) only set where the screens start; each can be changed on them.
+
+If you leave or the instance fails after the cluster stage, the cluster stays installed. Setup says
+so and prints the exact `dcctl bootstrap` command that creates the instance: with the choices you
+made, once you made them.
+
+| Exit status | Meaning |
+| --- | --- |
+| 0 | The cluster is installed and the instance was created |
+| 1 | The cluster stage failed, or was stopped after its approval, as `dcctl install` exits 1 |
+| 2 | Nothing was changed: stopped before the cluster's approval, or refused before starting |
+| 3 | The cluster is installed; no instance was created (left before the instance's approval) |
+| 4 | The cluster is installed; creating the instance failed, or was stopped after its approval |

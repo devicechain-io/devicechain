@@ -37,6 +37,14 @@ type Presenter struct {
 	// change they may make. Nil, or a progress-only run (--yes, --dev), starts the run
 	// as soon as the splash ends.
 	Wizard *Wizard
+	// Bootstrap, when set, makes this an instance journey: its screens replace the
+	// install's, the run is the one its review approves (the engine passed to Run is not
+	// used), its secret questions are answered on its passphrase form, and its one-time
+	// disclosures go to its first-login screen. Wizard is ignored.
+	Bootstrap *BootstrapScreens
+	// Continues says another journey follows this one in the same command (dcctl setup
+	// local): the success verdict's Enter leads on rather than out.
+	Continues bool
 
 	// Test seams. Zero values are the real process: signal.Notify for SIGINT and
 	// SIGTERM, os.Exit, and no extra program options.
@@ -147,6 +155,20 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	gate := newStdinGate(p.Stdin)
 	b.plainResponder = installplain.Responder{Out: con.Stdout, In: gate.handOverLater()}
 	broker := installflow.NewBroker(hub, b, req.AssumeYes)
+	// The instance journey: its screens, its passphrase form, and the inbox its one-time
+	// disclosures wait in for the first-login screen. Whatever they still hold is cleared
+	// on every way out of Run.
+	var inst *instancePhase
+	var reveals installflow.RevealSink
+	if p.Bootstrap != nil {
+		inbox := &RevealInbox{}
+		setup := p.Bootstrap.Setup
+		setup.Caps, setup.Reveals = p.Caps, inbox
+		inst = newInstancePhase(p.Bootstrap, setup)
+		defer inst.flow.Close()
+		reveals = inbox
+		b.secrets = true
+	}
 
 	forced := make(chan struct{})
 	var forceOnce sync.Once
@@ -182,8 +204,10 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 		// this is only its starting point; it never draws into a zero-sized screen.
 		tea.WithWindowSize(sizeOr(p.Caps.Width, 80), sizeOr(p.Caps.Height, 24)),
 	}, p.options...)
-	mo := modelOptions{}
-	if p.Wizard != nil {
+	mo := modelOptions{op: req.Operation, continues: p.Continues}
+	if inst != nil {
+		mo.inst, mo.choose = inst, choose
+	} else if p.Wizard != nil {
 		mo.version = splashVersion(p.Wizard, hub.Redact)
 		if !p.Caps.ProgressOnly {
 			// The checks on screen run under the run's context, so an interrupt reaches them.
@@ -230,10 +254,10 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 		runE, runPreflight := e, preflight
 		// 🔴 FAIL CLOSED: the screens were up and Continue was never chosen, so the
 		// install was never confirmed. Nothing starts, whatever ended the screens.
-		unconfirmed := mo.pre != nil && !confirmed
+		unconfirmed := (mo.pre != nil || mo.inst != nil) && !confirmed
 		planMu.Unlock()
 		if unconfirmed {
-			runE, runPreflight = notStarted{}, nil
+			runE, runPreflight = notStarted{op: req.Operation}, nil
 		}
 		if streams != nil {
 			runE = streamsEngine{Engine: runE, streams: streams, dropped: &streamsDropped}
@@ -250,7 +274,7 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 			engineDone <- res
 		}()
 		res.sum, res.err = hub.Run(runCtx, runE, req, installflow.Runtime{
-			Prompts: broker, Preflight: runPreflight, Console: con, ObserveTools: true})
+			Prompts: broker, Preflight: runPreflight, Console: con, ObserveTools: true, Reveals: reveals})
 	}()
 
 	saved := saveTerminal(p.Stdin, p.Stdout)
@@ -309,7 +333,7 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	}
 	close(b.done)
 	planMu.Lock()
-	unconfirmed := mo.pre != nil && !confirmed
+	unconfirmed := (mo.pre != nil || mo.inst != nil) && !confirmed
 	planMu.Unlock()
 	if !finished {
 		reason := "it closed before the run finished"
@@ -317,8 +341,12 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 			reason = perr.Error()
 		}
 		if unconfirmed {
-			fmt.Fprintf(p.Stderr, "dcctl: the terminal UI stopped (%s) before the install was confirmed; "+
-				"the install was not started\n", reason)
+			what := "install"
+			if req.Operation == installflow.OperationBootstrap {
+				what = "bootstrap"
+			}
+			fmt.Fprintf(p.Stderr, "dcctl: the terminal UI stopped (%s) before the %s was confirmed; "+
+				"the %s was not started\n", reason, what, what)
 		} else {
 			fmt.Fprintf(p.Stderr, "dcctl: the terminal UI stopped (%s); continuing with plain output\n", reason)
 		}
@@ -347,7 +375,10 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 		fmt.Fprintln(p.Stderr, "dcctl: some output from a child process was still arriving when the run ended and was not shown")
 	}
 	if !b.plain.Load() {
-		writeExitSummary(p.Stdout, res.sum)
+		writeExitSummary(p.Stdout, req.Operation, res.sum)
+		if inst != nil {
+			inst.flow.ExitSummary(p.Stdout)
+		}
 		// The review's command, exact on one line, whatever the screen could draw.
 		if pre != nil {
 			if c := pre.exitCommand(); c != "" {
@@ -396,8 +427,11 @@ func (p Presenter) exitProcess(code int) {
 // writeExitSummary is what stays in the scrollback once the screen is gone: the verdict,
 // where it stopped, and what to run next. It carries no secret: every field is one of the
 // summary's safe values.
-func writeExitSummary(w io.Writer, s installflow.Summary) {
-	fmt.Fprintf(w, "dcctl install: %s\n", outcomeWord(s.Outcome))
+func writeExitSummary(w io.Writer, op installflow.Operation, s installflow.Summary) {
+	if op == "" {
+		op = installflow.OperationInstall
+	}
+	fmt.Fprintf(w, "dcctl %s: %s\n", op, outcomeWord(s.Outcome))
 	if s.FailedStep != "" {
 		fmt.Fprintf(w, "stopped at: %s\n", s.FailedStep)
 	}
@@ -467,15 +501,35 @@ func splashVersion(w *Wizard, redact func(string) string) string {
 	return redact(installflow.Text(w.Facts.Version).String())
 }
 
-// errNotStarted is the result of a run the screens before it ended without Continue.
-var errNotStarted = errors.New("the install was not started: it was stopped before it was confirmed, and nothing has been changed")
+// ErrNotConfirmed is matched (errors.Is) by the error of every run whose screens
+// ended before its approval: nothing of that run was started, and nothing was changed.
+// dcctl setup local tells "stopped before the approval" from "failed" with it.
+var ErrNotConfirmed = errors.New("not confirmed")
 
-// notStarted is the run that stands in for an install nobody confirmed: it does
-// nothing at all and reports exactly that.
-type notStarted struct{}
+// notConfirmedError is a run nobody approved, in the words of its operation.
+type notConfirmedError struct{ text string }
 
-func (notStarted) Run(context.Context, installflow.Request, installflow.Runtime) (installflow.Summary, error) {
+func (e notConfirmedError) Error() string        { return e.text }
+func (e notConfirmedError) Is(target error) bool { return target == ErrNotConfirmed }
+
+// errNotStarted is the result of an install the screens before it ended without Continue.
+var errNotStarted error = notConfirmedError{"the install was not started: it was stopped before it was confirmed, " +
+	"and nothing has been changed"}
+
+// errInstanceNotStarted is the same for an instance journey ended before its approval.
+var errInstanceNotStarted error = notConfirmedError{"the instance was not created: it was stopped before it was " +
+	"approved, and nothing of it has been changed"}
+
+// notStarted is the run that stands in for one nobody confirmed: it does nothing at all
+// and reports exactly that.
+type notStarted struct{ op installflow.Operation }
+
+func (n notStarted) Run(context.Context, installflow.Request, installflow.Runtime) (installflow.Summary, error) {
+	err := errNotStarted
+	if n.op == installflow.OperationBootstrap {
+		err = errInstanceNotStarted
+	}
 	return installflow.Summary{Outcome: installflow.RunCancelled, InstallRecord: installflow.RecordNotRead,
 		Readiness: installflow.ReadinessNotChecked, Claim: installflow.ClaimNotClaimed,
-		PartialState: installflow.EffectNoneObserved}, errNotStarted
+		PartialState: installflow.EffectNoneObserved}, err
 }

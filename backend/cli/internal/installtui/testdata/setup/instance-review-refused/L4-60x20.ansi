@@ -1,0 +1,19 @@
+DeviceChain · dcctl bootstrap · instance acme ·
+kind-devicechain · v1.11.0
+\x1b[2m────────────────────────────────────────────────────────────\x1b[m
+\x1b[1;38;2;32;140;183mReview the instance\x1b[m
+
+This is the instance the bootstrap will build, as the
+command line would resolve it. Nothing of it has been
+created yet. Approve starts it; Back returns to the choices.
+
+\x1b[1;38;2;224;160;48mApprove is unavailable: this plan could not be built. Go\x1b[m
+\x1b[1;38;2;224;160;48mback and change it.\x1b[m
+  --size: compact is the cluster's; this instance follows it
+
+› \x1b[7m[ Back ]\x1b[m
+  [ Approve and create the instance ]
+  [ Exit ]
+
+\x1b[2m────────────────────────────────────────────────────────────\x1b[m
+\x1b[2mTab next · Enter activate · Esc back\x1b[m

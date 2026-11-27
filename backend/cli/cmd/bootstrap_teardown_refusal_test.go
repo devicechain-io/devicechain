@@ -144,26 +144,27 @@ func assertUnconditionalInRunE(t *testing.T, call string) {
 	// its work that needs the cluster as that function literal, and the engine calls it
 	// unconditionally in its bootstrap.cluster stage, once the escrow plan is settled. A
 	// statement at the top level of either runs on every run that gets that far.
-	var runE, target *ast.FuncLit
+	// The RunE's work is bootstrapRun's: the RunE builds the run there and hands it to the
+	// presenter, and dcctl setup local builds its instance run there too.
+	var runE *ast.BlockStmt
+	var target *ast.FuncLit
 	ast.Inspect(file, func(n ast.Node) bool {
+		if fd, ok := n.(*ast.FuncDecl); ok && fd.Name.Name == "bootstrapRun" && runE == nil {
+			runE = fd.Body
+		}
 		kv, ok := n.(*ast.KeyValueExpr)
 		if !ok {
 			return true
 		}
 		if id, ok := kv.Key.(*ast.Ident); ok {
-			if lit, ok := kv.Value.(*ast.FuncLit); ok {
-				switch {
-				case id.Name == "RunE" && runE == nil:
-					runE = lit
-				case id.Name == "Target" && target == nil:
-					target = lit
-				}
+			if lit, ok := kv.Value.(*ast.FuncLit); ok && id.Name == "Target" && target == nil {
+				target = lit
 			}
 		}
 		return true
 	})
 	if runE == nil || target == nil {
-		t.Fatal("bootstrap.go has no RunE or no engine Target function literal, so this check examined nothing")
+		t.Fatal("bootstrap.go has no bootstrapRun or no engine Target function literal, so this check examined nothing")
 	}
 
 	names := func(n ast.Node) (found bool) {
@@ -197,7 +198,7 @@ func assertUnconditionalInRunE(t *testing.T, call string) {
 		return found
 	}
 
-	for _, stmt := range append(append([]ast.Stmt(nil), runE.Body.List...), target.Body.List...) {
+	for _, stmt := range append(append([]ast.Stmt(nil), runE.List...), target.Body.List...) {
 		ifStmt, ok := stmt.(*ast.IfStmt)
 		if !ok {
 			continue

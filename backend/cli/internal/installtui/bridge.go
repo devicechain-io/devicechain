@@ -35,6 +35,9 @@ type bridge struct {
 
 	// approved is the kind cluster the review approved creating, until the run asks.
 	approved atomic.Pointer[string]
+	// secrets is set when the program has a form for secret questions (an instance
+	// journey's passphrase form). Without one, a secret question is never sent to it.
+	secrets bool
 }
 
 func (b *bridge) fallBack() { b.plain.Store(true) }
@@ -77,6 +80,9 @@ func (b *bridge) Respond(ctx context.Context, q installflow.Question) (installfl
 	if b.plain.Load() {
 		return b.plainResponder.Respond(ctx, q)
 	}
+	if q.Kind == installflow.PromptSecret {
+		return b.respondSecret(ctx, q)
+	}
 	reply := make(chan installflow.Response, 1) // the screen never blocks on an abandoned question
 	b.send(promptMsg{q: q, reply: reply})
 	select {
@@ -110,4 +116,35 @@ func (w *switchWriter) Write(p []byte) (int, error) {
 		return w.plain.Write(p)
 	}
 	return w.log.Write(p)
+}
+
+// respondSecret asks a secret question on the program's passphrase form. The answer
+// travels only on the reply, never in a message the screen keeps; a question the run
+// stops waiting for is withdrawn from the screen, and an answer that arrives too late is
+// wiped.
+func (b *bridge) respondSecret(ctx context.Context, q installflow.Question) (installflow.Response, error) {
+	if !b.secrets {
+		// No form here takes a secret: refused, never typed into a yes/no question.
+		return installflow.Response{}, installflow.ErrPromptUnavailable
+	}
+	reply := &secretReply{ch: make(chan installflow.Response, 1)}
+	b.send(SecretQuestion{Question: q, reply: reply})
+	select {
+	case r := <-reply.ch:
+		return r, nil
+	case <-ctx.Done():
+		if r, ok := reply.withdraw(); ok {
+			r.Secret.Zero()
+		}
+		b.send(SecretWithdrawn{ID: q.ID})
+		return installflow.Response{}, ctx.Err()
+	case <-b.done:
+		if r, ok := reply.withdraw(); ok {
+			return r, nil // answered just before the screen went away
+		}
+		if b.plain.Load() {
+			return b.plainResponder.Respond(ctx, q)
+		}
+		return installflow.Response{}, installflow.ErrPromptUnavailable
+	}
 }

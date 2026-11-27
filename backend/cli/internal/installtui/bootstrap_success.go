@@ -39,19 +39,38 @@ const passphraseFilePlaceholder = "<file holding the escrow passphrase>"
 // only as a placeholder for a protected file. targetArgs are the target's flags
 // (--kube-context or --cluster) as the command line had them.
 func BootstrapCommand(in InstanceChoices, esc EscrowChoice, targetArgs []string) string {
-	argv := []string{"dcctl", "bootstrap", "local", shellQuote(in.Name)}
-	for _, a := range targetArgs {
-		argv = append(argv, shellQuote(a))
+	argv := quoteArgs(BootstrapArgs(in, esc, targetArgs))
+	if esc.Mode != EscrowNone {
+		argv = append(argv, "--escrow-passphrase-file="+passphraseFilePlaceholder)
 	}
+	return strings.Join(append(argv, "--yes"), " ")
+}
+
+// BootstrapContinueCommand is the command that builds the chosen instance later, by
+// hand, as a POSIX command line: the same flags as BootstrapCommand, but with no
+// --yes and no passphrase file, so the bootstrap asks for the passphrase at the
+// terminal, as a person running it expects.
+func BootstrapContinueCommand(in InstanceChoices, esc EscrowChoice, targetArgs []string) string {
+	return strings.Join(quoteArgs(BootstrapArgs(in, esc, targetArgs)), " ")
+}
+
+// BootstrapArgs is the bootstrap command line the choices describe, word by word
+// and unquoted: "dcctl", "bootstrap", the provider, the instance name, the target's
+// flags, then every flag the choices carry, ending with the escrow's. It names no
+// passphrase and gives no approval. dcctl setup local parses exactly these words
+// through the bootstrap command's own flags, so the run it starts is the one this
+// command line describes.
+func BootstrapArgs(in InstanceChoices, esc EscrowChoice, targetArgs []string) []string {
+	argv := append([]string{"dcctl", "bootstrap", "local", in.Name}, targetArgs...)
 	flag := func(name, value string) {
 		if in.Given[name] {
-			argv = append(argv, shellQuote("--"+name+"="+value))
+			argv = append(argv, "--"+name+"="+value)
 		}
 	}
 	flag("profile", in.Profile)
 	if in.Given["enable-area"] {
 		for _, a := range in.Areas {
-			argv = append(argv, shellQuote("--enable-area="+a))
+			argv = append(argv, "--enable-area="+a)
 		}
 	}
 	flag("host", in.Host)
@@ -63,14 +82,22 @@ func BootstrapCommand(in InstanceChoices, esc EscrowChoice, targetArgs []string)
 	case EscrowNone:
 		argv = append(argv, "--no-escrow")
 	case EscrowRestore:
-		argv = append(argv, shellQuote("--restore-root-key="+esc.Path), "--escrow-passphrase-file="+passphraseFilePlaceholder)
+		argv = append(argv, "--restore-root-key="+esc.Path)
 	default:
 		if esc.PathGiven {
-			argv = append(argv, shellQuote("--escrow-file="+esc.Path))
+			argv = append(argv, "--escrow-file="+esc.Path)
 		}
-		argv = append(argv, "--escrow-passphrase-file="+passphraseFilePlaceholder)
 	}
-	return strings.Join(append(argv, "--yes"), " ")
+	return argv
+}
+
+// quoteArgs quotes each word for a POSIX shell.
+func quoteArgs(argv []string) []string {
+	out := make([]string, len(argv))
+	for i, a := range argv {
+		out[i] = shellQuote(a)
+	}
+	return out
 }
 
 // successModel is screen S8, the instance success.

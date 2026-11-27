@@ -251,8 +251,11 @@ func (m model) nowBlock(f frame, done, total int) []string {
 		second := ""
 		if !m.caps.ProgressOnly {
 			second = "Press Enter to exit."
+			if m.continues && m.summary.Succeeded() {
+				second = "Press Enter to continue."
+			}
 		}
-		return []string{t.bold.Render(fit("Install " + outcomeWord(m.summary.Outcome) + ".")), second}
+		return []string{t.bold.Render(fit(m.runWord() + " " + outcomeWord(m.summary.Outcome) + ".")), second}
 	}
 	v := m.progress.activeStep()
 	if v == nil {
@@ -394,7 +397,7 @@ func (m model) renderMinimal(f frame) string {
 	t := m.theme
 	gs := m.progress.groups()
 	done, total := overall(gs)
-	lines := []string{t.bold.Render("DeviceChain install"), fmt.Sprintf("%d/%d stages", done, total)}
+	lines := []string{t.bold.Render("DeviceChain " + strings.ToLower(m.runWord())), fmt.Sprintf("%d/%d stages", done, total)}
 	for _, g := range gs {
 		if g.state == groupRunning || g.state == groupFailed || g.state == groupStopped {
 			_, label := rowBar(t, g, 0, 0)
@@ -423,10 +426,22 @@ func (m model) renderMinimal(f frame) string {
 // caller-supplied text, so the line it is composed into is checked whole
 // (see result.Input.Line).
 func (m model) titleFor(target string) string {
-	if target != "" {
-		return "Installing " + m.theme.g.dot + " " + target
+	verb := "Installing"
+	if m.op == installflow.OperationBootstrap {
+		verb = "Creating the instance"
 	}
-	return "Installing"
+	if target != "" {
+		return verb + " " + m.theme.g.dot + " " + target
+	}
+	return verb
+}
+
+// runWord names the run in its verdict: the install, or the bootstrap.
+func (m model) runWord() string {
+	if m.op == installflow.OperationBootstrap {
+		return "Bootstrap"
+	}
+	return "Install"
 }
 
 func clip(lines []string, h int) []string {

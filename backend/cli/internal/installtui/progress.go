@@ -30,6 +30,29 @@ var displayGroups = []displayGroup{
 	{"Relational store ready", []installflow.StepID{installflow.StepInstallRDBReady}},
 }
 
+// bootstrapDisplayGroups is the same table for a bootstrap's fifteen stages.
+// bootstrap.inputs happens before the run and bootstrap.report is the closing access
+// report ("Finalizing"), so neither is a row. The preflight is a row here: no screen
+// before an instance's run shows it.
+var bootstrapDisplayGroups = []displayGroup{
+	{"Checks and root-key escrow", []installflow.StepID{installflow.StepBootstrapPreflight, installflow.StepBootstrapEscrow}},
+	{"Cluster and images", []installflow.StepID{installflow.StepBootstrapCluster, installflow.StepBootstrapRegistry}},
+	{"Claim and refusals", []installflow.StepID{installflow.StepBootstrapClaim, installflow.StepBootstrapRefuseRebuild,
+		installflow.StepBootstrapSingletons}},
+	{"Declare and render", []installflow.StepID{installflow.StepBootstrapDeclare, installflow.StepBootstrapRender}},
+	{"Infrastructure", []installflow.StepID{installflow.StepBootstrapInfrastructure}},
+	{"Instance release (Helm)", []installflow.StepID{installflow.StepBootstrapHelm}},
+	{"Readiness", []installflow.StepID{installflow.StepBootstrapReadiness, installflow.StepBootstrapBrokerBalance}},
+}
+
+// displayGroupsFor is the table for an operation's run.
+func displayGroupsFor(op installflow.Operation) []displayGroup {
+	if op == installflow.OperationBootstrap {
+		return bootstrapDisplayGroups
+	}
+	return displayGroups
+}
+
 // stepPhase is where one stage's LATEST attempt is.
 type stepPhase uint8
 
@@ -63,10 +86,12 @@ type progressState struct {
 	target     string
 	dryRun     bool
 	manifest   bool
-	steps      map[installflow.StepID]*stepView
-	order      []installflow.StepID
-	active     installflow.StepID // the stage the "Now" block describes
-	lastEvent  time.Time
+	// table is the operation's display groups; nil is the install's.
+	table     []displayGroup
+	steps     map[installflow.StepID]*stepView
+	order     []installflow.StepID
+	active    installflow.StepID // the stage the "Now" block describes
+	lastEvent time.Time
 }
 
 func newProgressState() progressState {
@@ -147,7 +172,11 @@ type groupView struct {
 // it is hidden and not counted.
 func (s *progressState) groups() []groupView {
 	var out []groupView
-	for _, g := range displayGroups {
+	table := s.table
+	if table == nil {
+		table = displayGroups
+	}
+	for _, g := range table {
 		var views []*stepView
 		applicable := false
 		for _, id := range g.steps {

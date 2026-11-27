@@ -90,6 +90,12 @@ type EscrowFlags struct {
 	// never through an event. It changes WHO is asked, never WHEN: the file and the
 	// environment still come first, and with no terminal nobody is asked at all.
 	ask func(escrowQuestion) (string, error)
+	// atTerminal, when set, answers "is a person at a terminal?" in place of
+	// stdinIsTerminal. A presenter that draws its own screen hands the process's stdin
+	// to the null device while the run is live, so the real terminal is the
+	// presenter's to report (BootstrapEngine.PersonAtTerminal). It changes nothing
+	// about the order: the file and the environment are still read first.
+	atTerminal func() bool
 	// con is where the plan's notes go. The zero value is the process's stdout.
 	con console
 }
@@ -445,7 +451,11 @@ func resolveEscrowPassphrase(f EscrowFlags, q escrowQuestion) (string, error) {
 		}
 		return pass, nil
 	}
-	if !stdinIsTerminal() {
+	atTerminal := stdinIsTerminal
+	if f.atTerminal != nil {
+		atTerminal = f.atTerminal
+	}
+	if !atTerminal() {
 		return "", fmt.Errorf(
 			"no escrow passphrase and no terminal to ask at.\n"+
 				"  Supply one with --escrow-passphrase-file <path> or %s,\n"+

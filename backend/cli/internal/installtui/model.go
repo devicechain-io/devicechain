@@ -86,6 +86,16 @@ type model struct {
 	prompt   *promptMsg
 	stopping bool
 	summary  *installflow.Summary
+
+	// op is the operation the run belongs to: install unless the presenter runs an
+	// instance journey.
+	op installflow.Operation
+	// inst is the instance journey's screens (Presenter.Bootstrap), in place of pre. Its
+	// screens before the run are up while prePhase is true.
+	inst *instancePhase
+	// continues says the cluster journey is followed by another: its verdict's Enter
+	// leads on rather than out.
+	continues bool
 }
 
 // modelOptions are the parts of the screen that exist only for some runs.
@@ -97,6 +107,10 @@ type modelOptions struct {
 	pre    *prerun
 	choose func(installflow.Engine, installflow.PreflightRunner)
 	clock  Clock
+	// op, inst and continues: see model.
+	op        installflow.Operation
+	inst      *instancePhase
+	continues bool
 }
 
 func newModel(caps terminal.Capabilities, intr *interrupter, start func(), logs logSource, redact func(string) string,
@@ -107,7 +121,12 @@ func newModel(caps terminal.Capabilities, intr *interrupter, start func(), logs 
 		pane:  newLogPane(caps.Layout == terminal.Full),
 		width: caps.Width, height: caps.Height,
 		now: time.Now, loc: time.Local, every: tickEvery,
-		pre: o.pre, prePhase: o.pre != nil, choose: o.choose}
+		pre: o.pre, prePhase: o.pre != nil, choose: o.choose,
+		op: o.op, inst: o.inst, continues: o.continues}
+	if o.inst != nil {
+		m.progress.table = displayGroupsFor(installflow.OperationBootstrap)
+		m.prePhase = !caps.ProgressOnly
+	}
 	if m.splash {
 		clock := o.clock
 		if clock == nil {
@@ -126,11 +145,17 @@ func (m model) Init() tea.Cmd {
 		return m.splashM.Init()
 	}
 	if m.prePhase {
+		if m.inst != nil {
+			return m.inst.start()
+		}
 		return nil
 	}
 	m.start()
 	return m.beat()
 }
+
+// gated reports whether this run starts only on an approval given on screen.
+func (m model) gated() bool { return m.pre != nil || m.inst != nil }
 
 // abandon ends the screens before the run without confirming it. The run they
 // would have started is never started (see Presenter.Run); the program ends once
@@ -143,7 +168,11 @@ func (m *model) abandon() {
 // begin starts the run with the plan the screens before it settled on. It is the
 // confirmation: only Continue calls it.
 func (m *model) begin() tea.Cmd {
-	if m.pre != nil && m.choose != nil {
+	switch {
+	case m.inst != nil && m.choose != nil:
+		// The instance review's approval: the run built for the choices it showed.
+		m.choose(m.inst.plan.Engine, m.inst.plan.Preflight)
+	case m.pre != nil && m.choose != nil:
 		m.choose(m.pre.engine, m.pre.runner)
 	}
 	m.prePhase = false
@@ -171,6 +200,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pre != nil {
 			m.pre.resize(msg.Width, msg.Height)
 		}
+		if m.inst != nil {
+			m.inst.resize(msg.Width, msg.Height)
+		}
 	case tickMsg:
 		m.tick++
 		return m, m.beat()
@@ -193,9 +225,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd, _ := m.pre.update(msg)
 			return m, cmd
 		}
+	case instSettled, InstanceChosen, EscrowChosen, ScreenBack, BootstrapPlanned:
+		if m.inst != nil && m.prePhase {
+			cmd, _ := m.inst.update(msg)
+			return m, cmd
+		}
+	case SecretQuestion, SecretWithdrawn:
+		// The run's escrow passphrase form, drawn over the progress screen while the
+		// run waits on it.
+		if m.inst != nil {
+			_, cmd := m.inst.flow.Update(msg)
+			return m, cmd
+		}
+		if q, ok := msg.(SecretQuestion); ok {
+			// No screen here takes a secret: the question is refused, never left waiting.
+			q.reply.answer(installflow.Response{})
+		}
+	case BootstrapDone:
+		// The screens after a successful instance run are done; a failed run's verdict
+		// stays on the progress screen until the operator leaves it.
+		if m.inst != nil && m.summary != nil && m.summary.Succeeded() {
+			return m, tea.Quit
+		}
+	case tea.PasteMsg:
+		if m.inst != nil && (m.prePhase || m.inst.flow.pass != nil || m.inst.stage == instAfter) {
+			if m.prePhase {
+				cmd, _ := m.inst.update(msg)
+				return m, cmd
+			}
+			_, cmd := m.inst.flow.Update(msg)
+			return m, cmd
+		}
 	case stoppingMsg:
 		m.stopping = true
-		if m.pre != nil && (m.splash || m.prePhase) {
+		if m.gated() && (m.splash || m.prePhase) {
 			// An OS interrupt before the run: the one cancel, like Exit or Ctrl+C.
 			m.abandon()
 		}
@@ -208,6 +271,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if k.String() == "ctrl+c" && m.inst != nil && m.inst.stage == instAfter && m.summary != nil {
+		// The instance run is over and its screens are up: there is nothing left to stop,
+		// and its one-time disclosures are discarded on the way out (BootstrapFlow.Close).
+		return m, tea.Quit
+	}
 	if k.String() == "ctrl+c" {
 		// 🔴 NEVER tea.Quit HERE. The first interrupt cancels the run and the screen stays
 		// until the engine has settled; the second ends the process through the
@@ -215,7 +283,7 @@ func (m model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.intr.interrupt()
 		m.stopping = true
 		switch {
-		case m.pre != nil && (m.splash || m.prePhase):
+		case m.gated() && (m.splash || m.prePhase):
 			m.abandon() // before the run: nothing is started
 		case m.splash:
 			m.splash = false
@@ -228,6 +296,22 @@ func (m model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Any key skips the splash and is CONSUMED: it must not answer the first
 		// question, nor act on the welcome screen. The splash says so with SplashDone.
 		_, cmd := m.splashM.Update(k)
+		return m, cmd
+	}
+	if m.prePhase && m.inst != nil {
+		cmd, out := m.inst.update(k)
+		switch out {
+		case proceed:
+			return m, tea.Batch(cmd, m.begin())
+		case leave:
+			m.intr.interrupt()
+			m.abandon()
+		}
+		return m, cmd
+	}
+	if m.inst != nil && (m.inst.flow.pass != nil || m.inst.stage == instAfter) {
+		// The escrow passphrase form during the run, and the screens after it.
+		_, cmd := m.inst.flow.Update(k)
 		return m, cmd
 	}
 	if m.prePhase {
@@ -298,7 +382,23 @@ func (m model) event(e installflow.Envelope) (tea.Model, tea.Cmd) {
 		if m.caps.ProgressOnly || m.leaving {
 			// --yes: progress only, and the run's end is the program's end. Ended before
 			// the run: nothing ran, so there is no result to read on screen.
+			if m.inst != nil {
+				m.inst.flow.Close()
+			}
 			return m, tea.Quit
+		}
+		if m.inst != nil {
+			// The instance screens take the verdict: a success goes on to the receipt,
+			// the first login and the instance success; a failure stays here.
+			var facts InstanceFacts
+			if s.Succeeded() && m.inst.scr.Facts != nil {
+				facts = m.inst.scr.Facts(s)
+			}
+			if s.Succeeded() {
+				m.inst.stage = instAfter
+			}
+			_, cmd := m.inst.flow.Update(BootstrapRunFinished{Summary: s, Facts: facts})
+			return m, cmd
 		}
 	}
 	return m, nil
@@ -315,8 +415,14 @@ func (m model) render() string {
 	if m.splash {
 		return m.splashM.Splash().View()
 	}
+	if m.prePhase && m.inst != nil {
+		return m.inst.render()
+	}
 	if m.prePhase {
 		return m.pre.render()
+	}
+	if m.inst != nil && (m.inst.flow.pass != nil || m.inst.stage == instAfter) {
+		return m.inst.flow.Render()
 	}
 	return m.renderProgress()
 }
