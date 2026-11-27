@@ -59,10 +59,11 @@ func (api *Api) MeasureFleetReconcilerLag(ctx context.Context) error {
 
 var errFleetReconcilerLagSharded = errors.New("the bulk-change reconciler lag is not measured across tenant shard groups")
 
-// FleetReconcilerLag reads, across every tenant, the age of the oldest device report that could
-// decide an applied line and has not: a report at or after the line's posted revision, for a line
-// still awaiting evidence, of an operation this release drives. 0 means nothing is waiting, which
-// is a measurement, not a default. Age is on the database clock.
+// FleetReconcilerLag reads, across every tenant, how long the oldest undecided line has had the
+// report that will decide it: for each line still awaiting evidence, of an operation this release
+// drives, its DECIDER, the first report at or after its posted revision in the order the settlement
+// read takes it (revision, then id; fleetSettlementRead's "first"); and of those, the oldest. 0
+// means nothing is waiting, which is a measurement, not a default. Age is on the database clock.
 //
 // ONE STATEMENT UNDER THE SYSTEM CONTEXT, deliberately. The gauge is an instance-wide aggregate
 // with no tenant label, so the instance-wide question is the one it asks; asked one tenant at a
@@ -72,10 +73,14 @@ var errFleetReconcilerLagSharded = errors.New("the bulk-change reconciler lag is
 //
 // IT IS DRIVEN FROM THE AWAITING LINES, not from the reports. The lines awaiting evidence are a
 // partial index (posted, no evidence, not redacted), and each one costs one probe of the report
-// log's (device_id, revision) index for the reports at or after its posted revision. The report
-// log is retained history and grows with every report, decided or not; a read driven from it costs
-// what the instance has retained. The per-line lookup is a correlated subquery so the plan is that
-// probe whatever the planner estimates for a join.
+// log's (device_id, revision, status) index: the range at or after its posted revision, in index
+// order, stopped after the first revision by LIMIT 1. That bound is the point. A device whose line
+// stays undecided while it keeps reporting newer revisions has an ever longer range at or after
+// the posted revision, and a min() over that range reads all of it on every measurement; the
+// decider is its first entry. The report log is retained history and grows with every report; a
+// read driven from it, or one that reads a whole range of it, costs what the instance has retained.
+// The per-line lookup is a correlated subquery so the plan is that probe whatever the planner
+// estimates for a join.
 //
 // 🔴 IT READS THE HOME DATABASE, so it refuses to answer once tenant sharding is on: tenants placed
 // in another shard group would be missing from the minimum, and the lag would read healthy for
@@ -94,8 +99,9 @@ func (api *Api) FleetReconcilerLag(ctx context.Context) (time.Duration, error) {
 		age, args = "(julianday(?) - julianday(min(x.created_at))) * 86400.0", []any{fleetClock().UTC()}
 	}
 	var seconds sql.NullFloat64
-	err := db.Raw(`SELECT `+age+` AS age FROM (SELECT (SELECT min(r.created_at) FROM `+r+` r
- WHERE r.device_id=l.target_id AND r.tenant_id=l.tenant_id AND r.revision>=l.posted_revision) AS created_at
+	err := db.Raw(`SELECT `+age+` AS age FROM (SELECT (SELECT r.created_at FROM `+r+` r
+ WHERE r.device_id=l.target_id AND r.tenant_id=l.tenant_id AND r.revision>=l.posted_revision
+ ORDER BY r.revision ASC, r.id ASC LIMIT 1) AS created_at
  FROM `+l+` l JOIN `+o+` o ON o.id=l.operation_id AND o.tenant_id=l.tenant_id
  WHERE l.posting='POSTED' AND l.evidence_revision IS NULL AND l.redacted_at IS NULL AND (`+fleetSettlementProtocol+`)) x`,
 		append(args, ledger.SupportedDriverProtocol)...).Scan(&seconds).Error
@@ -103,7 +109,7 @@ func (api *Api) FleetReconcilerLag(ctx context.Context) (time.Duration, error) {
 		return 0, err
 	}
 	if !seconds.Valid {
-		// min() over no waiting report: nothing is waiting.
+		// No awaiting line has a decider: nothing is waiting.
 		return 0, nil
 	}
 	return max(time.Duration(seconds.Float64*float64(time.Second)), 0), nil

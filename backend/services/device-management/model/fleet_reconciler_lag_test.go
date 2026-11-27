@@ -97,6 +97,10 @@ func TestReconcilerLagIsTheOldestWaitingReportAcrossEveryTenant(t *testing.T) {
 	// Not waiting: a report before the posted revision; a line already decided; a line an operation of a
 	// newer release drives; a redacted line.
 	lagReport(t, api, "t-a", 9_000_000, 4, time.Hour)
+	// Nor a later revision of a device whose line already has its decider (t-a's revision 5): the
+	// decider is the first report at or after the posted revision, as the settlement read takes it,
+	// however old the reports after it are.
+	lagReport(t, api, "t-a", 9_000_000, 7, time.Hour)
 	decided := lagLine(t, api, "t-d", 9_000_010, 1)
 	require.NoError(t, api.RDB.DB(core.WithTenant(ctx, "t-d")).Model(decided).Update("evidence_revision", 5).Error)
 	lagReport(t, api, "t-d", 9_000_010, 5, time.Hour)

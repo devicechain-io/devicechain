@@ -81,6 +81,8 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-management/model/api_fleet_expiry_sweep.go": {"Api.fleetExpiryTenants"},
 	// Bulk-change settlement discovers only tenant IDs (no line, report or document is read); every candidate read, decision and evidence close then runs under that tenant's own core.WithTenant.
 	"backend/services/device-management/model/api_fleet_settlement.go": {"Api.settlementTenants", "Api.SweepFleetSettlement"},
+	// The bulk-change reconciler lag gauge is an instance-wide aggregate with no tenant label: one statement takes the oldest waiting report's age across every tenant's awaiting lines, each join bound to the line's own tenant, and returns one number, never row content.
+	"backend/services/device-management/model/fleet_reconciler_lag.go": {"Api.FleetReconcilerLag"},
 	// Create admission counts the instance-wide fleet-operation budgets (counts only, no row of any tenant is read) under the tenant and instance admission locks.
 	"backend/services/device-management/model/api_fleet_operation.go": {"Api.fleetAdmit"},
 	// Start admission counts the instance-wide dispatching budget (a count only, no row of any tenant is read) under the tenant and instance admission locks.
