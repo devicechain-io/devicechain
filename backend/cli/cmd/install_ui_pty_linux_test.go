@@ -33,6 +33,10 @@ func TestPlainDcctlNeverTouchesTheTerminal(t *testing.T) {
 	if os.Getenv(plainPTYChildEnv) != "" {
 		return
 	}
+	// The child is this test binary, whose start-up alone can take most of a second under
+	// -race on a CI runner. Time one child that exits before dcctl runs, and hold each
+	// dcctl run to that plus a margin far below any terminal-query timeout.
+	baseline := timePTYChild(t)
 	for _, args := range [][]string{
 		{"install", "local", "--ui=plain", "--help"},
 		{"install", "--help"},
@@ -40,7 +44,8 @@ func TestPlainDcctlNeverTouchesTheTerminal(t *testing.T) {
 	} {
 		t.Run(fmt.Sprint(args), func(t *testing.T) {
 			m, s := openCmdPTY(t)
-			before, err := unix.IoctlGetTermios(int(s.Fd()), unix.TCGETS)
+			sfd := int(s.Fd())
+			before, err := unix.IoctlGetTermios(sfd, unix.TCGETS)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -70,14 +75,16 @@ func TestPlainDcctlNeverTouchesTheTerminal(t *testing.T) {
 			// leaves nothing to see afterwards.
 			changed := make(chan string, 1)
 			stop := make(chan struct{})
+			watched := make(chan struct{})
 			go func() {
+				defer close(watched)
 				for {
 					select {
 					case <-stop:
 						return
 					default:
 					}
-					if now, err := unix.IoctlGetTermios(int(s.Fd()), unix.TCGETS); err == nil && now.Lflag != before.Lflag {
+					if now, err := unix.IoctlGetTermios(sfd, unix.TCGETS); err == nil && now.Lflag != before.Lflag {
 						select {
 						case changed <- fmt.Sprintf("lflag %#x -> %#x", before.Lflag, now.Lflag):
 						default:
@@ -93,6 +100,8 @@ func TestPlainDcctlNeverTouchesTheTerminal(t *testing.T) {
 			err = cmd.Wait()
 			took := time.Since(began)
 			close(stop)
+			// The watcher must be gone before the cleanup closes the terminal it polls.
+			<-watched
 			var ee *exec.ExitError
 			if err != nil && !errors.As(err, &ee) {
 				t.Fatal(err)
@@ -111,8 +120,8 @@ func TestPlainDcctlNeverTouchesTheTerminal(t *testing.T) {
 				t.Errorf("dcctl %v changed the terminal's modes while it ran: %s", args, c)
 			default:
 			}
-			if took > time.Second {
-				t.Errorf("dcctl %v took %v on a terminal that answers no queries", args, took)
+			if limit := baseline + 750*time.Millisecond; took > limit {
+				t.Errorf("dcctl %v took %v on a terminal that answers no queries (a child that runs nothing took %v)", args, took, baseline)
 			}
 		})
 	}
@@ -120,11 +129,32 @@ func TestPlainDcctlNeverTouchesTheTerminal(t *testing.T) {
 
 const plainPTYChildEnv = "DCCTL_PLAIN_PTY_CHILD"
 
+// timePTYChild runs the child on a fresh terminal with nothing for dcctl to do and
+// returns how long the process took from start to exit.
+func timePTYChild(t *testing.T) time.Duration {
+	t.Helper()
+	m, s := openCmdPTY(t)
+	go func() { _, _ = io.Copy(io.Discard, m) }()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestPlainPTYChild$", "-test.count=1")
+	cmd.Env = []string{plainPTYChildEnv + "=noop", "PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(),
+		"TERM=xterm-256color", "LANG=C.UTF-8"}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = s, s, s
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+	began := time.Now()
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("baseline child: %v", err)
+	}
+	return time.Since(began)
+}
+
 // TestPlainPTYChild is the child half: dcctl with the arguments the parent passed.
 func TestPlainPTYChild(t *testing.T) {
 	n := os.Getenv(plainPTYChildEnv)
 	if n == "" {
 		return
+	}
+	if n == "noop" {
+		os.Exit(0)
 	}
 	var args []string
 	for i := 0; ; i++ {
