@@ -5,8 +5,8 @@
 │   \x1b[38;5;109mContext   \x1b[m prod\x1b[38;5;109m (Enter to choose another)\x1b[m                                                                          │
 │ › \x1b[38;5;109mFootprint \x1b[m ( ) Standard (*) \x1b[7mCompact\x1b[m (from --compact)                                                               │
 │              \x1b[38;5;109mCompact is the small-footprint preset for the cluster and every instance on it: smaller volumes,\x1b[m        │
-│              \x1b[38;5;109mlowered JetStream/KV ceilings and scheduling requests, no monitoring stack, and, unless --no-tls=false,\x1b[m │
-│              \x1b[38;5;109mno cert-manager and therefore no database backups.\x1b[m                                                      │
+│              \x1b[38;5;109mlowered JetStream/KV ceilings and scheduling requests, no monitoring stack, no cert-manager, and no\x1b[m     │
+│              \x1b[38;5;109mdatabase backups.\x1b[m                                                                                       │
 │   \x1b[38;5;109mTopology  \x1b[m ( ) Single (*) HA (from --ha)                                                                           │
 │                                                                                                                      │
 │ \x1b[38;5;109mEach change re-resolves the plan as the command line would, and runs the read-only checks again for it.\x1b[m              │

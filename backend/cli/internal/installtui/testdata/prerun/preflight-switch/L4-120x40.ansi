@@ -21,11 +21,11 @@
 │ \x1b[38;2;240;114;122mPreflight: 2 failures, 1 warning. Continue is unavailable while any check fails. Fix each failure, then Recheck.\x1b[m     │
 │                                                                                                                      │
 │ Compact is the small-footprint preset for the cluster and every instance on it: smaller volumes, lowered             │
-│ JetStream/KV ceilings and scheduling requests, no monitoring stack, and, unless --no-tls=false, no cert-manager and  │
-│ therefore no database backups.                                                                                       │
+│ JetStream/KV ceilings and scheduling requests, no monitoring stack unless --no-monitoring=false keeps it, and,       │
+│ unless --no-tls=false, no cert-manager and therefore no database backups. The cluster choices show what this plan    │
+│ keeps.                                                                                                               │
 │ The plan changes to this footprint and every check runs again for it.                                                │
 │ \x1b[1mSwitch to Compact?\x1b[m                                                                                                   │
-│                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │

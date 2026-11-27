@@ -6,7 +6,7 @@
 › \x1b[38;2;138;166;182mFootprint \x1b[m ( ) Standard (*) \x1b[7mCompact\x1b[m (from --compact)
              \x1b[38;2;138;166;182mCompact is the small-footprint preset for the\x1b[m
              \x1b[38;2;138;166;182mcluster and every instance on it: smaller\x1b[m
-… 8 lines below
+… 7 lines below
 
 \x1b[38;2;95;211;154mPreflight: all checks passed.\x1b[m
 

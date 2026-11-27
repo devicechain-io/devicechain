@@ -6,9 +6,8 @@
 │ › \x1b[38;5;109mFootprint \x1b[m ( ) Standard (*) \x1b[7mCompact\x1b[m (changed in this installer)            │
 │              \x1b[38;5;109mCompact is the small-footprint preset for the cluster and every\x1b[m │
 │              \x1b[38;5;109minstance on it: smaller volumes, lowered JetStream/KV ceilings\x1b[m  │
-│              \x1b[38;5;109mand scheduling requests, no monitoring stack, and, unless\x1b[m       │
-│              \x1b[38;5;109m--no-tls=false, no cert-manager and therefore no database\x1b[m       │
-│              \x1b[38;5;109mbackups.\x1b[m                                                        │
+│              \x1b[38;5;109mand scheduling requests, no monitoring stack, no cert-manager,\x1b[m  │
+│              \x1b[38;5;109mand no database backups.\x1b[m                                        │
 │   \x1b[38;5;109mTopology  \x1b[m (*) Single ( ) HA                                               │
 │                                                                              │
 │ \x1b[38;5;109mEach change re-resolves the plan as the command line would, and runs the\x1b[m     │
@@ -17,6 +16,7 @@
 │ \x1b[38;5;109mworking: the checks are running for this plan. Continue waits for them.\x1b[m      │
 │                                                                              │
 │   \x1b[38;5;109mContinue (unavailable)\x1b[m    Advanced    Preflight    Exit                    │
+│                                                                              │
 │                                                                              │
 │                                                                              │
 ├──────────────────────────────────────────────────────────────────────────────┤

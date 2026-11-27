@@ -2,12 +2,12 @@
 │ Advanced settings                                                            │
 │ Editors change the plan at once and re-run the checks. Every other flag from │
 │ the command line is carried as given.                                        │
-│ … 9 lines above                                                              │
-│   --database-toleration dedicated=db:NoSchedule, spot=true:NoSchedule        │
-│   carried (from the command line)                                            │
+│ … 11 lines above                                                             │
 │                                                                              │
 │ Backups and snapshots                                                        │
-│ › TLS and database backups (--no-tls): on (default)                          │
+│ › TLS (cert-manager) (--no-tls): on (default)                                │
+│   Database backups: on (follows the bundled CloudNativePG operator and, on   │
+│   Compact, TLS)                                                              │
 │                                                                              │
 │ Relational recovery                                                          │
 │   nothing set; the defaults apply                                            │

@@ -7,10 +7,10 @@
              \x1b[38;5;109mCompact is the small-footprint preset for the\x1b[m
              \x1b[38;5;109mcluster and every instance on it: smaller\x1b[m
              \x1b[38;5;109mvolumes, lowered JetStream/KV ceilings and\x1b[m
-             \x1b[38;5;109mscheduling requests, no monitoring stack, and,\x1b[m
-             \x1b[38;5;109munless --no-tls=false, no cert-manager and\x1b[m
-             \x1b[38;5;109mtherefore no database backups.\x1b[m
-… 4 lines below
+             \x1b[38;5;109mscheduling requests, no monitoring stack, no\x1b[m
+             \x1b[38;5;109mcert-manager, and no database backups.\x1b[m
+  \x1b[38;5;109mTopology  \x1b[m ( ) Single (*) HA (from --ha)
+… 3 lines below
 
 \x1b[38;5;78mPreflight: all checks passed.\x1b[m
 

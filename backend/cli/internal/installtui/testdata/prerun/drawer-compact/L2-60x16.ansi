@@ -4,12 +4,12 @@
 Editors change the plan at once and re-run the checks. Every
 other flag from the command line is carried as given.
 ... 14 lines above
-> TLS and database backups (--no-tls): \x1b[7mon\x1b[m (default)
+> TLS (cert-manager) (--no-tls): \x1b[7mon\x1b[m (default)
+  Database backups: on (follows the bundled CloudNativePG
+  operator and, on Compact, TLS)
 
 \x1b[1mRelational recovery\x1b[m
-  nothing set; the defaults apply
-
-... 5 lines below
+... 7 lines below
 
 Preflight: all checks passed.
 ------------------------------------------------------------

@@ -13,7 +13,8 @@
 │   --database-toleration dedicated=db:NoSchedule, spot=true:NoSchedule carried (from the command line)                │
 │                                                                                                                      │
 │ Backups and snapshots                                                                                                │
-│ › TLS and database backups (--no-tls): on (default)                                                                  │
+│ › TLS (cert-manager) (--no-tls): on (default)                                                                        │
+│   Database backups: on (follows the bundled CloudNativePG operator and, on Compact, TLS)                             │
 │                                                                                                                      │
 │ Relational recovery                                                                                                  │
 │   nothing set; the defaults apply                                                                                    │
@@ -25,7 +26,6 @@
 │   --yes true carried (from the command line)                                                                         │
 │                                                                                                                      │
 │ Preflight: all checks passed.                                                                                        │
-│                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │

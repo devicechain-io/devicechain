@@ -142,6 +142,15 @@ func installWizardFor(provider bootstrap.Provider, choices installchoice.Choices
 	}
 }
 
+// kindClusterName is the kind cluster a --cluster value names: an empty one is the
+// default, exactly as the local provider resolves it.
+func kindClusterName(cluster string) string {
+	if cluster == "" {
+		return bootstrap.DefaultClusterName
+	}
+	return cluster
+}
+
 // kubeContextNames is the context picker's list: the kubeconfig's context names, sorted,
 // read from disk without contacting any cluster. Tests replace it.
 var kubeContextNames = func() ([]string, error) {
@@ -178,14 +187,14 @@ func applyWizardEdits(orig installchoice.Choices, ed installtui.Edits) (installc
 		case t.KubeContext != "":
 			c.KubeContext = t.KubeContext
 			c.Given["kube-context"] = true
-		case strings.TrimSpace(t.Cluster) == "":
-			return installchoice.Choices{}, fmt.Errorf("a local kind cluster needs a name")
 		default:
-			// A local kind cluster: no context, as when --kube-context is omitted.
+			// A local kind cluster: no context, as when --kube-context is omitted. A name
+			// that resolves to the cluster the command line already names (an empty one
+			// is the default, as --cluster= is) leaves --cluster exactly as it was given.
 			c.KubeContext = ""
 			c.Given["kube-context"] = false
-			if t.Cluster != c.Cluster {
-				c.Cluster = t.Cluster
+			if name := strings.TrimSpace(t.Cluster); name != "" && name != kindClusterName(c.Cluster) {
+				c.Cluster = name
 				c.Given["cluster"] = true
 			}
 		}
@@ -208,8 +217,11 @@ func wizardFacts(orig installchoice.Choices, prepared installchoice.Prepared, ed
 	opts := prepared.BootstrapOptions()
 	facts := installtui.Facts{
 		Version: Version, Provider: orig.Provider, Providers: bootstrap.Names(),
-		KubeContext: eff.KubeContext, Cluster: eff.Cluster,
+		KubeContext: eff.KubeContext, Cluster: kindClusterName(eff.Cluster),
 		Compact: eff.Compact, HA: eff.HA, SkipPreflight: eff.SkipPreflight,
+		// Read from the settled plan, through the functions the install itself uses.
+		Monitoring: !eff.NoMonitoring, TLS: !eff.NoTLS,
+		Backups: bootstrap.DatabaseBackupsEnabled(eff.NoCNPG, eff.Compact, eff.NoTLS),
 	}
 	switch {
 	case ed.Target != nil:
@@ -217,6 +229,9 @@ func wizardFacts(orig installchoice.Choices, prepared installchoice.Prepared, ed
 		facts.TargetFlag = "--kube-context " + orig.KubeContext
 	case orig.Given.Has("cluster"):
 		facts.TargetFlag = "--cluster " + orig.Cluster
+		if orig.Cluster == "" {
+			facts.TargetFlag = "--cluster="
+		}
 	}
 	switch {
 	case ed.Compact != nil:
@@ -319,12 +334,18 @@ func wizardSettings(orig, eff installchoice.Choices, ed installtui.Edits) []inst
 		{Group: groupDatabase, Flag: "--no-cnpg", Label: "Bundled CloudNativePG operator", Value: onOff(!eff.NoCNPG),
 			Source: source("no-cnpg", false), Toggle: true, Name: "no-cnpg", FlagValue: eff.NoCNPG},
 	}
-	tls := installtui.Setting{Group: groupBackups, Flag: "--no-tls", Label: "TLS and database backups",
+	tls := installtui.Setting{Group: groupBackups, Flag: "--no-tls", Label: "TLS (cert-manager)",
 		Value: onOff(!eff.NoTLS), Source: source("no-tls", eff.Compact), Toggle: true, Name: "no-tls", FlagValue: eff.NoTLS}
 	if !eff.Compact {
 		tls.Disabled = "Standard always installs cert-manager; choose plain HTTP per instance with dcctl bootstrap --no-tls"
 	}
-	out = append(out, tls)
+	// 🔴 BACKUPS ARE A CONSEQUENCE, NOT A SETTING, and the drawer reads them from the
+	// same function the install decides them with: --no-cnpg turns them off on any
+	// footprint, and Compact without TLS turns them off too.
+	backups := installtui.Setting{Group: groupBackups, Label: "Database backups",
+		Value:  onOff(bootstrap.DatabaseBackupsEnabled(eff.NoCNPG, eff.Compact, eff.NoTLS)),
+		Source: "follows the bundled CloudNativePG operator and, on Compact, TLS"}
+	out = append(out, tls, backups)
 	for _, f := range flags {
 		if !f.Given || choicesScreenFlags[f.Name] || wizardToggles[f.Name] != nil {
 			continue

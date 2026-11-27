@@ -5,7 +5,7 @@ Cluster choices
 ... 3 lines above
 > Footprint  ( ) Standard (*) Compact (changed in this
              installer)
-... 10 lines below
+... 9 lines below
 
 working: the checks are running for this plan. Continue
 waits for them.

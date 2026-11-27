@@ -93,6 +93,9 @@ func planFactsFrom(f Facts, e Edits) Facts {
 	if e.Target != nil {
 		f.KubeContext, f.Cluster = e.Target.KubeContext, e.Target.Cluster
 	}
+	if v, ok := e.Toggles["no-monitoring"]; ok {
+		f.Monitoring = !v
+	}
 	return f
 }
 

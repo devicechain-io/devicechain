@@ -7,10 +7,10 @@
              Compact is the small-footprint preset for the
              cluster and every instance on it: smaller
              volumes, lowered JetStream/KV ceilings and
-             scheduling requests, no monitoring stack, and,
-             unless --no-tls=false, no cert-manager and
-             therefore no database backups.
-... 4 lines below
+             scheduling requests, no monitoring stack, no
+             cert-manager, and no database backups.
+  Topology   ( ) Single (*) HA (from --ha)
+... 3 lines below
 
 Preflight: all checks passed.
 

@@ -406,9 +406,10 @@ func (p *prerun) choicesLines(w, rows int) []string {
 	add(chFootprint, p.field("Footprint", p.radio([2]string{"Standard", "Compact"}, f.Compact,
 		cur == chFootprint && editable)+p.origin(f.FootprintFlag, p.edits.Compact != nil), editable && cur == chFootprint, w))
 	if f.Compact {
-		// Compact's consequences, inline whenever it is the footprint.
+		// Compact's consequences, inline whenever it is the footprint, as the plan now
+		// stands: what it leaves out, and what an explicit choice kept.
 		indent := strings.Repeat(" ", 13)
-		for _, l := range wrap(consequencesCompact, w-13) {
+		for _, l := range wrap(compactConsequences(f), w-13) {
 			list = append(list, indent+t.Dim.Render(l))
 		}
 	}
@@ -436,6 +437,30 @@ func (p *prerun) choicesLines(w, rows int) []string {
 		tail = append(tail, p.actionBar(labels, enabled, focus, w)...)
 	}
 	return stack(head, list, tail, rows, from, to, t.Glyphs.Ellipsis)
+}
+
+// compactConsequences is what Compact means for the plan as it stands. Each part is
+// read from the settled plan's facts: a monitoring stack or cert-manager kept by an
+// explicit choice is said to stay, never said to be gone.
+func compactConsequences(f Facts) string {
+	parts := []string{"smaller volumes", "lowered JetStream/KV ceilings and scheduling requests"}
+	if f.Monitoring {
+		parts = append(parts, "the monitoring stack kept (chosen explicitly)")
+	} else {
+		parts = append(parts, "no monitoring stack")
+	}
+	if f.TLS {
+		parts = append(parts, "cert-manager kept (chosen explicitly)")
+	} else {
+		parts = append(parts, "no cert-manager")
+	}
+	if f.Backups {
+		parts = append(parts, "database backups kept")
+	} else {
+		parts = append(parts, "no database backups")
+	}
+	return "Compact is the small-footprint preset for the cluster and every instance on it: " +
+		strings.Join(parts[:len(parts)-1], ", ") + ", and " + parts[len(parts)-1] + "."
 }
 
 // preflightStatus is the one line the choices and the drawer give the checks for the
@@ -529,9 +554,13 @@ func (p *prerun) settingLines(s Setting, focused bool, w int) []string {
 		value = t.Focus.Render(value)
 	}
 	var text string
-	if s.Toggle {
+	switch {
+	case s.Toggle:
 		text = p.text(s.Label) + " (" + p.text(s.Flag) + "): " + value
-	} else {
+	case s.Flag == "":
+		// A consequence of other settings, named by what it is.
+		text = p.text(s.Label) + ": " + value
+	default:
 		text = p.text(s.Flag) + " " + value + " " + t.Dim.Render("carried")
 	}
 	if s.Source != "" {

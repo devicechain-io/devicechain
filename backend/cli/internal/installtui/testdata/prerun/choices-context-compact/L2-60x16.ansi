@@ -6,7 +6,7 @@
 > Footprint  ( ) Standard (*) \x1b[7mCompact\x1b[m (from --compact)
              Compact is the small-footprint preset for the
              cluster and every instance on it: smaller
-... 8 lines below
+... 7 lines below
 
 Preflight: all checks passed.
 

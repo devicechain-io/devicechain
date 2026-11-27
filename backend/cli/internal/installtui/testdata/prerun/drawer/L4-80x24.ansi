@@ -14,9 +14,9 @@
 │   \x1b[38;2;138;166;182mcarried\x1b[m \x1b[38;2;138;166;182m(from the command line)\x1b[m                                            │
 │                                                                              │
 │ \x1b[1mBackups and snapshots\x1b[m                                                        │
-│   TLS and database backups (--no-tls): on \x1b[38;2;138;166;182m(default)\x1b[m \x1b[38;2;138;166;182munavailable: Standard    │
-│   always installs cert-manager\x1b[m                                               │
-│ … 9 lines below                                                              │
+│   TLS (cert-manager) (--no-tls): on \x1b[38;2;138;166;182m(default)\x1b[m \x1b[38;2;138;166;182munavailable: Standard always   │
+│   installs cert-manager\x1b[m                                                      │
+│ … 11 lines below                                                             │
 │                                                                              │
 │ \x1b[38;2;95;211;154mPreflight: all checks passed.\x1b[m                                                │
 ├──────────────────────────────────────────────────────────────────────────────┤

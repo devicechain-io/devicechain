@@ -4,16 +4,16 @@ Advanced settings
 Editors change the plan at once and re-run the checks. Every
 other flag from the command line is carried as given.
 ... 14 lines above
-> TLS and database backups (--no-tls): on (default)
+> TLS (cert-manager) (--no-tls): on (default)
+  Database backups: on (follows the bundled CloudNativePG
+  operator and, on Compact, TLS)
 
 Relational recovery
   nothing set; the defaults apply
 
 Gateway, MQTT and legacy ingress
   nothing set; the defaults apply
-
-Escape hatches
-  --yes true carried (from the command line)
+... 3 lines below
 
 Preflight: all checks passed.
 ------------------------------------------------------------

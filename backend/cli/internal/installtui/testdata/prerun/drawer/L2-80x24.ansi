@@ -14,9 +14,9 @@
 |   carried (from the command line)                                            |
 |                                                                              |
 | \x1b[1mBackups and snapshots\x1b[m                                                        |
-|   TLS and database backups (--no-tls): on (default) unavailable: Standard    |
-|   always installs cert-manager                                               |
-| ... 9 lines below                                                            |
+|   TLS (cert-manager) (--no-tls): on (default) unavailable: Standard always   |
+|   installs cert-manager                                                      |
+| ... 11 lines below                                                           |
 |                                                                              |
 | Preflight: all checks passed.                                                |
 +------------------------------------------------------------------------------+

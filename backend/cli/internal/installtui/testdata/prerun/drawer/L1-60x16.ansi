@@ -9,7 +9,7 @@ other flag from the command line is carried as given.
 Monitoring and alerts
   Monitoring stack (--no-monitoring): on (default)
   --alert-webhook configured (hidden) carried (from the
-… 18 lines below
+… 20 lines below
 
 Preflight: all checks passed.
 ────────────────────────────────────────────────────────────

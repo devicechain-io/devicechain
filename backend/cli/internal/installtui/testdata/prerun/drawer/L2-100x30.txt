@@ -14,8 +14,8 @@
 |   line)                                                                                          |
 |                                                                                                  |
 | Backups and snapshots                                                                            |
-|   TLS and database backups (--no-tls): on (default) unavailable: Standard always installs        |
-|   cert-manager                                                                                   |
+|   TLS (cert-manager) (--no-tls): on (default) unavailable: Standard always installs cert-manager |
+|   Database backups: on (follows the bundled CloudNativePG operator and, on Compact, TLS)         |
 |                                                                                                  |
 | Relational recovery                                                                              |
 |   nothing set; the defaults apply                                                                |

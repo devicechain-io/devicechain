@@ -97,7 +97,6 @@ func TestTheWizardRefusesWhatTheCommandLineRefuses(t *testing.T) {
 	w, _ := wizardFor(t)
 	for name, ed := range map[string]installtui.Edits{
 		"--no-tls on Standard":  {Toggles: map[string]bool{"no-tls": true}},
-		"a nameless kind":       {Target: &installtui.Target{}},
 		"an editor that is not": {Toggles: map[string]bool{"skip-preflight": true}},
 	} {
 		if r, err := w.Replan(ed); err == nil || r.Engine != nil {

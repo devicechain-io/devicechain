@@ -9,7 +9,7 @@ other flag from the command line is carried as given.
 \x1b[1mMonitoring and alerts\x1b[m
   Monitoring stack (--no-monitoring): on \x1b[38;5;109m(default)\x1b[m
   --alert-webhook configured (hidden) \x1b[38;5;109mcarried\x1b[m \x1b[38;5;109m(from the
-… 18 lines below
+… 20 lines below
 
 \x1b[38;5;78mPreflight: all checks passed.\x1b[m
 ────────────────────────────────────────────────────────────

@@ -2,12 +2,12 @@
 │ \x1b[1mAdvanced settings\x1b[m                                                            │
 │ Editors change the plan at once and re-run the checks. Every other flag from │
 │ the command line is carried as given.                                        │
-│ … 9 lines above                                                              │
-│   --database-toleration dedicated=db:NoSchedule, spot=true:NoSchedule        │
-│   \x1b[38;2;138;166;182mcarried\x1b[m \x1b[38;2;138;166;182m(from the command line)\x1b[m                                            │
+│ … 11 lines above                                                             │
 │                                                                              │
 │ \x1b[1mBackups and snapshots\x1b[m                                                        │
-│ › TLS and database backups (--no-tls): \x1b[7mon\x1b[m \x1b[38;2;138;166;182m(default)\x1b[m                          │
+│ › TLS (cert-manager) (--no-tls): \x1b[7mon\x1b[m \x1b[38;2;138;166;182m(default)\x1b[m                                │
+│   Database backups: on \x1b[38;2;138;166;182m(follows the bundled CloudNativePG operator and, on   │
+│   Compact, TLS)\x1b[m                                                              │
 │                                                                              │
 │ \x1b[1mRelational recovery\x1b[m                                                          │
 │   \x1b[38;2;138;166;182mnothing set; the defaults apply\x1b[m                                            │

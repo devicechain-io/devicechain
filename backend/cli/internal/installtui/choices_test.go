@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -51,7 +52,7 @@ func testSettings(e Edits) []Setting {
 	if _, ok := e.Toggles["no-monitoring"]; ok {
 		source = changedHere
 	}
-	tls := Setting{Group: "Backups and snapshots", Flag: "--no-tls", Label: "TLS and database backups", Value: "on",
+	tls := Setting{Group: "Backups and snapshots", Flag: "--no-tls", Label: "TLS (cert-manager)", Value: "on",
 		Source: "default", Toggle: true, Name: "no-tls"}
 	if e.Compact == nil || !*e.Compact {
 		tls.Disabled = "Standard always installs cert-manager"
@@ -64,6 +65,8 @@ func testSettings(e Edits) []Setting {
 		{Group: "Monitoring and alerts", Flag: "--no-monitoring", Label: "Monitoring stack", Value: value,
 			Source: source, Toggle: true, Name: "no-monitoring", FlagValue: monitoringOff},
 		tls,
+		{Group: "Backups and snapshots", Label: "Database backups", Value: "on",
+			Source: "follows the bundled CloudNativePG operator and, on Compact, TLS"},
 		{Group: "Images and developer build", Flag: "--registry", Value: "localhost:5000", Source: "from the command line"},
 		{Group: "Monitoring and alerts", Flag: "--alert-webhook", Value: "configured (hidden)", Source: "from the command line"},
 		{Group: "Database placement, connection budget and WAL", Flag: "--database-toleration",
@@ -241,6 +244,67 @@ func TestAReplacedPlansChecksAreStopped(t *testing.T) {
 	}
 	if !p.canContinue() || len(r.asked) != 2 {
 		t.Fatalf("after the second change: %d replans\n%s", len(r.asked), screenText(p))
+	}
+	// And joined: the screen's wait (which the presenter makes before it returns)
+	// returns, with every run, the replaced one included, ended.
+	joined := make(chan struct{})
+	go func() { p.wait(); close(joined) }()
+	select {
+	case <-joined:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the replaced plan's checks were never joined")
+	}
+}
+
+// Compact's consequences are the plan's: a monitoring stack or cert-manager it keeps is
+// said to stay, and one it leaves out is said to be gone.
+func TestCompactConsequencesFollowThePlan(t *testing.T) {
+	for _, c := range []struct {
+		name                     string
+		monitoring, tls, backups bool
+		want, not                []string
+	}{
+		{"the preset", false, false, false,
+			[]string{"no monitoring stack", "no cert-manager", "no database backups"}, []string{"kept"}},
+		{"monitoring kept", true, false, false,
+			[]string{"the monitoring stack kept", "no cert-manager"}, []string{"no monitoring stack"}},
+		{"TLS kept", false, true, true,
+			[]string{"no monitoring stack", "cert-manager kept", "database backups kept"}, []string{"no cert-manager", "no database backups"}},
+	} {
+		f := preFacts()
+		f.Compact, f.Monitoring, f.TLS, f.Backups = true, c.monitoring, c.tls, c.backups
+		r := &replanner{base: &f, runner: func(Edits) installflow.PreflightRunner { return passing() }}
+		w := choicesWizard(r)
+		w.Facts = f
+		p := newTestPrerun(w, passing())
+		toChoices(t, p)
+		view := bodyText(p)
+		for _, s := range c.want {
+			if !strings.Contains(view, s) {
+				t.Errorf("%s: the consequences do not say %q:\n%s", c.name, s, screenText(p))
+			}
+		}
+		for _, s := range c.not {
+			if strings.Contains(view, s) {
+				t.Errorf("%s: the consequences say %q:\n%s", c.name, s, screenText(p))
+			}
+		}
+	}
+	// Kept in the drawer: the summary follows the replanned plan.
+	f := preFacts()
+	f.Compact = true
+	r := &replanner{base: &f, runner: func(Edits) installflow.PreflightRunner { return passing() }}
+	w := choicesWizard(r)
+	w.Facts = f
+	p := newTestPrerun(w, passing())
+	toChoices(t, p)
+	focusOn(t, p, chAdvanced)
+	press(p, "enter")
+	drawerTo(t, p, "--no-monitoring")
+	press(p, "space", "space", "esc") // off explicitly, then kept explicitly
+	if v := bodyText(p); strings.Contains(v, "no monitoring stack") ||
+		!strings.Contains(v, "the monitoring stack kept") {
+		t.Errorf("after keeping monitoring in the drawer:\n%s", screenText(p))
 	}
 }
 
@@ -536,5 +600,69 @@ func TestEveryDrawerRowCanBeReached(t *testing.T) {
 		if v := screenText(p); !strings.Contains(v, s.Flag) {
 			t.Errorf("%s is out of reach:\n%s", s.Flag, v)
 		}
+	}
+}
+
+// bodyText is the screen's body, without the frame, as one line of words: a sentence
+// reads whole however it was wrapped.
+func bodyText(p *prerun) string {
+	return strings.Join(strings.Fields(preStrip(strings.Join(p.choicesLines(200, 40), " "))), " ")
+}
+
+// ctxBoundRunner is a doctor-like preflight: its unbound form ignores the context it is
+// run under, as the engine's stage does; its bound form ends with that context.
+type ctxBoundRunner struct {
+	bound     bool
+	unbound   *atomic.Int32
+	cancelled chan struct{}
+	started   chan struct{}
+}
+
+func (r ctxBoundRunner) RunPreflight(ctx context.Context, _ func(installflow.PreflightObservation)) (installflow.PreflightResult, error) {
+	if !r.bound {
+		r.unbound.Add(1)
+		return installflow.PreflightResult{}, nil
+	}
+	close(r.started)
+	<-ctx.Done()
+	close(r.cancelled)
+	return installflow.PreflightResult{}, ctx.Err()
+}
+
+func (r ctxBoundRunner) BoundToContext() installflow.PreflightRunner { r.bound = true; return r }
+
+// 🔴 A replanned plan's checks on the screen run in the form bound to the screen's
+// context, so replacing the plan ends the doctor's host commands, not just the screen's
+// interest in them.
+func TestAReplacedPlansBoundChecksEndWithIt(t *testing.T) {
+	var unbound atomic.Int32
+	first := ctxBoundRunner{unbound: &unbound, cancelled: make(chan struct{}), started: make(chan struct{})}
+	calls := 0
+	r := &replanner{runner: func(Edits) installflow.PreflightRunner {
+		calls++
+		if calls == 1 {
+			return first
+		}
+		return passing()
+	}}
+	p := newTestPrerun(choicesWizard(r), passing())
+	toChoices(t, p)
+	focusOn(t, p, chFootprint)
+	p.update(keyOf("space"))
+	select {
+	case <-first.started:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the replanned plan's bound checks never started (unbound ran %d)", unbound.Load())
+	}
+	focusOn(t, p, chTopology)
+	press(p, "space")
+	select {
+	case <-first.cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the replaced plan's bound checks outlived it")
+	}
+	p.wait()
+	if unbound.Load() != 0 {
+		t.Fatalf("the screen ran the unbound form %d times", unbound.Load())
 	}
 }

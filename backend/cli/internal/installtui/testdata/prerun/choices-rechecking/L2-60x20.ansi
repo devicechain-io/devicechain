@@ -8,8 +8,8 @@
              Compact is the small-footprint preset for the
              cluster and every instance on it: smaller
              volumes, lowered JetStream/KV ceilings and
-             scheduling requests, no monitoring stack, and,
-... 6 lines below
+             scheduling requests, no monitoring stack, no
+... 5 lines below
 
 working: the checks are running for this plan. Continue
 waits for them.

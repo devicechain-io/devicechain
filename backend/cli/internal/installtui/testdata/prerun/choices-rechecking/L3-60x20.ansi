@@ -8,8 +8,8 @@
              \x1b[38;5;109mCompact is the small-footprint preset for the\x1b[m
              \x1b[38;5;109mcluster and every instance on it: smaller\x1b[m
              \x1b[38;5;109mvolumes, lowered JetStream/KV ceilings and\x1b[m
-             \x1b[38;5;109mscheduling requests, no monitoring stack, and,\x1b[m
-… 6 lines below
+             \x1b[38;5;109mscheduling requests, no monitoring stack, no\x1b[m
+… 5 lines below
 
 \x1b[38;5;109mworking: the checks are running for this plan. Continue\x1b[m
 \x1b[38;5;109mwaits for them.\x1b[m

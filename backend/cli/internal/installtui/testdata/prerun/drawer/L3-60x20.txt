@@ -13,7 +13,7 @@ Monitoring and alerts
 
 Database placement, connection budget and WAL
   --database-toleration dedicated=db:NoSchedule,
-… 14 lines below
+… 16 lines below
 
 Preflight: all checks passed.
 ────────────────────────────────────────────────────────────

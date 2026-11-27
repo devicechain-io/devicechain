@@ -6,8 +6,7 @@
 | > Footprint  ( ) Standard (*) \x1b[7mCompact\x1b[m (changed in this installer)                                |
 |              Compact is the small-footprint preset for the cluster and every instance on it:     |
 |              smaller volumes, lowered JetStream/KV ceilings and scheduling requests, no          |
-|              monitoring stack, and, unless --no-tls=false, no cert-manager and therefore no      |
-|              database backups.                                                                   |
+|              monitoring stack, no cert-manager, and no database backups.                         |
 |   Topology   (*) Single ( ) HA                                                                   |
 |                                                                                                  |
 | Each change re-resolves the plan as the command line would, and runs the read-only checks again  |
@@ -16,6 +15,7 @@
 | working: the checks are running for this plan. Continue waits for them.                          |
 |                                                                                                  |
 |   Continue (unavailable)    Advanced    Preflight    Exit                                        |
+|                                                                                                  |
 |                                                                                                  |
 |                                                                                                  |
 |                                                                                                  |

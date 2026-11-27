@@ -7,9 +7,8 @@
 │ › \x1b[38;2;138;166;182mFootprint \x1b[m ( ) Standard (*) \x1b[7mCompact\x1b[m (from --compact)                       │
 │              \x1b[38;2;138;166;182mCompact is the small-footprint preset for the cluster and every\x1b[m │
 │              \x1b[38;2;138;166;182minstance on it: smaller volumes, lowered JetStream/KV ceilings\x1b[m  │
-│              \x1b[38;2;138;166;182mand scheduling requests, no monitoring stack, and, unless\x1b[m       │
-│              \x1b[38;2;138;166;182m--no-tls=false, no cert-manager and therefore no database\x1b[m       │
-│              \x1b[38;2;138;166;182mbackups.\x1b[m                                                        │
+│              \x1b[38;2;138;166;182mand scheduling requests, no monitoring stack, no cert-manager,\x1b[m  │
+│              \x1b[38;2;138;166;182mand no database backups.\x1b[m                                        │
 │   \x1b[38;2;138;166;182mTopology  \x1b[m ( ) Single (*) HA (from --ha)                                   │
 │                                                                              │
 │ \x1b[38;2;138;166;182mEach change re-resolves the plan as the command line would, and runs the\x1b[m     │
@@ -18,6 +17,7 @@
 │ \x1b[38;2;95;211;154mPreflight: all checks passed.\x1b[m                                                │
 │                                                                              │
 │   Continue    Advanced    Preflight    Exit                                  │
+│                                                                              │
 │                                                                              │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ \x1b[38;2;138;166;182m↑/↓/Space choose · Tab next · Esc back · q exit · Ctrl+C exit\x1b[m                │

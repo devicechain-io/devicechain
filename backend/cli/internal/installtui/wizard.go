@@ -117,6 +117,13 @@ type Facts struct {
 	Cluster     string
 	Compact     bool
 	HA          bool
+	// Monitoring, TLS and Backups are what the settled plan installs: the monitoring
+	// stack, cert-manager, and database backups. The command reads them from the plan,
+	// through the functions the install decides them with; the screens never work them
+	// out again from the footprint.
+	Monitoring bool
+	TLS        bool
+	Backups    bool
 	// TargetFlag, FootprintFlag and TopologyFlag name the flag that set each, when one
 	// did and the screens have not changed it ("--kube-context prod", "--compact",
 	// "--size compact", "--ha"); empty when it is the default.

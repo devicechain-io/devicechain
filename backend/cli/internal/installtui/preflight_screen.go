@@ -33,8 +33,9 @@ const (
 // What each footprint means, shown before a switch. The words are the flags' own.
 const (
 	consequencesCompact = "Compact is the small-footprint preset for the cluster and every instance on it: " +
-		"smaller volumes, lowered JetStream/KV ceilings and scheduling requests, no monitoring stack, and, " +
-		"unless --no-tls=false, no cert-manager and therefore no database backups."
+		"smaller volumes, lowered JetStream/KV ceilings and scheduling requests, no monitoring stack unless " +
+		"--no-monitoring=false keeps it, and, unless --no-tls=false, no cert-manager and therefore no database " +
+		"backups. The cluster choices show what this plan keeps."
 	consequencesStandard = "Standard is the full-size footprint. A local kind cluster then needs Docker to " +
 		"have at least 4 CPUs and 8 GiB of memory."
 	consequencesRecheck = "The plan changes to this footprint and every check runs again for it."
