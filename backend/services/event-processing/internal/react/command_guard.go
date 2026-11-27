@@ -44,9 +44,10 @@ type commandLoopEntry struct {
 // its snapshots. A detection the engine re-derives on startup replay is still SENT
 // (deliver-before-checkpoint: it may never have left before the crash, and the
 // idempotency token collapses it downstream if it did) but never enters this state
-// or the outbound gate; preview has no live sinks and evaluation uses recording
-// sinks with WithCommandSimulation. It uses the server clock, never device event
-// time (a device must not advance its own allowance).
+// or the outbound gate. A backlog that startup replay applies for the first time is
+// not a re-derivation and is governed like live input. Preview has no live sinks and
+// evaluation uses recording sinks with WithCommandSimulation. It uses the server
+// clock, never device event time (a device must not advance its own allowance).
 //
 // HA: state is PER REPLICA, not shared or checkpointed. REACT's DETECT term gate
 // normally leaves only the lease holder dispatching. Restart/failover starts a
@@ -133,7 +134,8 @@ func WithCommandSimulation() Option {
 //
 // A replayed detection is exempt from both: it is a re-derivation of output that may
 // never have been delivered, not a fresh trigger, and the idempotency token is what
-// stops it from actuating twice.
+// stops it from actuating twice. DETECT marks only detections of events an earlier
+// term was handed; a backlog no term ever saw arrives unmarked and is charged here.
 func (d *Dispatcher) commandRefusal(ev runtime.DerivedEvent, sentAt time.Time) string {
 	if d.commandSimulation || ev.Replayed {
 		return ""
