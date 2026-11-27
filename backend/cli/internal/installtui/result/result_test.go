@@ -61,8 +61,8 @@ func managedTarget() installflow.Target {
 }
 
 func templateCommand() Command {
-	return Command{Line: installflow.Text("dcctl install local --alert-webhook='<redacted: supply privately>' " +
-		"--compact=true --yes=true"), Template: true}
+	return Command{Line: "dcctl install local --alert-webhook='<redacted: supply privately>' " +
+		"--compact=true --yes=true", Template: true}
 }
 
 // errApply stands for an OpenTofu apply's error, with a tool diagnostic that
@@ -91,7 +91,7 @@ func scenarioStopped() Input {
 		Failure: &installflow.StepFailed{Code: installflow.ErrorToolAbandoned, Retry: installflow.RetryUnknown,
 			Remedy: installflow.RemedyRerunSameCommand, Cancelled: true, Effect: installflow.EffectMayHaveChanged},
 		Target: managedTarget(), Version: "v1.11.0",
-		Equivalent: Command{Line: installflow.Text("dcctl install local --yes=true")},
+		Equivalent: Command{Line: "dcctl install local --yes=true"},
 		Err:        errors.New("tofu apply abandoned"), Redact: func(s string) string { return s },
 		Settled: make(chan struct{}), // the abandoned apply is still running
 	}
@@ -105,8 +105,9 @@ func scenarioReadiness() Input {
 		Failure: &installflow.StepFailed{Code: "install.rdb-ready.failed", Retry: installflow.RetryUnknown,
 			Effect: installflow.EffectNoneObserved},
 		Target:  installflow.Target{Mode: "existing-context", Context: installflow.Text("prod-east")},
+		Facts:   Facts{Provider: "local", KubeContext: "prod-east"},
 		Version: "v1.11.0", Shell: POSIX,
-		Equivalent: Command{Line: installflow.Text("dcctl install local --kube-context=prod-east --ha=true --yes=true")},
+		Equivalent: Command{Line: "dcctl install local --kube-context=prod-east --ha=true --yes=true"},
 		Err:        errors.New("the relational store did not become ready within 15m0s: 2/3 instances ready"),
 		Redact:     func(s string) string { return s }, Settled: closed(),
 	}
@@ -118,10 +119,10 @@ func scenarioSucceeded() Input {
 			Readiness: installflow.ReadinessReady, Claim: installflow.ClaimReleased,
 			PartialState: installflow.EffectApplied},
 		Target: installflow.Target{Mode: "managed-kind", Context: installflow.Text("kind-lab")},
-		Facts: Facts{Provider: "local", Managed: true, Cluster: installflow.Text("lab"), Compact: true,
+		Facts: Facts{Provider: "local", Managed: true, Cluster: "lab", Compact: true,
 			TLS: true, Monitoring: false, Backups: true, MaxConnections: 300},
 		Version:    "v1.11.0",
-		Equivalent: Command{Line: installflow.Text("dcctl install local --cluster=lab --compact=true --no-tls=false --yes=true")},
+		Equivalent: Command{Line: "dcctl install local --cluster=lab --compact=true --no-tls=false --yes=true"},
 		Settled:    closed(),
 	}
 }
@@ -526,7 +527,8 @@ func spacedScenarios() []scenario {
 			in := scenarioReadiness()
 			in.Shell = shell
 			in.Target = installflow.Target{Mode: "existing-context", Context: installflow.Text("team  prod")}
-			in.Equivalent = Command{Line: installflow.Text(line)}
+			in.Facts.KubeContext = "team  prod"
+			in.Equivalent = Command{Line: line}
 			return in
 		}
 	}
@@ -604,9 +606,9 @@ func escapedQuoteScenarios() []scenario {
 		return func() Input {
 			in := scenarioReadiness()
 			in.Shell = shell
-			in.Equivalent = Command{Line: installflow.Text(line)}
+			in.Equivalent = Command{Line: line}
 			for _, a := range args {
-				in.Equivalent.Args = append(in.Equivalent.Args, installflow.Text(a))
+				in.Equivalent.Args = append(in.Equivalent.Args, a)
 			}
 			return in
 		}
@@ -643,9 +645,8 @@ func TestEscapedQuotesStayInsideTheirArgument(t *testing.T) {
 
 // Recorded words that do not rebuild the line are not trusted: the line is read.
 func TestRecordedWordsMustRebuildTheLine(t *testing.T) {
-	c := Command{Line: installflow.Text("dcctl install local '--kube-context=a  b'"),
-		Args: []installflow.SafeText{installflow.Text("dcctl"), installflow.Text("install local '--kube-context=a"),
-			installflow.Text("b'")}}
+	c := Command{Line: "dcctl install local '--kube-context=a  b'",
+		Args: []string{"dcctl", "install local '--kube-context=a", "b'"}}
 	got := c.words(POSIX)
 	if len(got) != 4 || got[3] != "'--kube-context=a  b'" {
 		t.Errorf("words %q", got)
@@ -691,7 +692,7 @@ func TestRedactionRunsToAFixedPoint(t *testing.T) {
 func TestWideRunesNeverOverflowANarrowFrame(t *testing.T) {
 	in := scenarioSucceeded()
 	in.Target = installflow.Target{Mode: "existing-context", Context: installflow.Text("界界")}
-	in.Facts = Facts{Provider: "local", KubeContext: installflow.Text("界界")}
+	in.Facts = Facts{Provider: "local", KubeContext: "界界"}
 	for _, sz := range [][2]int{{1, 80}, {2, 80}, {3, 80}, {1, 1}, {8, 8}} {
 		text := stripANSI(drive(in, levelCaps(terminal.L1, sz[0], sz[1])).render())
 		for i, l := range strings.Split(text, "\n") {
@@ -699,5 +700,69 @@ func TestWideRunesNeverOverflowANarrowFrame(t *testing.T) {
 				t.Errorf("%v: line %d is %d cells: %q", sz, i, lipgloss.Width(l), l)
 			}
 		}
+	}
+}
+
+// 🔴 A command the operator copies is built from the raw choice. When the raw
+// value holds a character the screen cannot draw (a ZWJ, a control byte), the
+// argument is a placeholder naming the problem: never the sanitised value, which
+// would select another context or cluster without a word.
+func TestCommandsNeverCarryASanitisedTarget(t *testing.T) {
+	zwj := string(rune(0x200d))
+	for _, c := range []struct {
+		name string
+		in   func() Input
+	}{
+		{"existing context, failed", func() Input {
+			in := scenarioReadiness()
+			in.Target = installflow.Target{Mode: "existing-context", Context: installflow.Text("team" + zwj + "prod")}
+			in.Facts.KubeContext = "team" + zwj + "prod"
+			in.Equivalent = Command{Line: "dcctl install local --kube-context=team" + zwj + "prod --yes=true"}
+			return in
+		}},
+		{"managed cluster, succeeded", func() Input {
+			in := scenarioSucceeded()
+			in.Target = installflow.Target{Mode: "managed-kind", Context: installflow.Text("kind-lab" + zwj + "2")}
+			in.Facts.Cluster = "lab" + zwj + "2"
+			in.Equivalent = Command{Line: "dcctl install local --cluster=lab" + zwj + "2 --yes=true",
+				Args: []string{"dcctl", "install", "local", "--cluster=lab" + zwj + "2", "--yes=true"}}
+			return in
+		}},
+		{"existing context, control byte", func() Input {
+			in := scenarioReadiness()
+			in.Facts.KubeContext = "team\x07prod"
+			in.Equivalent = Command{Line: "dcctl install local '--kube-context=team\x07prod' --yes=true"}
+			return in
+		}},
+	} {
+		for _, shell := range []Shell{POSIX, PowerShell} {
+			in := c.in()
+			in.Shell = shell
+			var b bytes.Buffer
+			if err := WriteExitSummary(&b, in); err != nil {
+				t.Fatal(err)
+			}
+			screen := stripANSI(drive(in, levelCaps(terminal.L1, 120, 40)).render())
+			for where, text := range map[string]string{"screen": screen, "exit summary": b.String()} {
+				for _, l := range strings.Split(text, "\n") {
+					if !strings.Contains(l, "dcctl ") && !strings.Contains(l, "kubectl ") ||
+						strings.Contains(l, "dcctl install "+string(rune(0xb7))) {
+						continue // not a command line, or the header, which only names the target
+					}
+					for _, bad := range []string{"teamprod", "lab2", "kind-lab2"} {
+						if strings.Contains(l, bad) {
+							t.Errorf("%s, %s: a command names the sanitised %q: %q", c.name, where, bad, l)
+						}
+					}
+				}
+				if !strings.Contains(text, "-contains-invisible-characters>") {
+					t.Errorf("%s, %s: no placeholder names the problem:\n%s", c.name, where, text)
+				}
+			}
+		}
+	}
+	// A raw value the screen can draw is used as it is.
+	if got := drawableArg("team  prod", "kube-context"); got != "team  prod" {
+		t.Errorf("a drawable value became %q", got)
 	}
 }

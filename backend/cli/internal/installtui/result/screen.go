@@ -303,10 +303,10 @@ func (m *Model) rows() []row {
 
 func (m *Model) commandRows(label string) []row {
 	c := m.in.Equivalent
-	if c.Line.IsZero() {
+	if c.Line == "" {
 		return nil
 	}
-	rs := []row{{label: label, value: c.Line.String(), command: true, words: c.words(m.in.Shell)}}
+	rs := []row{{label: label, value: c.display(m.in.Shell), command: true, words: c.words(m.in.Shell)}}
 	if c.Template {
 		dim := m.theme.dim
 		rs = append(rs, row{value: "template: supply the redacted credentials privately", style: &dim, drop: dropFirst})

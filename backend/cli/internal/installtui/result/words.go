@@ -160,15 +160,40 @@ func (in Input) fix() string {
 		"finishes whatever this run left half done."
 }
 
-// contextName is the kube context the run targeted, or "".
+// contextName is the kube context the run targeted, for DISPLAY only, or "".
 func (in Input) contextName() string {
 	if c := in.Target.Context.String(); c != "" {
 		return c
 	}
-	if !in.Facts.KubeContext.IsZero() {
-		return in.Facts.KubeContext.String()
+	if in.Facts.KubeContext != "" {
+		return installflow.Text(in.Facts.KubeContext).String()
+	}
+	if in.managed() && in.Facts.Cluster != "" {
+		return installflow.Text("kind-" + in.Facts.Cluster).String()
 	}
 	return ""
+}
+
+// commandContext is the kube context as an argument of a command to copy: the
+// raw choice, a placeholder when there is none, or one naming the problem when
+// the screen cannot draw it exactly.
+func (in Input) commandContext() string {
+	switch {
+	case in.Facts.KubeContext != "":
+		return drawableArg(in.Facts.KubeContext, "kube-context")
+	case in.managed():
+		return drawableArg("kind-"+in.commandCluster(), "kube-context")
+	}
+	return "<kube-context>"
+}
+
+// commandCluster is the managed kind cluster's raw name, the default when none
+// was chosen.
+func (in Input) commandCluster() string {
+	if in.Facts.Cluster != "" {
+		return in.Facts.Cluster
+	}
+	return defaultCluster
 }
 
 func (in Input) managed() bool {
@@ -192,14 +217,6 @@ func (in Input) target() string {
 
 const defaultCluster = "devicechain"
 
-// clusterName is the managed kind cluster's name.
-func (in Input) clusterName() string {
-	if !in.Facts.Cluster.IsZero() {
-		return in.Facts.Cluster.String()
-	}
-	return strings.TrimPrefix(in.contextName(), "kind-")
-}
-
 func (in Input) provider() string {
 	if in.Facts.Provider != "" {
 		return in.Facts.Provider
@@ -207,16 +224,14 @@ func (in Input) provider() string {
 	return "local"
 }
 
-// targetFlags selects the same cluster in another dcctl command.
+// targetFlags selects the same cluster in another dcctl command, from the raw
+// choices.
 func (in Input) targetFlags() []string {
 	if !in.managed() {
-		if c := in.contextName(); c != "" {
-			return []string{"--kube-context", c}
-		}
-		return nil
+		return []string{"--kube-context", in.commandContext()}
 	}
-	if c := in.clusterName(); c != "" && c != defaultCluster {
-		return []string{"--cluster", c}
+	if c := in.commandCluster(); c != defaultCluster {
+		return []string{"--cluster", drawableArg(c, "cluster")}
 	}
 	return nil
 }
@@ -233,10 +248,10 @@ func (in Input) inspect() string {
 	case step == installflow.StepInstallCluster && in.managed():
 		return in.quote([]string{"kind", "get", "clusters"})
 	}
-	if c := in.contextName(); c != "" {
-		return in.quote([]string{"kubectl", "--context", c, "get", "pods", "--all-namespaces"})
+	if in.contextName() == "" && in.Facts.KubeContext == "" && !in.managed() {
+		return ""
 	}
-	return ""
+	return in.quote([]string{"kubectl", "--context", in.commandContext(), "get", "pods", "--all-namespaces"})
 }
 
 // nextStep is the success screen's next command: what the summary names, or
@@ -303,13 +318,17 @@ func credentialWords(r installflow.SecretRef) string {
 
 var bareWord = regexp.MustCompile(`^[A-Za-z0-9_./:=+-]+$`)
 
+// placeholder is a word the operator replaces before running the command
+// (<instance>, <kube-context>): it stays bare and readable.
+var placeholder = regexp.MustCompile(`^<[a-z-]+>$`)
+
 // quote joins argv for the selected shell. A bare word stays bare; the
 // placeholder <instance> stays readable.
 func (in Input) quote(argv []string) string {
 	out := make([]string, len(argv))
 	for i, a := range argv {
 		switch {
-		case bareWord.MatchString(a) || a == "<instance>":
+		case bareWord.MatchString(a) || placeholder.MatchString(a):
 			out[i] = a
 		case in.Shell == PowerShell:
 			out[i] = "'" + strings.ReplaceAll(a, "'", "''") + "'"

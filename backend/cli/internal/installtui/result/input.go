@@ -49,10 +49,13 @@ type Input struct {
 // are copied from the resolved choices, field by field: nothing here can carry a
 // credential, a credential file's path or a URL.
 type Facts struct {
-	Provider       string // the provider argument, e.g. local
-	Managed        bool   // a kind cluster dcctl manages, rather than an existing context
-	Cluster        installflow.SafeText
-	KubeContext    installflow.SafeText
+	Provider string // the provider argument, e.g. local
+	Managed  bool   // a kind cluster dcctl manages, rather than an existing context
+	// Cluster and KubeContext are RAW: exactly as the choice was given. Commands
+	// the operator copies are built from them, never from display text, which
+	// sanitising may have changed; they are drawn only through installflow.Text.
+	Cluster        string
+	KubeContext    string
 	Compact        bool
 	HA             bool
 	TLS            bool
@@ -61,30 +64,48 @@ type Facts struct {
 	MaxConnections int // 0: the install's default
 }
 
-// Command is a display-safe command line: credential values already replaced
-// with a placeholder by the serialiser, which then marks it a Template.
+// Command is a command line exactly as the serialiser quoted it, RAW: credential
+// values already replaced with a placeholder, which marks it a Template, but
+// nothing sanitised, since a sanitised command can name another target. It is
+// shown only through its words: a word the screen cannot draw as it is becomes
+// a placeholder that names the problem, never a silently different argument.
 type Command struct {
-	Line installflow.SafeText
+	Line string
 	// Args are Line's words exactly as they appear in it, quotes and all, in
-	// order, as the serialiser quoted them. When they join with single spaces to
-	// Line, the screen breaks the line only between them; otherwise it finds the
-	// words by reading Line's quoting.
-	Args     []installflow.SafeText
+	// order. When they join with single spaces to Line, the screen breaks the
+	// line only between them; otherwise it finds the words by reading Line's
+	// quoting.
+	Args     []string
 	Template bool
 }
 
-// words are the command's words, for wrapping.
+// words are the command's words as they may be shown, for wrapping.
 func (c Command) words(shell Shell) []string {
-	if len(c.Args) > 0 {
-		ws := make([]string, len(c.Args))
-		for i, a := range c.Args {
-			ws[i] = a.String()
-		}
-		if strings.Join(ws, " ") == c.Line.String() {
-			return ws
-		}
+	ws := c.Args
+	if len(ws) == 0 || strings.Join(ws, " ") != c.Line {
+		ws = splitCommand(c.Line, shell)
 	}
-	return splitCommand(c.Line.String(), shell)
+	out := make([]string, len(ws))
+	for i, w := range ws {
+		out[i] = drawableArg(w, "argument")
+	}
+	return out
+}
+
+// display is the command line as it may be shown and printed.
+func (c Command) display(shell Shell) string { return strings.Join(c.words(shell), " ") }
+
+// drawableArg is a raw argument of a command the operator will copy: itself
+// when the screen can draw it exactly, otherwise a placeholder saying why.
+//
+// 🔴 NEVER A SANITISED COPY. Sanitising drops invisible and control characters
+// ("team" ZWJ "prod" draws as "teamprod"), and a command built from what was
+// drawn would select a different context, cluster or file without a word.
+func drawableArg(raw, what string) string {
+	if installflow.Text(raw).String() != raw {
+		return "<" + what + "-contains-invisible-characters>"
+	}
+	return raw
 }
 
 // Shell selects the quoting of a composed command.

@@ -40,16 +40,16 @@ func WriteExitSummary(w io.Writer, in Input) error {
 		for _, n := range in.nextSteps() {
 			line("Next", n)
 		}
-		line("Command", in.Equivalent.Line.String())
+		line("Command", in.Equivalent.display(in.Shell))
 	default:
 		line("Stage", in.failedAt())
 		line("Cause", stopWords(in))
 		line("Changes", in.changes())
 		line("Claim", claimWords(in.Summary.Claim))
 		line("Inspect", in.inspect())
-		line("Re-run", in.Equivalent.Line.String())
+		line("Re-run", in.Equivalent.display(in.Shell))
 	}
-	if in.Equivalent.Template && !in.Equivalent.Line.IsZero() {
+	if in.Equivalent.Template && in.Equivalent.Line != "" {
 		b.WriteString("  (template: supply the redacted credentials privately)\n")
 	}
 	_, err := io.WriteString(w, b.String())
