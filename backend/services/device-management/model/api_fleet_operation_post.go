@@ -95,6 +95,9 @@ var (
 	// fleetPostHook lets a test interleave a competing session at a named point of the posting transaction
 	// ("read": after the unlocked line read; "claim": just before the claim; "claimed": just after it). Nil in production.
 	fleetPostHook func(stage string, tx *gorm.DB)
+	// fleetRetryHook lets a test stall a replica between its line's retry record and the operation's
+	// last-error update. Nil in production.
+	fleetRetryHook func()
 	// fleetTryDeviceLock is the real try-lock; tests can model a held lock on SQLite.
 	fleetTryDeviceLock = tryLockDeviceAttributes
 )
@@ -518,6 +521,9 @@ func (api *Api) RecordFleetLineRetry(ctx context.Context, lineID uint, code stri
 			"next_attempt_at": fleetTimestampAfter(db, delay, now)})
 	if recorded.Error != nil || recorded.RowsAffected == 0 {
 		return recorded.Error
+	}
+	if fleetRetryHook != nil {
+		fleetRetryHook()
 	}
 	at := fleetTimestamp(db)
 	if !now.IsZero() && db.Dialector.Name() != "postgres" {
