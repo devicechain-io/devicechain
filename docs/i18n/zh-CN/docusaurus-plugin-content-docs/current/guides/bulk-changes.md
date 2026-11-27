@@ -111,4 +111,10 @@ dcctl bulk-change resolve <token> --all-ambiguous --verdict failed --note "devic
 
 dcctl 在命令开始时登录，因此通过 `--otp` 提供的代码通常足够新。如果服务器仍要求更新的验证（例如登录时使用了恢复码，此处不算数），命令会重新登录一次，并在终端中请求新的身份验证器代码。没有终端时，命令会停止并提示 `--otp`：请使用新代码重新运行命令。只有在该拒绝之后才会重新发送请求，而该拒绝不会写入任何内容。
 
+## 容量规划 {#sizing}
+
+运行批量变更会增加关系型数据库（Postgres）的写入负载。在单个租户以每秒 50 次投递的上限运行时测得：Postgres 主库刷写预写日志（WAL）的频率约增加 40%，CPU 用量约增加 0.3 个核心。NATS JetStream 的负载没有变化。
+
+请将 Postgres 和 NATS JetStream 放在不同的磁盘上。在共享磁盘上，额外的 fsync 会与 JetStream 自身的写入排队，可能提高消息确认的延迟。
+
 所有选项请参阅[命令参考](../reference/dcctl.md#dcctl-bulk-change)。

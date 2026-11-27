@@ -111,4 +111,10 @@ Resolver, y crear una reversión con una anulación, requieren tu propio inicio 
 
 dcctl inicia sesión al empezar el comando, por lo que un código pasado con `--otp` suele ser lo bastante reciente. Si el servidor aún pide uno más reciente (por ejemplo, porque el inicio de sesión usó un código de recuperación, que aquí no cuenta), el comando vuelve a iniciar sesión una vez y pide un nuevo código de autenticación en el terminal. Sin terminal, se detiene e indica `--otp`: vuelve a ejecutar el comando con un código nuevo. La solicitud solo se reenvía tras ese rechazo, que no escribe nada.
 
+## Dimensionamiento {#sizing}
+
+Ejecutar cambios masivos añade carga de escritura a la base de datos relacional (Postgres). Medido con un tenant al límite de 50 envíos por segundo, el primario de Postgres vació su registro de escritura anticipada (WAL) aproximadamente un 40 % más a menudo y usó alrededor de 0,3 núcleos de CPU más. La carga de NATS JetStream no cambió.
+
+Coloca Postgres y NATS JetStream en discos separados. En un disco compartido, los fsync adicionales se encolan con las escrituras propias de JetStream y pueden aumentar la latencia de las confirmaciones de mensajes.
+
 Consulta la [referencia de comandos](../reference/dcctl.md#dcctl-bulk-change) para ver todas las opciones.

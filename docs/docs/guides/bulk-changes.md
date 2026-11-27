@@ -111,4 +111,10 @@ Resolving, and creating a reversal with an override, need your own sign-in with 
 
 dcctl signs in when the command starts, so a code given with `--otp` is normally fresh enough. When the server still asks for a fresher one (for example, the sign-in used a recovery code, which does not count here), the command signs in again once and asks for a new authenticator code at the terminal. Without a terminal it stops and names `--otp`: run the command again with a new code. The request is sent again only after that refusal, which writes nothing.
 
+## Sizing {#sizing}
+
+Running bulk changes adds write load on the relational database (Postgres). Measured with one tenant posting at the cap of 50 posts per second, the Postgres primary flushed its write-ahead log roughly 40% more often and used about 0.3 of a CPU core more. NATS JetStream load did not change.
+
+Put Postgres and NATS JetStream on separate disks. On a shared disk, the extra fsyncs queue with JetStream's own writes and can raise the latency of message acknowledgements.
+
 See the [command reference](../reference/dcctl.md#dcctl-bulk-change) for every flag.
