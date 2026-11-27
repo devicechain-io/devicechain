@@ -4,11 +4,11 @@ section: whats-new
 
 ## en
 
-- **Docker CPU diagnostics.** When Docker's CPU count cannot be read, `dcctl preflight` and install preflight now show an explicit `UNKNOWN` row with guidance to check `docker info`. The result remains advisory for Compact and Standard installs and no longer reports that all checks passed.
+- **Docker CPU diagnostics.** When Docker's CPU count cannot be read, `dcctl preflight` and install preflight now show an explicit `UNKNOWN` row with guidance to check `docker info`. The result remains advisory for Compact and Standard installs, does not block the install, and no longer reports that all checks passed.
 
 ## es
 
-- **Diagnóstico de CPU de Docker.** Cuando no se puede leer el número de CPU de Docker, `dcctl preflight` y la comprobación previa de instalación muestran ahora una fila explícita `UNKNOWN` con indicaciones para revisar `docker info`. El resultado sigue siendo informativo para las instalaciones Compact y Standard y ya no indica que todas las comprobaciones se hayan superado.
+- **Diagnóstico de CPU de Docker.** Cuando no se puede leer el número de CPU de Docker, `dcctl preflight` y la comprobación previa de instalación muestran ahora una fila explícita `UNKNOWN` con indicaciones para revisar `docker info`. El resultado sigue siendo informativo para las instalaciones Compact y Standard, no bloquea la instalación y ya no indica que todas las comprobaciones se hayan superado.
 
 ## zh-CN
 
