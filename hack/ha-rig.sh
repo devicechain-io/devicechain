@@ -271,14 +271,27 @@ ha_cluster_config() {
 # create_cluster is idempotent: an existing cluster of the same name is reused
 # rather than recreated, because a full bring-up is long enough that losing one
 # to a re-run is its own deterrent to running the rig at all.
+#
+# 🔴 `kind create --wait` WAITS FOR THE CONTROL PLANE ONLY. The workers can still be NotReady when it
+# returns, and a bring-up that schedules onto them then fails for a reason that has nothing to do with HA:
+# a false red. So every node the config declares must be Ready, and there must be exactly that many: a
+# `--all` wait over a cluster where a worker never registered is satisfied by the nodes that did.
 create_cluster() {
-  local name="$1" config="$2"
+  local name="$1" config="$2" want have
   if grep -qx -- "$name" <<<"$(kind get clusters 2>/dev/null)"; then
     say "kind cluster $name already exists; reusing it"
-    return
+  else
+    say "creating kind cluster $name"
+    kind create cluster --name "$name" --config "$config" --wait 120s
   fi
-  say "creating kind cluster $name"
-  kind create cluster --name "$name" --config "$config" --wait 120s
+  want="$(grep -cE '^[[:space:]]*-[[:space:]]+role:' "$config")" || want=0
+  [[ "$want" -ge 1 ]] || fail "$config declares no nodes, so the node readiness check has nothing to count"
+  kubectl --context "kind-$name" wait --for=condition=Ready nodes --all --timeout=300s >/dev/null ||
+    fail "not every node of kind cluster $name became Ready within 300s: $(kubectl --context "kind-$name" get nodes --no-headers 2>&1 | tr '\n' ';')"
+  have="$(kubectl --context "kind-$name" get nodes --no-headers 2>/dev/null | grep -c ' Ready ')" || have=0
+  [[ "$have" == "$want" ]] ||
+    fail "kind cluster $name has $have Ready node(s), and $config declares $want"
+  note "kind cluster $name: all $want node(s) Ready"
 }
 
 # require_no_instance refuses to bootstrap over an instance that is already there.
