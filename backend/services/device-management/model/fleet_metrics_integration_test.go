@@ -114,6 +114,8 @@ func TestBulkChangeExecutorI15OnTheDatabaseClock(t *testing.T) {
 	// 24 hours: the driver pauses it DEPENDENCY_UNAVAILABLE, and an operation that is not running is IDLE.
 	paused := testutil.ToFloat64(bulkMetrics.transitions.WithLabelValues(FleetDispatchPaused, FleetPauseDependency))
 	pgRuntime(t, p, map[string]any{"hold_since": gorm.Expr("clock_timestamp() - interval '24 hours'")})
+	require.NoError(t, db.Model(&FleetOperation{}).Where("id = ?", p.op.ID).
+		Update("state_changed_at", gorm.Expr("clock_timestamp() - interval '24 hours'")).Error)
 	r, err = p.api.DriveFleetOperation(p.ctx, p.op.Token, DefaultFleetCaps)
 	require.NoError(t, err)
 	require.Equal(t, FleetPauseDependency, r.Paused)

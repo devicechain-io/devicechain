@@ -102,9 +102,10 @@ type FleetOperationSearchCriteriaInput struct {
 
 type FleetLineSearchCriteriaInput struct {
 	rdb.Pagination
-	Posting    *string
-	Settlement *string
-	Code       *string
+	Posting      *string
+	Settlement   *string
+	Code         *string
+	AfterOrdinal *int32
 }
 
 // ---- queries and mutations ----
@@ -142,7 +143,8 @@ func (r *SchemaResolver) BulkChangeLines(ctx context.Context, args struct {
 		return nil, err
 	}
 	c := args.Criteria
-	results, err := r.GetApi(ctx).FleetOperationLines(ctx, args.Token, model.FleetLineSearchCriteria{Pagination: c.Pagination, Posting: c.Posting, Settlement: c.Settlement, Code: c.Code})
+	results, err := r.GetApi(ctx).FleetOperationLines(ctx, args.Token, model.FleetLineSearchCriteria{Pagination: c.Pagination, Posting: c.Posting, Settlement: c.Settlement, Code: c.Code,
+		AfterOrdinal: c.AfterOrdinal})
 	if err != nil {
 		return nil, err
 	}
