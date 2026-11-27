@@ -255,7 +255,15 @@ func (m model) nowBlock(f frame, done, total int) []string {
 				second = "Press Enter to continue."
 			}
 		}
-		return []string{t.bold.Render(fit(m.runWord() + " " + outcomeWord(m.summary.Outcome) + ".")), second}
+		verdict := []string{t.bold.Render(fit(m.runWord() + " " + outcomeWord(m.summary.Outcome) + "."))}
+		if m.next != nil && m.summary.Succeeded() {
+			// The step after an install: an instance on this cluster, in the terminal UI.
+			// The command is composed of raw choices, so the line is checked whole.
+			if c := m.next(); c != "" {
+				verdict = append(verdict, line(fit(nextInstanceLabel+c), ""))
+			}
+		}
+		return append(verdict, second)
 	}
 	v := m.progress.activeStep()
 	if v == nil {

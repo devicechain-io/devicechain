@@ -671,9 +671,9 @@ FLEET_RUNNER_INPUTS = [
 # The `tui-windows` job: the install terminal UI's packages and the cmd package (its entry
 # selection and the ConPTY smoke test), run natively on windows-latest. It runs when a changed file
 # reaches a package the TUI roots below compile THAT IS IN backend/cli, or is one of the
-# TUI_WINDOWS_INPUTS (the install and setup commands' own files in cmd, its preflight, Execute's signal
-# handling in root.go, the install characterisation goldens), or is a Go file in backend/cli that
-# only a Windows build compiles (windows_only).
+# TUI_WINDOWS_INPUTS (the install, bootstrap and setup commands' own files in cmd, its preflight,
+# Execute's signal handling in root.go, the install and bootstrap characterisation goldens), or is a
+# Go file in backend/cli that only a Windows build compiles (windows_only).
 #
 # 🔴 WINDOWS-ONLY FILES ALWAYS RUN IT. A file named *_windows.go, or one whose //go:build line
 # selects windows, is compiled by no Linux test: only the Windows vet type-checks it, and only this
@@ -700,8 +700,11 @@ TUI_WINDOWS_INPUTS = [
     "backend/cli/cmd/install*",
     "backend/cli/cmd/preflight*",
     "backend/cli/cmd/setup*",
+    "backend/cli/cmd/bootstrap.go",
+    "backend/cli/cmd/bootstrap_ui*",
     "backend/cli/cmd/root.go",
     "backend/cli/cmd/testdata/install_golden/**",
+    "backend/cli/cmd/testdata/bootstrap_golden/**",
 ]
 _WINDOWS_FILE = re.compile(r"_windows(_[a-z0-9]+)?(_test)?\.go$")
 _BUILD_LINE = re.compile(r"^//go:build (.+)$", re.M)
@@ -1713,6 +1716,9 @@ def self_test():
         expect(select(ws, [".github/workflows/ci.yml"]).tui_windows, "a full selection runs tui-windows")
         expect(not select(ws, ["docs/x.md"]).tui_windows, "a docs change skips tui-windows")
         expect(select(ws, ["backend/cli/cmd/preflight_cloud.go"]).tui_windows, "the install preflight runs tui-windows")
+        expect(select(ws, ["backend/cli/cmd/bootstrap_ui.go"]).tui_windows, "the bootstrap's terminal UI entry runs tui-windows")
+        expect(select(ws, ["backend/cli/cmd/testdata/bootstrap_golden/dev.txt"]).tui_windows,
+               "a bootstrap golden runs tui-windows")
         expect(windows_only("backend/cli/bootstrap/procstate_windows.go") and windows_only("x/y_windows_test.go")
                and windows_only("x/y_windows_arm64.go"), "a *_windows.go name is Windows-only")
         expect(not windows_only("x/windows.go") and not windows_only("x/y_unix.go") and not windows_only("x/y_windows.txt"),

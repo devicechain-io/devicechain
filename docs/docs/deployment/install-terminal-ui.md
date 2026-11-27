@@ -18,8 +18,9 @@ dcctl install local --ui=tui --kube-context prod
 The terminal UI is **opt-in** in this release: without `--ui`, `dcctl install` prints, prompts
 and exits exactly as it always has, on a terminal or off one. It installs the same thing either
 way, with the same flags, the same checks and the same exit status; see
-[Install the cluster](./bootstrap.md#install) for what the install does. It covers the cluster
-install only. `dcctl bootstrap` is unchanged and still runs as plain text.
+[Install the cluster](./bootstrap.md#install) for what the install does. An instance on the
+cluster has terminal UI of its own: see
+[The instance: `dcctl bootstrap --ui=tui`](#bootstrap-ui).
 
 ## When the terminal UI is used {#when-used}
 
@@ -164,7 +165,8 @@ stops the install.
 
 - **Success** says "Shared prerequisites installed", with the cluster, its shape, TLS,
   monitoring, backups and connection budget. A cluster has no console of its own, so none is
-  shown. Next is the `dcctl bootstrap` command that creates an instance on it. Done exits 0.
+  shown. Next is the `dcctl bootstrap … --ui=tui` command that creates an instance on it in the
+  terminal UI. Done exits 0.
 - **Failure** names the stage that failed and its cause, what may have been changed, whether
   the cluster's lock was released, a command to inspect the cluster, and the fix. An install
   converges, so the fix is to correct the cause and **run the same command again**; the
@@ -175,7 +177,8 @@ stops the install.
   ran out is shown as a failure that says so, never as a success.
 
 When dcctl exits, the terminal is restored and a short summary is printed: the outcome, the
-target and the next command. It contains no credentials.
+target and the next command, such as
+`create an instance: dcctl bootstrap local <instance> --ui=tui`. It contains no credentials.
 
 ## Keys {#keys}
 
@@ -234,6 +237,46 @@ including Ctrl+C and errors, the console's modes are put back as they were.
 The exit status is the same as the plain install's: 0 when the install succeeded, 1 when it
 failed, was refused, or was stopped. Leaving a screen never changes it.
 
+## The instance: `dcctl bootstrap --ui=tui` {#bootstrap-ui}
+
+`dcctl bootstrap` takes the same `--ui` flag as `dcctl install`, with the same three values, the
+same default (`plain`) and the same rules for when the terminal UI is used. Without `--ui`, or
+off an interactive terminal, under CI, with `TERM=dumb` or with `--dry-run`, it prints, prompts
+and exits exactly as it always has. The escrow passphrase is taken from the same sources in the
+same order: `--escrow-passphrase-file`, then `DCCTL_ESCROW_PASSPHRASE`, then you.
+
+```bash
+dcctl bootstrap local my-instance --ui=tui
+dcctl bootstrap local prod --kube-context prod --host iot.example.com --ui=tui
+```
+
+With `--ui=tui` on an interactive terminal:
+
+1. **Instance choices.** The instance name, host, profile, extra areas, TLS and object store,
+   filled in from the command line and marked with the flag that set each one. The cluster's
+   footprint and topology are not chosen here: they are read from the cluster when the run starts.
+2. **Root-key escrow.** Where the escrow file is written, or `--no-escrow` behind its
+   permanent-loss warning. A path is checked by the bootstrap's own rule before you can continue:
+   a path inside the instance's state directory, which `dcctl destroy` deletes, is refused. When a
+   file or the environment supplies the passphrase, the screen says so and asks nothing.
+3. **Review.** The instance the bootstrap will build, as the command line would resolve it, with
+   the equivalent non-interactive command as a template. Every other flag you gave on the command
+   line is listed and carried into the run unchanged. **Approve and create the instance** is the
+   only thing that starts it; like every review, it takes no key until it has settled.
+4. **Progress.** The bootstrap's stages, as the install's progress screen shows them. When the run
+   reaches its escrow step, the passphrase is asked for on screen, twice, and nothing you type is
+   shown.
+5. **After the run.** The escrow receipt with its custody reminder, the one-time first-login
+   password (shown only when you ask for it), and the instance summary with its console address.
+
+With `--ui=tui --yes`, or `--ui=tui --dev`, there are no choices and no review: the screen shows
+the progress of exactly the bootstrap the command line describes and exits when it ends. The
+escrow passphrase is still asked for on screen if no file or environment variable supplies it.
+The first-login password is not shown: the summary printed on exit says which Secret holds it.
+
+The exit status is the plain bootstrap's: 0 when the instance was created, 1 when it failed, was
+refused or was stopped. Leaving before the approval creates nothing and exits 1.
+
 ## Cluster, then instance: `dcctl setup local` (Preview) {#setup-local}
 
 `dcctl setup local` runs the cluster install and then the bootstrap of a first instance in one
@@ -243,9 +286,10 @@ remain the way to script either step.
 It has two stages, each with its own review and its own approval:
 
 1. **The cluster.** The same screens as `dcctl install local --ui=tui`, from the welcome to the
-   review. **Approve and install** installs the cluster. When it has finished, Enter continues.
+   review, except that its welcome says the instance follows. **Approve and install** installs
+   the cluster. When it has finished, Enter continues.
 2. **The instance.** A hand-over screen says the cluster is installed and shows the
-   `dcctl bootstrap` command that creates an instance later. **Continue to the instance** leads to
+   `dcctl bootstrap … --ui=tui` command that creates an instance later. **Continue to the instance** leads to
    the instance and root-key escrow choices, then to the instance's own review.
    **Approve and create the instance** starts the bootstrap. The escrow passphrase is asked for on
    screen when the run reaches its escrow step, and is never shown. After a successful run come the
@@ -261,8 +305,8 @@ naming the two commands to run instead. Its flags (`--kube-context`, `--cluster`
 `--ha`, `--no-splash`) only set where the screens start; each can be changed on them.
 
 If you leave or the instance fails after the cluster stage, the cluster stays installed. Setup says
-so and prints the exact `dcctl bootstrap` command that creates the instance: with the choices you
-made, once you made them.
+so and prints the exact `dcctl bootstrap … --ui=tui` command that creates the instance on the same
+screens: with the choices you made, once you made them.
 
 | Exit status | Meaning |
 | --- | --- |

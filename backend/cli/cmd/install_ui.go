@@ -31,13 +31,19 @@ var (
 	installNoSplash bool
 )
 
-const (
-	installUIUsage = "how the install presents itself: plain (the text output dcctl has always printed), " +
+const installNoSplashUsage = "with the terminal UI: skip the DeviceChain logo shown before the install starts"
+
+// installUIUsage is the help of install's --ui.
+var installUIUsage = uiUsage("install")
+
+// uiUsage is the help of --ui on a command whose run it names: one text for install and
+// bootstrap, because the flag means the same on both.
+func uiUsage(run string) string {
+	return "how the " + run + " presents itself: plain (the text output dcctl has always printed), " +
 		"tui (a full-screen terminal UI, when stdin, stdout and stderr are all an interactive terminal; " +
 		"otherwise plain, unchanged), or auto (the terminal UI on an interactive terminal, and plain " +
 		"everywhere else, including with --yes or --dev). --dry-run is always plain"
-	installNoSplashUsage = "with the terminal UI: skip the DeviceChain logo shown before the install starts"
-)
+}
 
 // parseInstallUI refuses a --ui value that is not one of the three, before anything is
 // printed or touched.

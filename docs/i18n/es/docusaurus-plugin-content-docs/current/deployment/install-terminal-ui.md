@@ -19,8 +19,9 @@ dcctl install local --ui=tui --kube-context prod
 La interfaz de terminal es **opcional** en esta versión: sin `--ui`, `dcctl install` imprime,
 pregunta y sale exactamente igual que siempre, en un terminal o fuera de él. Instala lo mismo en
 ambos casos, con las mismas opciones, las mismas comprobaciones y el mismo código de salida;
-consulta [Instalar el clúster](./bootstrap.md#install) para saber qué hace la instalación. Solo
-cubre la instalación del clúster. `dcctl bootstrap` no cambia y sigue funcionando como texto.
+consulta [Instalar el clúster](./bootstrap.md#install) para saber qué hace la instalación. Una
+instancia en el clúster tiene su propia interfaz de terminal: consulta
+[La instancia: `dcctl bootstrap --ui=tui`](#bootstrap-ui).
 
 ## Cuándo se usa la interfaz de terminal {#when-used}
 
@@ -177,8 +178,9 @@ instalación en texto. Esc nunca detiene la instalación.
 
 - **Éxito** dice "Shared prerequisites installed", con el clúster, su forma, TLS, la
   monitorización, las copias de seguridad y el presupuesto de conexiones. Un clúster no tiene una
-  consola propia, así que no se muestra ninguna. Lo siguiente es el comando `dcctl bootstrap` que
-  crea una instancia en él. Done sale con 0.
+  consola propia, así que no se muestra ninguna. Lo siguiente es el comando
+  `dcctl bootstrap … --ui=tui` que crea una instancia en él en la interfaz de terminal. Done sale
+  con 0.
 - **Fallo** indica la etapa que falló y su causa, lo que puede haber cambiado, si se liberó el
   bloqueo del clúster, un comando para inspeccionar el clúster y la solución. Una instalación
   converge, así que la solución es corregir la causa y **volver a ejecutar el mismo comando**; se
@@ -189,7 +191,8 @@ instalación en texto. Esc nunca detiene la instalación.
   agotó la espera de disponibilidad se muestra como un fallo que lo dice, nunca como un éxito.
 
 Al salir dcctl, el terminal se restaura y se imprime un breve resumen: el resultado, el destino y el
-siguiente comando. No contiene credenciales.
+siguiente comando, por ejemplo
+`create an instance: dcctl bootstrap local <instance> --ui=tui`. No contiene credenciales.
 
 ## Teclas {#keys}
 
@@ -251,6 +254,52 @@ como estaban.
 El código de salida es el mismo que el de la instalación en texto: 0 si la instalación tuvo éxito, 1
 si falló, se rechazó o se detuvo. Salir de una pantalla nunca lo cambia.
 
+## La instancia: `dcctl bootstrap --ui=tui` {#bootstrap-ui}
+
+`dcctl bootstrap` acepta la misma opción `--ui` que `dcctl install`, con los mismos tres valores,
+el mismo valor predeterminado (`plain`) y las mismas reglas sobre cuándo se usa la interfaz de
+terminal. Sin `--ui`, o fuera de un terminal interactivo, en CI, con `TERM=dumb` o con `--dry-run`,
+imprime, pregunta y sale exactamente igual que siempre. La frase de paso del depósito se toma de
+las mismas fuentes y en el mismo orden: `--escrow-passphrase-file`, después
+`DCCTL_ESCROW_PASSPHRASE` y después tú.
+
+```bash
+dcctl bootstrap local my-instance --ui=tui
+dcctl bootstrap local prod --kube-context prod --host iot.example.com --ui=tui
+```
+
+Con `--ui=tui` en un terminal interactivo:
+
+1. **Opciones de la instancia.** El nombre de la instancia, el host, el perfil, las áreas
+   adicionales, TLS y el almacén de objetos, rellenados a partir de la línea de comandos y marcados
+   con la opción que fijó cada uno. El tamaño y la topología del clúster no se eligen aquí: se leen
+   del clúster cuando empieza la ejecución.
+2. **Depósito de la clave raíz.** Dónde se escribe el archivo de depósito, o `--no-escrow` tras su
+   aviso de pérdida permanente. La ruta se comprueba con la propia regla del bootstrap antes de
+   poder continuar: se rechaza una ruta dentro del directorio de estado de la instancia, que
+   `dcctl destroy` elimina. Cuando un archivo o el entorno aporta la frase de paso, la pantalla lo
+   indica y no pregunta nada.
+3. **Revisión.** La instancia que construirá el bootstrap, tal como la resolvería la línea de
+   comandos, con el comando no interactivo equivalente como plantilla. Cualquier otra opción que
+   hayas dado en la línea de comandos se lista y se lleva a la ejecución sin cambios.
+   **Aprobar y crear la instancia** es lo único que la inicia; como toda revisión, no acepta teclas
+   hasta haberse asentado.
+4. **Progreso.** Las etapas del bootstrap, tal como las muestra la pantalla de progreso de la
+   instalación. Cuando la ejecución llega a su paso de depósito, la frase de paso se pide en
+   pantalla, dos veces, y no se muestra nada de lo que escribes.
+5. **Después de la ejecución.** El comprobante del depósito con su recordatorio de custodia, la
+   contraseña de primer inicio de sesión de un solo uso (que solo se muestra cuando la pides) y el
+   resumen de la instancia con la dirección de su consola.
+
+Con `--ui=tui --yes`, o `--ui=tui --dev`, no hay opciones ni revisión: la pantalla muestra el
+progreso exactamente del bootstrap que describe la línea de comandos y sale cuando termina. La
+frase de paso del depósito se sigue pidiendo en pantalla si ningún archivo ni variable de entorno
+la aporta. La contraseña de primer inicio de sesión no se muestra: el resumen impreso al salir
+indica qué Secret la guarda.
+
+El código de salida es el del bootstrap en texto: 0 cuando se creó la instancia y 1 cuando falló,
+se rechazó o se detuvo. Salir antes de la aprobación no crea nada y sale con 1.
+
 ## Clúster y después instancia: `dcctl setup local` (Preview) {#setup-local}
 
 `dcctl setup local` ejecuta la instalación del clúster y después el bootstrap de una primera
@@ -260,9 +309,10 @@ y siguen siendo la forma de automatizar cada paso.
 Tiene dos etapas, cada una con su propia revisión y su propia aprobación:
 
 1. **El clúster.** Las mismas pantallas que `dcctl install local --ui=tui`, desde la bienvenida
-   hasta la revisión. **Aprobar e instalar** instala el clúster. Cuando termina, Intro continúa.
+   hasta la revisión, salvo que su bienvenida indica que después viene la instancia.
+   **Aprobar e instalar** instala el clúster. Cuando termina, Intro continúa.
 2. **La instancia.** Una pantalla de traspaso indica que el clúster está instalado y muestra el
-   comando `dcctl bootstrap` que crea una instancia más adelante. **Continuar con la instancia**
+   comando `dcctl bootstrap … --ui=tui` que crea una instancia más adelante. **Continuar con la instancia**
    lleva a las opciones de la instancia y del depósito de la clave raíz, y después a la revisión
    propia de la instancia. **Aprobar y crear la instancia** inicia el bootstrap. La frase de paso
    del depósito se pide en pantalla cuando la ejecución llega a su paso de depósito, y nunca se
@@ -281,8 +331,8 @@ interactivo (no CI, no `TERM=dumb`), y no tiene `--yes`. Sin un terminal no camb
 se puede cambiar en ellas.
 
 Si sales o la instancia falla después de la etapa del clúster, el clúster sigue instalado. Setup lo
-indica e imprime el comando `dcctl bootstrap` exacto que crea la instancia: con las opciones que
-elegiste, si ya las elegiste.
+indica e imprime el comando `dcctl bootstrap … --ui=tui` exacto que crea la instancia en las
+mismas pantallas: con las opciones que elegiste, si ya las elegiste.
 
 | Código de salida | Significado |
 | --- | --- |

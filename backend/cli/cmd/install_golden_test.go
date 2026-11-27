@@ -492,7 +492,8 @@ func TestInstallGoldenChild(t *testing.T) {
 		return
 	}
 	var sc *installScenario
-	for _, list := range [][]installScenario{installScenarios, installCheckScenarios, bootstrapScenarios, installUIScenarios()} {
+	for _, list := range [][]installScenario{installScenarios, installCheckScenarios, bootstrapScenarios, installUIScenarios(),
+		bootstrapUIScenarios()} {
 		for i := range list {
 			if list[i].name == name {
 				sc = &list[i]

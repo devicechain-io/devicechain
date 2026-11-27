@@ -160,7 +160,7 @@ func TestSetupLocalWiresTheStages(t *testing.T) {
 		t.Fatal("the cluster stage has no screens, no replan or no preflight")
 	}
 	scr := got.Instance()
-	if scr.Handover == nil || scr.Handover.Continue != "dcctl bootstrap local <instance> --kube-context=prod" {
+	if scr.Handover == nil || scr.Handover.Continue != "dcctl bootstrap local <instance> --kube-context=prod --ui=tui" {
 		t.Fatalf("the hand-over: %+v", scr.Handover)
 	}
 	if !slices.Equal(scr.Setup.TargetArgs, []string{"--kube-context=prod"}) ||
@@ -168,7 +168,7 @@ func TestSetupLocalWiresTheStages(t *testing.T) {
 		t.Fatalf("the instance target: %v, %q", scr.Setup.TargetArgs, scr.Setup.Instance.ClusterShape)
 	}
 	if c := got.ContinueCommand(&installtui.BootstrapPlanned{Instance: installtui.InstanceChoices{Name: "acme",
-		Given: map[string]bool{"name": true}}}); c != "dcctl bootstrap local acme --kube-context=prod" {
+		Given: map[string]bool{"name": true}}}); c != "dcctl bootstrap local acme --kube-context=prod --ui=tui" {
 		t.Fatalf("the continue command: %q", c)
 	}
 }

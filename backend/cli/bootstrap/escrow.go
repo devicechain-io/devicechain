@@ -369,6 +369,16 @@ func resolveEscrowPath(instance, explicit string) (string, error) {
 	return abs, nil
 }
 
+// CheckEscrowPath is the rule a bootstrap applies to where it will write an instance's
+// escrow artifact, for a screen that asks before the run does: the path made absolute,
+// or the refusal the run itself would end with (a path inside the instance's state
+// directory, which `dcctl destroy` deletes). It is the run's own check, not a copy of
+// it, so a path a screen accepts is one the run's escrow stage accepts too. It writes
+// nothing.
+func CheckEscrowPath(instance, path string) (string, error) {
+	return resolveEscrowPath(instance, path)
+}
+
 // mustDefaultEscrowPath is only used to name the default in an error message, so a
 // missing home directory degrades to a less specific message rather than replacing
 // the real error with a different one.

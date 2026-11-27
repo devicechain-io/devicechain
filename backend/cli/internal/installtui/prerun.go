@@ -93,6 +93,10 @@ type prerun struct {
 	// checks counts the screen's preflight runs still going; wait joins them.
 	checks sync.WaitGroup
 
+	// continues says another journey follows this one in the same command (dcctl setup
+	// local), so the welcome does not send the operator to dcctl bootstrap.
+	continues bool
+
 	screen  prerunScreen
 	welcome int // the focused welcome action
 	pf      preflightState

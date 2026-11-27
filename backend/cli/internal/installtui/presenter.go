@@ -18,6 +18,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/internal/installplain"
+	"github.com/devicechain-io/dcctl/internal/installtui/result"
 	"github.com/devicechain-io/dcctl/internal/installtui/terminal"
 )
 
@@ -41,6 +42,11 @@ type Presenter struct {
 	// install's, the run is the one its review approves (the engine passed to Run is not
 	// used), its secret questions are answered on its passphrase form, and its one-time
 	// disclosures go to its first-login screen. Wizard is ignored.
+	//
+	// A progress-only run (--yes, --dev) has no choices and no review: the command line
+	// approved it, so the engine passed to Run is the run, started as soon as the screen
+	// is up, exactly as an install's progress-only run is. Its passphrase is still asked
+	// on the form, and it reveals nothing.
 	Bootstrap *BootstrapScreens
 	// Continues says another journey follows this one in the same command (dcctl setup
 	// local): the success verdict's Enter leads on rather than out.
@@ -243,10 +249,27 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 			// The checks on screen run under the run's context, so an interrupt reaches them.
 			mo.pre = newPrerun(runCtx, p.Caps, p.Wizard, preflight, hub.Redact)
 			mo.pre.rv.clock = keyClock
+			mo.pre.continues = p.Continues
 			mo.choose = choose
 			pre = mo.pre
 		}
+		if !p.Continues && req.Operation != installflow.OperationBootstrap {
+			// An install's success names the next step: an instance on the cluster the
+			// run installed, in the terminal UI. dcctl setup local goes on to it instead.
+			wiz := p.Wizard
+			mo.next = func() string {
+				f := wiz.Facts
+				if pre != nil {
+					f = pre.facts // the plan as the screens left it
+				}
+				return BootstrapNext(f, wiz.Shell)
+			}
+		}
 	}
+	// gated says the run starts only on an approval given on these screens: the install's
+	// screens before the run, or the instance journey's review. A progress-only instance
+	// run has neither; the command line that asked for it is its approval.
+	gated := mo.pre != nil || (mo.inst != nil && !p.Caps.ProgressOnly)
 	prog = tea.NewProgram(newModel(p.Caps, intr, start, hub, hub.Redact, mo), opts...)
 
 	// OS signals while the screen is up. The root context hears the first one too; this
@@ -285,7 +308,7 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 		runE, runPreflight := e, preflight
 		// 🔴 FAIL CLOSED: the screens were up and Continue was never chosen, so the
 		// install was never confirmed. Nothing starts, whatever ended the screens.
-		unconfirmed := (mo.pre != nil || mo.inst != nil) && !confirmed
+		unconfirmed := gated && !confirmed
 		planMu.Unlock()
 		if unconfirmed {
 			runE, runPreflight = notStarted{op: req.Operation}, nil
@@ -377,7 +400,7 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	}
 	close(b.done)
 	planMu.Lock()
-	unconfirmed := (mo.pre != nil || mo.inst != nil) && !confirmed
+	unconfirmed := gated && !confirmed
 	planMu.Unlock()
 	if !finished {
 		reason := "it closed before the run finished"
@@ -420,8 +443,20 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	}
 	if !b.plain.Load() {
 		writeExitSummary(p.Stdout, req.Operation, res.sum)
+		if mo.next != nil && res.err == nil && res.sum.Succeeded() {
+			if c := mo.next(); c != "" {
+				fmt.Fprintln(p.Stdout, nextInstanceSummaryLabel+c)
+			}
+		}
 		if inst != nil {
 			inst.flow.ExitSummary(p.Stdout)
+			if p.Caps.ProgressOnly && res.err == nil && res.sum.Succeeded() {
+				// A progress-only run reveals nothing: the password is named by where it
+				// is kept, as the success screen names it.
+				for _, c := range res.sum.Credentials {
+					fmt.Fprintln(p.Stdout, "password: kept in Secret "+refText(c))
+				}
+			}
 		}
 		// The review's command, exact on one line, whatever the screen could draw.
 		if pre != nil {
@@ -492,6 +527,27 @@ func writeExitSummary(w io.Writer, op installflow.Operation, s installflow.Summa
 		}
 		fmt.Fprintf(w, "next: %s\n", strings.Join(argv, " "))
 	}
+}
+
+// The labels the step after an install is named with, on its verdict and in the exit
+// summary. It is the step that is always open after a cluster install: an instance that
+// already lives on the cluster is moved by dcctl upgrade, which the run's own report (in
+// the log pane) names.
+const (
+	nextInstanceLabel        = "Create an instance: "
+	nextInstanceSummaryLabel = "create an instance: "
+)
+
+// BootstrapNext is the command that creates an instance on the cluster an install's
+// facts describe, in the terminal UI: dcctl bootstrap <provider> <instance>, the
+// cluster's target flag, then --ui=tui. It is quoted for shell.
+func BootstrapNext(f Facts, shell result.Shell) string {
+	in := result.Input{Facts: result.Facts{Provider: f.Provider, Managed: f.KubeContext == "",
+		Cluster: f.Cluster, KubeContext: f.KubeContext}, Shell: shell, BootstrapUI: true}
+	if steps := in.NextSteps(); len(steps) > 0 {
+		return steps[0]
+	}
+	return ""
 }
 
 func sizeOr(v, fallback int) int {

@@ -1,7 +1,7 @@
 args: bootstrap --help
 stdin: ""
 exit: 0
--- stdout (14676 bytes) --
+-- stdout (15093 bytes) --
 Provisions a usable DeviceChain instance on the given provider (e.g. "local")
 
 Usage:
@@ -59,6 +59,7 @@ Flags:
       --skip-preflight                              skip the local-system preflight checks
       --sparkplug-source string                     path to a YAML or JSON file of Sparkplug sources to connect: a list of {tenant, hostId, broker{url, username, password | passwordFile | passwordSecretRef{name, key}}, groups, deviceTypeToken, autoRegister, commands{enabled, hostRole, writableMetrics, ...}}. Each source is one Host Application connection out to a customer broker, bound to one tenant. The broker password is written by dcctl into a Secret of its own, dci-<instance>-sparkplug-broker, OUTSIDE the Helm release: the release records only the Secret's name and a salted digest, never the password (or name a Secret you manage yourself with passwordSecretRef, which dcctl neither reads nor writes). The sources are kept by every later upgrade. Implies --enable-area sparkplug-ingest on a bootstrap (on an upgrade the area must already run). Validated up front. A bootstrap over an instance that has sources, given none, is refused unless --withdraw-sparkplug-sources is given
       --trusted-proxies strings                     CIDR ranges of the proxies whose X-Forwarded-For the services believe (infrastructure.http.trustedProxies); repeat or comma-separate. Default: the cluster's pod range, read from its nodes, which is where the ingress controller runs; add a fronting load balancer's ranges when there is one. It is recorded on the instance and kept by every upgrade; "auto" returns to deriving it from the cluster
+      --ui string                                   how the bootstrap presents itself: plain (the text output dcctl has always printed), tui (a full-screen terminal UI, when stdin, stdout and stderr are all an interactive terminal; otherwise plain, unchanged), or auto (the terminal UI on an interactive terminal, and plain everywhere else, including with --yes or --dev). --dry-run is always plain (default "plain")
       --values stringArray                          a YAML file of operator tuning (replica counts, resources, an area's own configuration), merged over the values dcctl computes (repeatable; later files win). The overlay is recorded on the instance, so 'dcctl upgrade' keeps applying it; on upgrade, --values REPLACES the recorded overlay. Only tunable values are accepted: a key dcctl owns (images, credentials, endpoints, ingress host and TLS, the area set) is refused, naming it, before anything changes
       --version string                              image version/tag to deploy (default: the published release version, or 'dev' with --build)
       --withdraw-lwm2m-identities                   remove the instance's LwM2M identities and the Secret holding their pre-shared keys. Not combinable with --lwm2m-identities
