@@ -736,3 +736,34 @@ func TestAPluginCredentialIsNotSentPastItsExpiry(t *testing.T) {
 		t.Errorf("%d requests carried the credential, want only the self review: %v", len(auth), seen)
 	}
 }
+
+// 🔴 A PLUGIN'S CREDENTIAL GOES THROUGH THE SAME GUARD as static credentials: an API
+// server that redirects the self review elsewhere does not get it followed, so the other
+// host is never sent the credential, and authentication does not pass.
+func TestAPluginsCredentialIsNeverRedirected(t *testing.T) {
+	other := &recorder{}
+	otherSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { other.note(r) }))
+	defer otherSrv.Close()
+	api := &recorder{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		api.note(r)
+		if r.URL.Path == "/version" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, versionJSON)
+			return
+		}
+		http.Redirect(w, r, otherSrv.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer srv.Close()
+	cfg, _ := pluginConfig(t, srv.URL, "token")
+	run := runWithPlugin(t, cfg, nil)
+	if r := authRow(t, run); r.Verdict == installflow.CheckPass {
+		t.Errorf("authentication reads PASS through a redirect")
+	}
+	if seen, auth := other.snapshot(); len(seen) != 0 || len(auth) != 0 {
+		t.Errorf("the redirect was followed: the other host saw %v with %v", seen, auth)
+	}
+	if _, auth := api.snapshot(); len(auth) == 0 {
+		t.Error("the API server was never sent the credential")
+	}
+}
