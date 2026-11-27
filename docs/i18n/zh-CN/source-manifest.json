@@ -142,6 +142,10 @@
       "sourceSha256": "3a8e38ea4c130b9dde95ddc0d192fc0b9a35c8c57e5ca2225a0d48c58f20e063",
       "translationSha256": "c67d101ae9e3b54577579617024336803b4b9e114a826350d16fdef0c425f87e"
     },
+    "deployment/install-terminal-ui.md": {
+      "sourceSha256": "e03177b1d672307ebf303be707ad0ea82bccba2e55b0a71200ba024722bb6b1f",
+      "translationSha256": "b7a70be065c21c3130476c89cf6ba36270a10f8b1574128ae42da412773a7bd6"
+    },
     "deployment/kubernetes-operator.md": {
       "sourceSha256": "4b883aa5022be4cf3e71561c217b6f38437b35b820679b90913a2fce5d077657",
       "translationSha256": "3327e65e16e6d0c944f10722a594a73862e4b38340f7a1dac4dc438cc094fa04"
@@ -187,8 +191,8 @@
       "translationSha256": "f41470d692e753107f909692969fd2e0e3c42bc2b42a4f4e8086d150c4666239"
     },
     "deployment/versioning-policy.md": {
-      "sourceSha256": "2886412acda2edbc8010ca286c775b6f38d851711b8e5e02e277fa998478c721",
-      "translationSha256": "b64654ffc7e1e308f823a93b010fd3e62eba212e728f61460de3dd650dd816d6"
+      "sourceSha256": "7f9fedcb351e284bdad5e8b24e2d1616549378fa3d40a8e003f2921cc145d392",
+      "translationSha256": "c246b523281db97da64d7ca3649df5cf65fd97b16e59c960ed1a5de805e5904c"
     },
     "getting-help.md": {
       "sourceSha256": "86f2e15e38177a3ae5d53300a5ed6d2a1705f827bc29ab820fd9756020dc78f1",

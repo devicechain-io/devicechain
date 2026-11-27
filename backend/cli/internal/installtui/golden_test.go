@@ -18,6 +18,7 @@ import (
 func requireGolden(t *testing.T, name string, out []byte) {
 	t.Helper()
 	path := filepath.Join("testdata", filepath.FromSlash(name))
+	recordGolden(path)
 	if f := flag.Lookup("update"); f != nil && f.Value.String() == "true" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)

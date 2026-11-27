@@ -126,7 +126,14 @@ func (s *docsScan) scanHelmInstall(words []string, where, wd string, loops int) 
 			skip("unresolved values file: " + file)
 			return
 		}
+		// The repository is resolved the same way as the file, or the two spellings of one
+		// directory differ: on Windows EvalSymlinks also expands 8.3 short names, and a
+		// hosted runner's TEMP is one (C:\Users\RUNNER~1\...), so a values file inside a
+		// t.TempDir repository would read as outside it.
 		repo, err := filepath.Abs(s.helmRepo)
+		if err == nil {
+			repo, err = filepath.EvalSymlinks(repo)
+		}
 		if err != nil {
 			skip("unresolved repository")
 			return

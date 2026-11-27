@@ -83,6 +83,10 @@ jobs:
       migrations: ${{ steps.select.outputs.migrations }}
       # Whether the fleet-runner job runs: true unless the diff reaches nothing it builds or runs against.
       fleet_runner: ${{ steps.select.outputs.fleet_runner }}
+      # Whether the tui-windows job runs: true unless the diff reaches nothing in backend/cli that the
+      # install terminal UI compiles, none of the install command's own files or its preflight, and
+      # no Go file in backend/cli that only a Windows build compiles.
+      tui_windows: ${{ steps.select.outputs.tui_windows }}
       # The image-smoke legs this run executes: the images whose module runs whole (or one of
       # their image inputs changed), from hack/ci-select.py; every image off a pull request.
       smoke: ${{ steps.select.outputs.smoke }}
@@ -449,12 +453,14 @@ jobs:
           case "$migrations" in true|false) ;; *) echo "::error::migrations verdict is '$migrations'"; exit 1 ;; esac
           fleet_runner="$(jq -r '.fleet_runner' <<<"$sel")"
           case "$fleet_runner" in true|false) ;; *) echo "::error::fleet_runner verdict is '$fleet_runner'"; exit 1 ;; esac
+          tui_windows="$(jq -r '.tui_windows' <<<"$sel")"
+          case "$tui_windows" in true|false) ;; *) echo "::error::tui_windows verdict is '$tui_windows'"; exit 1 ;; esac
           smoke="$(jq -c '.smoke' <<<"$sel")"
           jq -e 'type == "array"' <<<"$smoke" >/dev/null || { echo "::error::smoke plan is '$smoke'"; exit 1; }
           draft="$(jq -r '.draft' <<<"$sel")"
           case "$draft" in true|false) ;; *) echo "::error::draft verdict is '$draft'"; exit 1 ;; esac
           # A run that is not a pull request must plan every module; the script asserts the same.
-          if [ "$GITHUB_EVENT_NAME" != pull_request ] && { [ "$(jq -r '.full' <<<"$sel")" != true ] || [ "$migrations" != true ] || [ "$fleet_runner" != true ] || [ "$draft" != false ] || [ "$smoke" != "$SMOKE_MODULES" ] \
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] && { [ "$(jq -r '.full' <<<"$sel")" != true ] || [ "$migrations" != true ] || [ "$fleet_runner" != true ] || [ "$tui_windows" != true ] || [ "$draft" != false ] || [ "$smoke" != "$SMOKE_MODULES" ] \
              || ! jq -e '[.go[] | (.batch // [.])[]] | all(.race_scope == "all")' <<<"$sel" >/dev/null; }; then
             echo "::error::a $GITHUB_EVENT_NAME run selected a subset"
             exit 1
@@ -465,6 +471,7 @@ jobs:
             echo "frontend=$frontend"
             echo "migrations=$migrations"
             echo "fleet_runner=$fleet_runner"
+            echo "tui_windows=$tui_windows"
             echo "smoke=$smoke"
             echo "draft=$draft"
           } >> "$GITHUB_OUTPUT"
@@ -3932,6 +3939,53 @@ jobs:
         if: always()
         run: docker rm -f fleet-runner-pg
 
+  # ---------------------------------------------------------------------------
+  # The install terminal UI on a real Windows console. Its packages and the cmd package run
+  # natively on windows-latest: the console probe, the console modes, the stdin gate and the
+  # Ctrl+C path are Windows code that the Linux legs only compile (go vet for GOOS=windows).
+  # cmd includes TestInstallOnAConPTY, which runs dcctl on a pseudo console (ConPTY) through
+  # --help, --dry-run and the terminal UI itself, and checks the console's modes are restored;
+  # its count is asserted, because a test that skipped (no pseudo console) would otherwise read
+  # as a pass. No envtest: apiserver_render_test.go is !windows. No -race: the Linux legs race
+  # the same packages, and the race detector on Windows needs cgo for no new coverage.
+  # ---------------------------------------------------------------------------
+  tui-windows:
+    needs: discover
+    # Skipped when the diff reaches nothing in backend/cli that the terminal UI compiles, nor the
+    # install command or its preflight, nor a Windows-only Go file in backend/cli (hack/ci-select.py
+    # TUI_WINDOWS_* and windows_only); ci-complete accepts the skip only with a successful discover
+    # that said so.
+    if: needs.discover.outputs.tui_windows == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The goldens are compared byte for byte; a checkout that converts line endings is not the
+      # tree that was reviewed.
+      - name: no line-ending conversion
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
+        with:
+          go-version-file: go.work
+          cache: false
+
+      - name: terminal UI and install command tests (windows)
+        working-directory: backend/cli
+        run: |
+          set -o pipefail
+          go test -count=1 -p 2 -timeout 20m ./internal/installtui/... ./internal/installflow/... ./internal/installplain ./internal/installchoice ./internal/proctree ./cmd
+
+      - name: ConPTY smoke test ran and passed
+        working-directory: backend/cli
+        run: |
+          set -o pipefail
+          go test -count=1 -timeout 10m -json -run '^TestInstallOnAConPTY$' ./cmd | ../../hack/check-fleetpg-count.sh TestInstallOnAConPTY 6 1
+
   ci-complete:
     name: ci-complete
     if: always()
@@ -3959,6 +4013,7 @@ jobs:
       - helm
       - opentofu
       - fleet-runner
+      - tui-windows
       - image-smoke
       - api-compat
       - payloaddecode-arm64
@@ -4005,6 +4060,7 @@ jobs:
                 elif $job == "image-smoke" and $d.outputs.smoke == "[]" then "discover planned no image-smoke legs"
                 elif $job == "frontend" and $d.outputs.frontend == "false" then "the diff reaches nothing the frontend reads"
                 elif $job == "fleet-runner" and $d.outputs.fleet_runner == "false" then "the diff reaches nothing the fleet runner builds from or runs against"
+                elif $job == "tui-windows" and $d.outputs.tui_windows == "false" then "the diff reaches nothing the install terminal UI compiles in backend/cli"
                 elif ($job == "migrations" or $job == "migrations-timescaledb-next") and $d.outputs.migrations == "false" then "the diff reaches nothing migration-diff.sh compiles"
                 else empty end' <<<"$NEEDS"
           }

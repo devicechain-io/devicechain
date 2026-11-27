@@ -75,6 +75,9 @@ Which cluster it installs into:
 - **Any provider** — `--kube-context <ctx>` installs into a cluster that already exists.
   `dcctl` never creates or deletes a cluster reached this way.
 
+To be walked through the checks, the choices and a review of the plan on screen before anything is
+installed, run `dcctl install local --ui=tui`; see [Install terminal UI](./install-terminal-ui.md).
+
 ### Re-running install {#re-running-install}
 
 Re-running `install` against the same cluster converges it: what is already in place is left

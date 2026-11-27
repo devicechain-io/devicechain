@@ -1,0 +1,24 @@
+╭─ DeviceChain · Installing · kind-devicechain ────────────────────────────────╮
+│ Overall  ███████████████░░░░░░░░░░░░░░░  3/6 stages                          │
+│ Elapsed 06:45 · Remaining: unknown · last observation 5s ago                 │
+│                                                                              │
+│ DONE  Resolve target / cluster      ██████████  done                         │
+│ DONE  Identity, refusals and claim  ██████████  done                         │
+│ DONE  Credentials and operator      ██████████  done                         │
+│ RUN   Cluster prerequisites         ██████░░░░  41/63 actions                │
+│ WAIT  Base identity and record      ──────────                               │
+│ WAIT  Relational store ready        ──────────                               │
+│                                                                              │
+│ Interrupt received. Waiting for the operation to stop safely. Nothing is be… │
+│ Press Ctrl+C again to exit immediately without waiting.                      │
+│ ▸ Logs (collapsed · 312 lines kept · l to open)                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ l logs  Ctrl+C again force exit                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯

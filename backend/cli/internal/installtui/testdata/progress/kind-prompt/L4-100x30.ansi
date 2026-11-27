@@ -1,0 +1,30 @@
+╭─ DeviceChain · Installing · kind-devicechain ────────────────────────────────────────────────────╮
+│ Overall  \x1b[38;2;138;166;182m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\x1b[m  0/6 stages                                              │
+│ \x1b[38;2;138;166;182mElapsed 00:06 · Remaining: unknown · last observation 1s ago\x1b[m                                     │
+│                                                                                                  │
+│ \x1b[38;2;36;163;214mRUN \x1b[m  Resolve target / cluster        \x1b[38;2;36;163;214m███\x1b[m\x1b[38;2;138;166;182m░░░░░░░░░░░░░\x1b[m                                           │
+│ \x1b[38;2;138;166;182mWAIT\x1b[m  Identity, refusals and claim    \x1b[38;2;138;166;182m────────────────\x1b[m                                           │
+│ \x1b[38;2;138;166;182mWAIT\x1b[m  Credentials and operator        \x1b[38;2;138;166;182m────────────────\x1b[m                                           │
+│ \x1b[38;2;138;166;182mWAIT\x1b[m  Cluster prerequisites           \x1b[38;2;138;166;182m────────────────\x1b[m                                           │
+│ \x1b[38;2;138;166;182mWAIT\x1b[m  Base identity and record        \x1b[38;2;138;166;182m────────────────\x1b[m                                           │
+│ \x1b[38;2;138;166;182mWAIT\x1b[m  Relational store ready          \x1b[38;2;138;166;182m────────────────\x1b[m                                           │
+│                                                                                                  │
+│ \x1b[1mNo kind cluster \"devicechain\" found. Create it now? [y/N]\x1b[m                                        │
+│                                                                                                  │
+│ ▾ Logs \x1b[38;2;138;166;182m· sanitized · following\x1b[m                                                                   │
+│ \x1b[38;2;138;166;182m10:05:01\x1b[m k8s     \x1b[38;2;245;196;81mline 0300 helm_release.cert_manager: creating, a line long enough to be cut at…\x1b[m │
+│ \x1b[38;2;138;166;182m10:05:02\x1b[m tofu    line 0301 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ \x1b[38;2;138;166;182m10:05:03\x1b[m tofu    line 0302 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ \x1b[38;2;138;166;182m10:05:04\x1b[m tofu    line 0303 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ \x1b[38;2;138;166;182m10:05:05\x1b[m tofu    line 0304 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ \x1b[38;2;138;166;182m10:05:06\x1b[m tofu    line 0305 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ \x1b[38;2;138;166;182m10:05:07\x1b[m tofu    line 0306 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ \x1b[38;2;138;166;182m10:05:08\x1b[m k8s     \x1b[38;2;245;196;81mline 0307 helm_release.cert_manager: creating, a line long enough to be cut at…\x1b[m │
+│ \x1b[38;2;138;166;182m10:05:09\x1b[m tofu    line 0308 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ \x1b[38;2;138;166;182m10:05:10\x1b[m tofu    line 0309 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ \x1b[38;2;138;166;182m10:05:11\x1b[m tofu    line 0310 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ \x1b[38;2;138;166;182m10:05:12\x1b[m tofu    line 0311 helm_release.cert_manager: creating, a line long enough to be cut at… │
+│ \x1b[38;2;138;166;182m… 300 earlier lines kept · 0 aged out\x1b[m                                                            │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;2;138;166;182my/n\x1b[m answer  \x1b[38;2;138;166;182ml\x1b[m logs  \x1b[38;2;138;166;182mPgUp/PgDn\x1b[m scroll  \x1b[38;2;138;166;182mCtrl+C\x1b[m stop                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

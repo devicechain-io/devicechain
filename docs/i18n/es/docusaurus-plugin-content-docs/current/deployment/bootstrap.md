@@ -78,6 +78,10 @@ En qué clúster instala:
 - **Cualquier proveedor** — `--kube-context <ctx>` instala en un clúster que ya existe.
   `dcctl` nunca crea ni elimina un clúster al que se llega de este modo.
 
+Para que la instalación te guíe en pantalla por las comprobaciones, las opciones y una revisión del
+plan antes de instalar nada, ejecuta `dcctl install local --ui=tui`; consulta
+[Interfaz de terminal de la instalación](./install-terminal-ui.md).
+
 ### Volver a ejecutar install {#re-running-install}
 
 Volver a ejecutar `install` contra el mismo clúster lo hace converger: lo que ya está en su

@@ -20,7 +20,7 @@ import (
 // The review settles at once in these tests, so that pump is not held up by it. A test
 // about the settle itself delivers (or withholds) the settle message by hand.
 func init() {
-	reviewSettle = 0
+	reviewSettle, settlePoll = 0, 0
 	preScenarios = append(preScenarios, reviewScenarios...)
 }
 
@@ -131,8 +131,8 @@ func TestContinueLeadsToTheReviewNeverToTheRun(t *testing.T) {
 	toChoices(t, p)
 	focusOn(t, p, chContinue)
 	cmd, out := p.update(keyOf("enter"))
-	if out != stay || p.screen != screenReview || cmd == nil {
-		t.Fatalf("Continue gave %v on screen %v (settle %v)", out, p.screen, cmd != nil)
+	if out != stay || p.screen != screenReview {
+		t.Fatalf("Continue gave %v on screen %v", out, p.screen)
 	}
 	if p.rv.focus != reviewBack || p.approval != nil {
 		t.Fatalf("the review opened focused on %d, approval %v", p.rv.focus, p.approval)
@@ -186,7 +186,7 @@ func TestAQueuedKeyNeverApproves(t *testing.T) {
 	if p.screen != screenReview || p.rv.armed {
 		t.Fatal("the second visit is settled before its own settle")
 	}
-	p.update(checkMsg{settled: p.rv.gen - 1})
+	p.update(settleMsg{gen: p.rv.gen - 1, token: p.rv.token})
 	for _, k := range []string{"tab", "enter"} {
 		if _, out := p.update(keyOf(k)); out != stay {
 			t.Fatalf("a key after an earlier visit's settle gave %v", out)
@@ -491,5 +491,73 @@ func TestTheApprovalAnswersForTheResolvedClusterName(t *testing.T) {
 		Params: []installflow.Param{{Name: "cluster", Value: installflow.Text("devicechain")}}}
 	if !ok || !b.answeredByApproval(q) {
 		t.Fatalf("approved %q %v; the run's question for devicechain is not answered", c, ok)
+	}
+}
+
+// 🔴 THE INSTALL REVIEW (APPROVAL 1) HAS THE SAME PROTECTION: keys read during a stall
+// never approve it, a key read while it settles holds it off, and keys pressed while the
+// terminal is too small to show it count too.
+func TestKeysReadDuringAStallNeverApproveTheInstall(t *testing.T) {
+	withSettle(t, 500*time.Millisecond)
+	keys := newFakeKeys()
+	p, _ := reviewPrerun()
+	p.rv.clock = keys.clock
+	toChoices(t, p)
+	focusOn(t, p, chContinue)
+	keys.read()
+	tick, _ := p.update(keyOf("enter")) // Continue: the review is entered
+	if p.screen != screenReview {
+		t.Fatal("not on the review")
+	}
+	keys.advance(100 * time.Millisecond)
+	keys.read() // Tab, Enter read during the stall
+	keys.advance(2 * time.Second)
+	pump(p, tick) // the loop resumes: the tick first
+	if !p.rv.armed {
+		t.Fatal("the review did not settle after a long quiet stall")
+	}
+	for _, k := range []string{"tab", "enter"} { // the queued keys
+		cmd, out := p.update(keyOf(k))
+		if out != stay {
+			t.Fatalf("a key read during the stall gave %v", out)
+		}
+		if cmd != nil {
+			tick = cmd
+		}
+	}
+	if p.approval != nil || p.rv.armed {
+		t.Fatalf("keys read during a stall: approval %v, armed %v", p.approval, p.rv.armed)
+	}
+	// A key read while it settles holds it off.
+	keys.advance(300 * time.Millisecond)
+	keys.read()
+	keys.advance(300 * time.Millisecond)
+	next, _ := p.update(messages(tick)[0])
+	if p.rv.armed {
+		t.Fatal("the review armed 300 ms after a key")
+	}
+	// Too small, keys pressed, large again: still not until quiet.
+	p.resize(30, 8)
+	keys.read()
+	p.update(keyOf("tab"))
+	p.resize(200, 40)
+	keys.advance(200 * time.Millisecond)
+	next, _ = p.update(messages(next)[0])
+	if p.rv.armed {
+		t.Fatal("the review armed 200 ms after a key pressed while it was too small")
+	}
+	keys.advance(time.Second)
+	p.update(messages(next)[0])
+	if !p.rv.armed || p.rv.focus != reviewBack {
+		t.Fatalf("a quiet user: armed %v, focus %d", p.rv.armed, p.rv.focus)
+	}
+	keys.advance(time.Second)
+	keys.read()
+	if _, out := p.update(keyOf("tab")); out != stay {
+		t.Fatal("Tab acted")
+	}
+	keys.read()
+	if _, out := p.update(keyOf("enter")); out != proceed || p.approval == nil {
+		t.Fatalf("Approve by a quiet user: %v", out)
 	}
 }

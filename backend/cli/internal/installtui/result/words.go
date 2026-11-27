@@ -11,7 +11,7 @@ import (
 	"github.com/devicechain-io/dcctl/internal/installflow"
 )
 
-// stageNames is what the result screens call each install stage.
+// stageNames is what the result and progress screens call each install and bootstrap stage.
 var stageNames = map[installflow.StepID]string{
 	installflow.StepInstallInputs:        "Resolve the request",
 	installflow.StepInstallPreflight:     "Preflight checks",
@@ -27,6 +27,22 @@ var stageNames = map[installflow.StepID]string{
 	installflow.StepInstallRecord:        "Record the install",
 	installflow.StepInstallRDBReady:      "Wait for the relational store",
 	installflow.StepInstallSummary:       "Finalizing",
+
+	installflow.StepBootstrapInputs:         "Resolve the request",
+	installflow.StepBootstrapPreflight:      "Preflight checks",
+	installflow.StepBootstrapEscrow:         "Settle the root-key escrow",
+	installflow.StepBootstrapCluster:        "Resolve the cluster and images",
+	installflow.StepBootstrapRegistry:       "Ensure the local registry",
+	installflow.StepBootstrapClaim:          "Claim the cluster",
+	installflow.StepBootstrapRefuseRebuild:  "Refuse a rebuild",
+	installflow.StepBootstrapSingletons:     "Check what other instances hold",
+	installflow.StepBootstrapDeclare:        "Declare the instance",
+	installflow.StepBootstrapRender:         "Render the configuration",
+	installflow.StepBootstrapInfrastructure: "Apply the infrastructure",
+	installflow.StepBootstrapHelm:           "Install the instance (Helm)",
+	installflow.StepBootstrapReadiness:      "Wait for readiness",
+	installflow.StepBootstrapBrokerBalance:  "Even out broker leadership",
+	installflow.StepBootstrapReport:         "Finalizing",
 }
 
 // stageName names a stage; one this table does not know still shows, by its ID.

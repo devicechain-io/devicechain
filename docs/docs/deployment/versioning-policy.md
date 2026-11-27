@@ -145,6 +145,12 @@ joined (default)**. Planning, creating, starting, resuming, reversing and resolv
 `device:write` and `fleet:operate`; pausing and aborting require `device:write`; reads require
 `device:read`. Agent and service identities and scoped members are refused.
 
+In **v1.10** `dcctl setup local` joins the preview tier: the `dcctl setup` and `dcctl setup local`
+commands, their flags (`--kube-context`, `--cluster`, `--compact`, `--ha`, `--no-splash`), their
+screens and their exit statuses (see [the guided set-up](./install-terminal-ui.md#setup-local)).
+Promotion: **two minors after it joined (default)**. `dcctl install` and `dcctl bootstrap`, which it
+runs, stay covered and are unchanged by it.
+
 ## Supported upgrade paths {#upgrade-paths}
 
 - **Within a minor** (`1.4.0` to `1.4.3`) and **to the next minor** (`1.4.x` to `1.5.0`) are the supported paths.

@@ -216,6 +216,7 @@ func TestShapeAndPaletteGoldens(t *testing.T) {
 func golden(t *testing.T, name, got string) {
 	t.Helper()
 	path := filepath.Join("testdata", name)
+	recordGolden(path)
 	if *update {
 		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
 			t.Fatal(err)
