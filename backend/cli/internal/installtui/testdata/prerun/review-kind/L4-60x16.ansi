@@ -1,0 +1,16 @@
+\x1b[1mDeviceChain · dcctl install · kind devicechain\x1b[m \x1b[38;2;138;166;182mdcctl v1.12.0\x1b[m
+────────────────────────────────────────────────────────────
+\x1b[1mReview\x1b[m · kind devicechain, Standard, Single
+
+This is the plan the install will run, as the command line
+would resolve it. Nothing has been changed yet. Approve
+starts it; Back returns to the choices, and a change there
+needs its own checks and its own review.
+
+  \x1b[38;2;138;166;182mTarget      \x1b[m local kind cluster devicechain: created if it
+… 18 lines below
+
+› \x1b[7mBack\x1b[m    Approve and install    Exit
+────────────────────────────────────────────────────────────
+\x1b[38;2;138;166;182mTab action · Enter select · ↑/↓ scroll · Esc back · q exit\x1b[m
+\x1b[38;2;138;166;182mCtrl+C exit\x1b[m

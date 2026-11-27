@@ -491,3 +491,24 @@ func TestTheWizardsSecretsAreRedactedFromEveryScreen(t *testing.T) {
 		t.Fatalf("the secret was drawn, or the screen did not show the row:\n%q", h.out.String())
 	}
 }
+
+// The approval answers for the kind cluster the screens' facts name, which is the
+// name the plan resolved (an empty --cluster= is the default cluster).
+func TestTheApprovalAnswersForTheResolvedClusterName(t *testing.T) {
+	f := preFacts()
+	f.Cluster = "devicechain" // what the command states for an empty --cluster=
+	r := &replanner{base: &f, runner: func(Edits) installflow.PreflightRunner { return passing() }}
+	w := choicesWizard(r)
+	w.Facts, w.Review, w.Command = f, testReview(f), testCommand(f)
+	p := newTestPrerun(w, passing())
+	toReview(t, p)
+	press(p, "tab", "enter")
+	c, ok := p.approvedKindCluster()
+	b := &bridge{send: func(tea.Msg) {}, done: make(chan struct{})}
+	b.approve(c)
+	q := installflow.Question{Kind: installflow.PromptConfirm, Question: installflow.QuestionCreateKindCluster,
+		Params: []installflow.Param{{Name: "cluster", Value: installflow.Text("devicechain")}}}
+	if !ok || !b.answeredByApproval(q) {
+		t.Fatalf("approved %q %v; the run's question for devicechain is not answered", c, ok)
+	}
+}

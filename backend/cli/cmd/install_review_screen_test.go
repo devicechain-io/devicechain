@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/devicechain-io/dcctl/internal/installchoice"
 	"github.com/devicechain-io/dcctl/internal/installflow/testkit"
 	"github.com/devicechain-io/dcctl/internal/installtui"
@@ -232,5 +233,21 @@ func TestTheDrawnCommandCopiesExactly(t *testing.T) {
 				t.Fatalf("%d columns: copied %q, want %q", width, got, want)
 			}
 		}
+	}
+}
+
+// 🔴 AN EMPTY --cluster= REVIEWS AND APPROVES THE CLUSTER IT RESOLVES TO. The local
+// provider takes an empty name as the default kind cluster, so the review names that
+// one, and the approval (made from the screens' facts) answers the run's question to
+// create it.
+func TestAnEmptyClusterNameReviewsTheDefaultCluster(t *testing.T) {
+	saveChoiceFlags(t)
+	w, _ := wizardFor(t, "--cluster=")
+	if w.Facts.Cluster != bootstrap.DefaultClusterName {
+		t.Fatalf("facts name kind cluster %q", w.Facts.Cluster)
+	}
+	text := reviewText(w.Review)
+	if !strings.Contains(text, "local kind cluster "+bootstrap.DefaultClusterName+": created") {
+		t.Fatalf("the review names another cluster:\n%s", text)
 	}
 }
