@@ -200,6 +200,21 @@ func TestARedactOnlyValueIsRedactedButNeverRefusesAnIdentifier(t *testing.T) {
 	}
 }
 
+// 🔴 A value whose drawn form is too short is refused, not half-covered. A text is
+// sanitised before it is matched, so "abc" + ZWJ is drawn "abc": accepting it
+// would match a form no text ever holds, and leave "token=abc" unredacted with the
+// caller told it was covered. Refused, the caller learns it is not.
+func TestAValueTooShortOnceSanitisedIsRefused(t *testing.T) {
+	f := newFixture(t, installflow.Options{})
+	zwj := "\u200d"
+	if err := f.hub.AddSecret("abc" + zwj); !errors.Is(err, installflow.ErrSecretTooShort) {
+		t.Errorf("AddSecret of a value drawn in 3 bytes: %v, want ErrSecretTooShort", err)
+	}
+	if err := f.hub.AddRedaction("ab" + zwj + "c"); !errors.Is(err, installflow.ErrSecretTooShort) {
+		t.Errorf("AddRedaction of a value drawn in 3 bytes: %v, want ErrSecretTooShort", err)
+	}
+}
+
 // TestATokenValueIsRedactedOnlyAsAWholeToken: a value registered with AddRedaction is
 // replaced where it stands as a token and nowhere inside a longer word, so a profile
 // named "prod" leaves "production" alone. A strict value is still replaced as a

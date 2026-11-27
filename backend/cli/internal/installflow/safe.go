@@ -95,10 +95,20 @@ func sanitize(s string) string {
 			}
 			continue
 		case csi:
-			if r >= 0x40 && r <= 0x7e {
-				state = ground
+			// Parameter bytes (0x30-0x3F) and intermediates (0x20-0x2F), then one
+			// final byte (0x40-0x7E) ends the sequence, and all of it is dropped.
+			if r >= 0x20 && r <= 0x3f {
+				continue
 			}
-			continue
+			state = ground
+			if r >= 0x40 && r <= 0x7e {
+				continue
+			}
+			// 🔴 Anything else cannot continue a control sequence, so this one ends
+			// UNTERMINATED here and r is read as text (dropped, if it is a control or
+			// format character itself). Swallowing on to the next final byte would
+			// take a character of whatever follows, a secret's included, and leave
+			// its halves either side, which match nothing.
 		case str:
 			switch r {
 			case 0x07:

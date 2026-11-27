@@ -182,6 +182,48 @@ func (in Input) shown(s string) string {
 	return t.String()
 }
 
+// line is a COMPOSED line as it may be drawn or printed: itself when the hub's
+// redaction leaves it alone, otherwise fallback (the line with its value
+// withheld) when that is left alone, otherwise the bare marker as redaction
+// leaves it, otherwise nothing.
+//
+// 🔴 THE WHOLE LINE IS CHECKED, NOT ONLY ITS PARTS. A label, its padding and a
+// separator are text too: "Target:" and the spaces after it, joined to a clean
+// value, can be a registered value that neither part is. A line redaction would
+// change is withheld whole rather than drawn redacted, since a marker in the
+// middle of a label's line says nothing the operator can use.
+//
+// 🔴 NOTHING LEAVES UNCHECKED, THE MARKER INCLUDED. A registered "[withheld]" is a
+// value like any other, so the last resort is the marker after redaction, and a
+// redaction that does not settle even on that leaves the line empty.
+func (in Input) line(s, fallback string) string {
+	if in.Redact == nil {
+		return s
+	}
+	for _, c := range []string{s, fallback} {
+		if c != "" && in.unredacted(c) {
+			return c
+		}
+	}
+	if t, ok := redactedText(in.Redact, withheld); ok {
+		return t.String()
+	}
+	return ""
+}
+
+// unredacted reports whether redaction leaves a composed line alone.
+//
+// It compares REDACTION ONLY, not sanitising, and so not the length cap
+// sanitising applies. Every part of a composed line has been sanitised already
+// (a SafeText, a value through installflow.Text, a command word drawn only when
+// sanitising leaves it as it is) and what joins them is fixed ASCII, and sanitised
+// text holds no escape, control or format character, so a join cannot form one:
+// sanitising the line would change nothing but its length. The cap is a limit on
+// one text, not a secret check, and a line holding no secret must not be withheld
+// for being long, and the redactor is matched over all of it, so a long line
+// carries no registered value either.
+func (in Input) unredacted(s string) bool { return in.Redact(s) == s }
+
 // ErrIncomplete is returned when the engine returned no error yet the run did not
 // succeed: its verdict is not success, or it never sent one.
 var ErrIncomplete = errors.New("the run's progress could not be reported, so it is not known to have finished")

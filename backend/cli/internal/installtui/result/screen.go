@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/internal/installtui/terminal"
 )
 
@@ -401,7 +402,17 @@ func (m *Model) bodyLines(width, budget int) []string {
 				lines = append(lines, "")
 				continue
 			}
-			lines = append(lines, paint(m.theme.dim, padRight(label, labelWidth))+paint(st, l))
+			// 🔴 The label column and the value are checked as ONE line: the label
+			// and its padding, joined to a clean value, can be a registered one.
+			lab := padRight(label, labelWidth)
+			switch got := m.in.line(lab+l, lab+withheld); got {
+			case lab + l:
+			case lab + withheld:
+				l = withheld
+			default: // the label column itself completes a value: the marker alone
+				lab, l = padRight("", labelWidth), got
+			}
+			lines = append(lines, paint(m.theme.dim, lab)+paint(st, l))
 		}
 	}
 	return clip(lines, budget, width, m.theme)
@@ -448,9 +459,13 @@ func (m *Model) header(width int) string {
 		parts = append(parts, m.in.shown(c))
 	}
 	if m.in.Version != "" {
-		parts = append(parts, m.in.Version)
+		parts = append(parts, installflow.Text(m.in.Version).String())
 	}
-	return paint(m.theme.bd, truncate(strings.Join(parts, " "+m.theme.g.dot+" "), width))
+	// The JOINED line is checked as it is drawn, truncation included: the context,
+	// the separator and the version can make a registered value none of them is.
+	sep := " " + m.theme.g.dot + " "
+	line := m.in.line(truncate(strings.Join(parts, sep), width), truncate(parts[0]+sep+withheld, width))
+	return paint(m.theme.bd, truncate(line, width))
 }
 
 func (m *Model) render() string {
@@ -532,6 +547,11 @@ func (m *Model) renderMinimal(w, h int) string {
 		next = wrap("Fix the cause, then re-run the same command.", inner)
 	}
 	lines = append(lines, next...)
+	// Each line is checked as it is drawn: "Next:" or "At:" joined to a clean
+	// value can be a registered one.
+	for i, l := range lines {
+		lines[i] = m.in.line(l, "")
+	}
 	// The verdict and the way out always show; what is between them fits the rest.
 	if h == 2 {
 		lines = nil

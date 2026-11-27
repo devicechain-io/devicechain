@@ -35,6 +35,15 @@ func TestTextStripsTerminalControl(t *testing.T) {
 		"z\u200cw\u200dj\u2060w\ufeffb\u00ads":   "zwjwbs", // ZWNJ, ZWJ, word joiner, BOM, soft hyphen
 		"lrm\u200e\u200f\u061cx":                 "lrmx",   // LRM, RLM, Arabic letter mark
 		"ls\u2028ps\u2029":                       "ls ps ",
+		// An unterminated control sequence ends at the first byte that cannot
+		// continue one, which is then read as text: it never swallows what follows.
+		"\u009b\x07ab":      "ab",
+		"x\u009b12\u00e9y":  "x\u00e9y",
+		"c1\u009b\x1b[0mz":  "c1z",
+		"\u009b\u200dab":    "ab",
+		"\x1b[\x00ab":       "ab",
+		"\u009b1;2 qafter":  "after", // a whole one, with an intermediate, is still dropped whole
+		"\x1b[38;5;196mred": "red",
 	} {
 		if got := Text(in).String(); got != want {
 			t.Errorf("Text(%q) = %q, want %q", in, got, want)
@@ -95,6 +104,26 @@ func TestRedactorCoversEncodedForms(t *testing.T) {
 	}
 	if r.add("short") {
 		t.Fatal("a value too short to redact safely was accepted")
+	}
+	// 🔴 What is matched is what is drawn: a value whose SANITISED form is too short
+	// is refused, by both kinds of registration, however long its raw form is.
+	zwj := "\u200d"
+	if r.add("abc"+zwj) || r.add("abcd\x1b[31m") {
+		t.Fatal("a value too short once sanitised was accepted strictly")
+	}
+	if r.addToken("ab"+zwj+"c") || r.addToken("ab\x07\x07\x07") {
+		t.Fatal("a value too short once sanitised was accepted as a token")
+	}
+	// Every form is registered sanitised too: a JSON-escaped value holding a format
+	// character is drawn with the escapes and without the character.
+	quoted := `dc"fmt` + zwj + `value9xQ`
+	if !r.add(quoted) {
+		t.Fatal("add")
+	}
+	for _, drawn := range []string{sanitize(jsonEscaped(quoted, true)), sanitize(url.QueryEscape(quoted)), sanitize(quoted)} {
+		if got := r.redact("got " + drawn); strings.Contains(got, "value9xQ") {
+			t.Errorf("the drawn form %q survived: %q", drawn, got)
+		}
 	}
 	js, _ := json.Marshal(secret)
 	for _, form := range []string{
