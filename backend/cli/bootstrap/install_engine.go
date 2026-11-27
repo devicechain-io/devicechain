@@ -143,6 +143,12 @@ func registerSecrets(events installflow.Reporter, opts InstallOptions, w io.Writ
 	if b := opts.BackupDestination; b != nil {
 		values = append(values, b.AccessKeyID, b.SecretAccessKey)
 	}
+	// A URL-valued flag can carry a credential in its userinfo, query or fragment
+	// (--restore-rdb-from=s3://user:secret@bucket/archive): those parts are secrets
+	// too, wherever the URL is echoed.
+	for _, u := range []string{opts.Restore.RdbFrom, opts.Restore.TsdbFrom, opts.ImageRegistry} {
+		values = append(values, installflow.URLCredentials(u)...)
+	}
 	var creds []credential
 	for _, v := range values {
 		if v != "" {

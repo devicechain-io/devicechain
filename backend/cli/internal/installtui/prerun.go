@@ -36,6 +36,7 @@ const (
 	screenWelcome prerunScreen = iota
 	screenPreflight
 	screenChoices
+	screenReview
 )
 
 // Minimum size the screens before the run are drawn at. Below it they ask for a larger
@@ -76,6 +77,15 @@ type prerun struct {
 	runner installflow.PreflightRunner
 	// refusal is why the last change was refused; the plan stayed as it was.
 	refusal string
+	// review and command are the review screen's plan and its equivalent command,
+	// quoted for shell, for the plan as it stands.
+	review  Review
+	command result.Command
+	shell   result.Shell
+	// plan counts the plans: every change the screens make is a new one. approval is
+	// for the plan it was given on, and for no other.
+	plan     int
+	approval *approval
 
 	// checks counts the screen's preflight runs still going; wait joins them.
 	checks sync.WaitGroup
@@ -84,6 +94,7 @@ type prerun struct {
 	welcome int // the focused welcome action
 	pf      preflightState
 	ch      choicesState
+	rv      reviewState
 }
 
 func newPrerun(ctx context.Context, caps terminal.Capabilities, w *Wizard, runner installflow.PreflightRunner,
@@ -94,7 +105,8 @@ func newPrerun(ctx context.Context, caps terminal.Capabilities, w *Wizard, runne
 	theme := result.NewTheme(caps)
 	p := &prerun{caps: caps, theme: theme, keys: newPrerunKeys(theme.Glyphs),
 		redact: redact, ctx: ctx, width: caps.Width, height: caps.Height,
-		facts: w.Facts, settings: w.Settings, contexts: w.Contexts, replan: w.Replan, runner: runner}
+		facts: w.Facts, settings: w.Settings, contexts: w.Contexts, replan: w.Replan, runner: runner,
+		review: w.Review, command: w.Command, shell: w.Shell}
 	p.pf = newPreflightState()
 	return p
 }
@@ -120,6 +132,10 @@ func (p *prerun) tooSmall() bool { return p.width < prerunMinWidth || p.height <
 func (p *prerun) update(msg tea.Msg) (tea.Cmd, prerunOutcome) {
 	switch msg := msg.(type) {
 	case checkMsg:
+		if msg.settled != 0 {
+			p.reviewArmed(msg.settled)
+			return nil, stay
+		}
 		return p.checkResult(msg), stay
 	case tea.KeyPressMsg:
 		if p.tooSmall() {
@@ -133,6 +149,8 @@ func (p *prerun) update(msg tea.Msg) (tea.Cmd, prerunOutcome) {
 			return p.welcomeKey(msg)
 		case screenChoices:
 			return p.choicesKey(msg)
+		case screenReview:
+			return p.reviewKey(msg)
 		}
 		return p.preflightKey(msg)
 	}
@@ -149,6 +167,8 @@ type prerunKeys struct {
 	confirm, keep                                   key.Binding
 	// The cluster choices, the drawer, the picker and the name editor.
 	nextField, choose, toggle, setting, pick, closeOverlay, apply, erase key.Binding
+	// The review.
+	scroll key.Binding
 }
 
 func newPrerunKeys(g result.Glyphs) prerunKeys {
@@ -176,6 +196,8 @@ func newPrerunKeys(g result.Glyphs) prerunKeys {
 		closeOverlay: key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "close")),
 		apply:        key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "use")),
 		erase:        key.NewBinding(key.WithKeys("backspace"), key.WithHelp("Backspace", "erase")),
+
+		scroll: key.NewBinding(key.WithKeys("up", "down"), key.WithHelp(updown, "scroll")),
 	}
 }
 
@@ -191,6 +213,8 @@ func (p *prerun) active() []key.Binding {
 		return p.pickerActive()
 	case p.screen == screenChoices:
 		return p.choicesActive()
+	case p.screen == screenReview:
+		return p.reviewActive()
 	case p.pf.confirm:
 		return []key.Binding{k.confirm, k.keep, k.cancel}
 	}
@@ -282,6 +306,8 @@ func (p *prerun) render() string {
 		body = p.welcomeLines(f.inner, f.rows)
 	case p.screen == screenChoices:
 		body = p.choicesLines(f.inner, f.rows)
+	case p.screen == screenReview:
+		body = p.reviewLines(f.inner, f.rows)
 	default:
 		body = p.preflightLines(f.inner, f.rows)
 	}

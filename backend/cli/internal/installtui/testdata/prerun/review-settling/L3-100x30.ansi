@@ -1,0 +1,30 @@
+╭─\x1b[1m DeviceChain · dcctl install · kind devicechain \x1b[m─────────────────────────────────\x1b[38;5;109m dcctl v1.12.0 \x1b[m─╮
+│ \x1b[1mReview\x1b[m · kind devicechain, Standard, Single                                                      │
+│                                                                                                  │
+│ This is the plan the install will run, as the command line would resolve it. Nothing has been    │
+│ changed yet. Approve starts it; Back returns to the choices, and a change there needs its own    │
+│ checks and its own review.                                                                       │
+│                                                                                                  │
+│   \x1b[38;5;109mTarget      \x1b[m local kind cluster devicechain: created if it does not exist, reused if it does   │
+│   \x1b[38;5;109mRelease     \x1b[m dcctl v1.12.0; published images v1.12.0 from ghcr.io/devicechain-io               │
+│   \x1b[38;5;109mShape       \x1b[m Standard footprint, Single                                                        │
+│   \x1b[38;5;109mTLS         \x1b[m on (cert-manager)                                                                 │
+│   \x1b[38;5;109mBackups     \x1b[m on, to a store the cluster provisions for itself (no off-site archive)            │
+│   \x1b[38;5;109mState       \x1b[m /home/op/.devicechain/clusters/<assigned after identification>/infra              │
+│                                                                                                  │
+│ \x1b[38;5;78mPreflight: all checks passed.\x1b[m                                                                    │
+│                                                                                                  │
+│ If no kind cluster devicechain exists yet, approving also answers the install's question to      │
+│ create it: yes, for this cluster and this plan only.                                             │
+│                                                                                                  │
+│ \x1b[1mEquivalent command\x1b[m                                                                               │
+│   'dcctl' 'install' 'local' '--yes=true'                                                         │
+│                                                                                                  │
+│ \x1b[38;5;109mApprove becomes available once this screen has settled; a key pressed before then does nothing.\x1b[m  │
+│ › \x1b[7mBack\x1b[m    \x1b[38;5;109mApprove and install (unavailable)\x1b[m    Exit                                              │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;5;109mTab action · Enter select · ↑/↓ scroll · Esc back · q exit · Ctrl+C exit\x1b[m                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

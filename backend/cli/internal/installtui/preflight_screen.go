@@ -61,6 +61,10 @@ type checkMsg struct {
 	res  installflow.PreflightResult
 	err  error
 	next <-chan checkMsg
+	// settled, when it is not zero, is not a check at all: it says review visit
+	// settled has settled. It travels as a checkMsg because that is the message the
+	// program hands the screens before the run, whatever their screen.
+	settled int
 }
 
 // preflightState is the preflight screen.
@@ -283,8 +287,8 @@ func (p *prerun) switchFootprint() tea.Cmd {
 }
 
 // applyEdit makes one change to the plan: the edits so far with change applied,
-// resolved again through the command's own resolver. A refusal leaves the plan, and the
-// preflight on screen, exactly as they were.
+// resolved again through the command's own resolver. A refusal leaves the plan, the
+// preflight on screen and its review exactly as they were.
 //
 // 🔴 A CHANGED PLAN HAS NO PREFLIGHT UNTIL ITS OWN HAS RUN. The results on screen were
 // taken for the plan being replaced (another cluster, another footprint, another
@@ -304,6 +308,11 @@ func (p *prerun) applyEdit(change func(*Edits)) tea.Cmd {
 	p.refusal = ""
 	p.edits, p.facts, p.settings = next, r.Facts, r.Settings
 	p.engine, p.runner = r.Engine, r.Preflight
+	p.review, p.command = r.Review, r.Command
+	// 🔴 AND IT HAS NO APPROVAL. Whatever was reviewed or approved was another plan: the
+	// review starts again, and settles again, for this one.
+	p.plan++
+	p.approval, p.rv.armed, p.rv.focus = nil, false, reviewBack
 	return p.startChecks()
 }
 

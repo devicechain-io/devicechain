@@ -163,8 +163,9 @@ func (p *prerun) choicesKey(k tea.KeyPressMsg) (tea.Cmd, prerunOutcome) {
 				p.ch.naming = []rune(p.facts.Cluster)
 			}
 		case chContinue:
+			// The review comes next; the run starts only from an approval there.
 			if p.canContinue() {
-				return nil, proceed
+				return p.enterReview(), stay
 			}
 		case chAdvanced:
 			p.ch.drawer, p.ch.drawerAt = true, 0

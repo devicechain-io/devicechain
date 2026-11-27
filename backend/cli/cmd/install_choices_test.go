@@ -134,18 +134,37 @@ func TestInstallChoicesCobraRoundTrip(t *testing.T) {
 			if !called {
 				t.Fatal("CLI did not hand resolved options to engine")
 			}
+			posix, err := plan.Command(installchoice.POSIX, false)
+			if err != nil {
+				t.Fatal(err)
+			}
 			for _, shell := range []installchoice.Shell{installchoice.POSIX, installchoice.PowerShell} {
 				command, err := plan.Command(shell, false)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if command.Template {
-					t.Fatal("file references and empty credentials must stay reproducible")
+				// Windows PowerShell 5.1 cannot pass some values to dcctl.exe exactly (see
+				// ps51Native): such a command is a template, never a wrong runnable one.
+				lossy := shell == installchoice.PowerShell && !reflect.DeepEqual(ps51Native(posix.Argv), posix.Argv)
+				if command.Template != lossy {
+					t.Fatalf("template %v, but PowerShell 5.1 passes the command lossily: %v (%q)",
+						command.Template, lossy, posix.Argv)
 				}
 				testkit.AssertNoCanary(t, "command", testkit.Dump(command))
 				argv := splitChoiceCommand(t, command.Line, shell)
 				if !reflect.DeepEqual(argv, command.Argv) {
 					t.Fatalf("shell command decoded to %q, want %q", argv, command.Argv)
+				}
+				if lossy {
+					for i, a := range posix.Argv {
+						if ps51Native([]string{a})[0] != a && !strings.Contains(argv[i], "PowerShell cannot pass exactly") {
+							t.Fatalf("argument %q is rendered as %q", a, argv[i])
+						}
+					}
+					continue
+				}
+				if shell == installchoice.PowerShell {
+					argv = ps51Native(argv) // what dcctl.exe receives
 				}
 				after := parseChoices(t, argv[2:])
 				if !reflect.DeepEqual(before, after) {

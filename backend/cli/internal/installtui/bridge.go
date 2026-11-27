@@ -32,9 +32,23 @@ type bridge struct {
 	plainSink      installplain.Sink
 	plainErr       io.Writer
 	plainResponder installplain.Responder
+
+	// approved is the kind cluster the review approved creating, until the run asks.
+	approved atomic.Pointer[string]
 }
 
 func (b *bridge) fallBack() { b.plain.Store(true) }
+
+// approve records the review's approval of creating the kind cluster named. It
+// answers the run's question for that cluster once, and nothing else.
+func (b *bridge) approve(cluster string) { b.approved.Store(&cluster) }
+
+// answeredByApproval answers q from the review's approval when it is the question
+// approved, consuming it: the approval is for one plan's one question.
+func (b *bridge) answeredByApproval(q installflow.Question) bool {
+	c := b.approved.Load()
+	return c != nil && questionApproved(*c, q) && b.approved.CompareAndSwap(c, nil)
+}
 
 // Deliver is the hub's sink.
 func (b *bridge) Deliver(e installflow.Envelope) {
@@ -55,6 +69,11 @@ func (b *bridge) Deliver(e installflow.Envelope) {
 // the answer comes back on a channel the screen writes once. Inside the program no other
 // reader ever touches stdin, so the prompt cannot race a keypress for it.
 func (b *bridge) Respond(ctx context.Context, q installflow.Question) (installflow.Response, error) {
+	// The operator answered this on the review, for exactly this plan, before the run
+	// started; it is not asked again, on screen or after a fallback to plain output.
+	if b.answeredByApproval(q) {
+		return installflow.Response{Confirmed: true}, nil
+	}
 	if b.plain.Load() {
 		return b.plainResponder.Respond(ctx, q)
 	}

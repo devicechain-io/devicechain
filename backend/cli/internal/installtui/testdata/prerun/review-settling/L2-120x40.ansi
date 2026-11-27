@@ -1,0 +1,40 @@
++-\x1b[1m DeviceChain - dcctl install - kind devicechain \x1b[m----------------------------------------------------- dcctl v1.12.0 -+
+| \x1b[1mReview\x1b[m - kind devicechain, Standard, Single                                                                          |
+|                                                                                                                      |
+| This is the plan the install will run, as the command line would resolve it. Nothing has been changed yet. Approve   |
+| starts it; Back returns to the choices, and a change there needs its own checks and its own review.                  |
+|                                                                                                                      |
+|   Target       local kind cluster devicechain: created if it does not exist, reused if it does                       |
+|   Release      dcctl v1.12.0; published images v1.12.0 from ghcr.io/devicechain-io                                   |
+|   Shape        Standard footprint, Single                                                                            |
+|   TLS          on (cert-manager)                                                                                     |
+|   Backups      on, to a store the cluster provisions for itself (no off-site archive)                                |
+|   State        /home/op/.devicechain/clusters/<assigned after identification>/infra                                  |
+|                                                                                                                      |
+| Preflight: all checks passed.                                                                                        |
+|                                                                                                                      |
+| If no kind cluster devicechain exists yet, approving also answers the install's question to create it: yes, for this |
+| cluster and this plan only.                                                                                          |
+|                                                                                                                      |
+| \x1b[1mEquivalent command\x1b[m                                                                                                   |
+|   'dcctl' 'install' 'local' '--yes=true'                                                                             |
+|                                                                                                                      |
+| Approve becomes available once this screen has settled; a key pressed before then does nothing.                      |
+| > \x1b[7mBack\x1b[m    Approve and install (unavailable)    Exit                                                                  |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
++----------------------------------------------------------------------------------------------------------------------+
+| Tab action - Enter select - up/down scroll - Esc back - q exit - Ctrl+C exit                                         |
++----------------------------------------------------------------------------------------------------------------------+

@@ -68,7 +68,7 @@ func TestCommandEmptyStringSliceValue(t *testing.T) {
 }
 
 func TestCommandPresenceOrderAndQuoting(t *testing.T) {
-	c := Choices{Cluster: "~ O'Brien \"雪\" $x`", Compact: true,
+	c := Choices{Cluster: "~ O'Brien 雪 $x`", Compact: true,
 		Given: Presence{"cluster": true, "compact": true, "no-tls": true, "mqtt-gateway": true,
 			"database-node-selector": true}, DBNodeSelector: []string{"z=last", "a=first"}}
 	p := Plan{choices: c}
@@ -88,6 +88,17 @@ func TestCommandPresenceOrderAndQuoting(t *testing.T) {
 		if shell == POSIX && !strings.Contains(got.Line, "O'\"'\"'Brien") {
 			t.Fatal("POSIX single quote was not escaped")
 		}
+		// The words are the line's own, so a screen can break it only between them.
+		lead := 0
+		if shell == PowerShell {
+			lead = 1
+			if got.Words[0] != "&" {
+				t.Fatalf("words %q", got.Words)
+			}
+		}
+		if strings.Join(got.Words, " ") != got.Line || len(got.Words) != len(got.Argv)+lead {
+			t.Fatalf("words %q do not make line %q", got.Words, got.Line)
+		}
 	}
 }
 
@@ -105,5 +116,28 @@ func TestCommandSecretCanaries(t *testing.T) {
 			}
 			testkit.AssertNoCanary(t, "command", testkit.Dump(cmd))
 		}
+	}
+}
+
+// Windows PowerShell 5.1 passes a value with a double quote to a native program
+// lossily, so the PowerShell command renders it as a placeholder and is a template;
+// the POSIX command, which passes it exactly, is not.
+func TestPowerShellRefusesWhatItCannotPassExactly(t *testing.T) {
+	c := Choices{Given: Presence{"alert-email": true, "kube-context": true},
+		Alerts: Alerts{Email: []string{`"Ops, Team" <ops@example.test>`}}, KubeContext: `C:\dir with space\`}
+	ps, err := Plan{choices: c}.Command(PowerShell, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ps.Template || strings.Contains(ps.Line, "Ops") || strings.Contains(ps.Line, `space\`) ||
+		strings.Count(ps.Line, powerShellValue) != 2 {
+		t.Fatalf("PowerShell %+v", ps)
+	}
+	sh, err := Plan{choices: c}.Command(POSIX, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sh.Template || !strings.Contains(sh.Line, "Ops") {
+		t.Fatalf("POSIX %+v", sh)
 	}
 }

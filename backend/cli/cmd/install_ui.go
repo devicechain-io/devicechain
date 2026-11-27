@@ -8,15 +8,19 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
+	"github.com/devicechain-io/dcctl/dcdir"
 	"github.com/devicechain-io/dcctl/internal/installchoice"
 	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/internal/installplain"
 	"github.com/devicechain-io/dcctl/internal/installtui"
+	"github.com/devicechain-io/dcctl/internal/installtui/result"
 	"github.com/devicechain-io/dcctl/internal/installtui/terminal"
 )
 
@@ -122,9 +126,14 @@ func installPresenterFor(opts bootstrap.InstallOptions, wiz *installtui.Wizard) 
 // refused on the screen too, and the run a change returns is built exactly as the
 // command line's own is.
 func installWizardFor(provider bootstrap.Provider, choices installchoice.Choices, prepared installchoice.Prepared) *installtui.Wizard {
+	shell := wizardShell()
 	return &installtui.Wizard{
 		Facts:    wizardFacts(choices, prepared, installtui.Edits{}),
 		Settings: wizardSettings(choices, prepared.Effective, installtui.Edits{}),
+		Review:   wizardReview(prepared),
+		Command:  wizardCommand(prepared, shell),
+		Shell:    shell,
+		Secrets:  choices.Credentials(),
 		Contexts: kubeContextNames,
 		Replan: func(ed installtui.Edits) (installtui.Replanned, error) {
 			c, err := applyWizardEdits(choices, ed)
@@ -137,7 +146,8 @@ func installWizardFor(provider bootstrap.Provider, choices installchoice.Choices
 			}
 			e, preflight := installRunFor(provider, choices.Provider, p)
 			return installtui.Replanned{Engine: e, Preflight: preflight,
-				Facts: wizardFacts(choices, p, ed), Settings: wizardSettings(choices, p.Effective, ed)}, nil
+				Facts: wizardFacts(choices, p, ed), Settings: wizardSettings(choices, p.Effective, ed),
+				Review: wizardReview(p), Command: wizardCommand(p, shell)}, nil
 		},
 	}
 }
@@ -149,6 +159,123 @@ func kindClusterName(cluster string) string {
 		return bootstrap.DefaultClusterName
 	}
 	return cluster
+}
+
+// wizardShell is the shell the review's equivalent command is quoted for: PowerShell on
+// Windows, POSIX everywhere else.
+func wizardShell() result.Shell {
+	if runtime.GOOS == "windows" {
+		return result.PowerShell
+	}
+	return result.POSIX
+}
+
+// wizardCommand is the equivalent non-interactive command for a prepared request: its
+// choices and their explicitness, --yes for the approval the review gives, no
+// presentation flag, credentials replaced by a placeholder (then it is a template).
+// 🔴 IT IS SERIALISED FROM THE PLAN THE RUN IS BUILT FROM, so running it resolves to the
+// same plan. A command that cannot be composed is left empty, and the review says so.
+func wizardCommand(prepared installchoice.Prepared, shell result.Shell) result.Command {
+	sh := installchoice.POSIX
+	if shell == result.PowerShell {
+		sh = installchoice.PowerShell
+	}
+	c, err := prepared.Command(sh, true)
+	if err != nil {
+		return result.Command{}
+	}
+	return result.Command{Line: c.Line, Args: c.Words, Template: c.Template}
+}
+
+// assignedAfterIdentification stands for the cluster's UID in the state path, which is
+// not known until the install has read it from the cluster.
+const assignedAfterIdentification = "<assigned after identification>"
+
+// reviewValue is a flag's value as the review may state it: hidden whenever the
+// equivalent command would replace it with a placeholder (installchoice.SecretValue,
+// the serialiser's own classification).
+func reviewValue(flag, value string) string {
+	if installchoice.SecretValue(flag, value) {
+		return configuredHidden
+	}
+	return value
+}
+
+// wizardReview is the plan as the review screen states it, from the resolved request:
+// what the run will do, never what a form holds. It reads nothing and contacts nothing.
+func wizardReview(prepared installchoice.Prepared) installtui.Review {
+	eff := prepared.Effective
+	opts := prepared.BootstrapOptions()
+	var rows []installtui.ReviewRow
+	add := func(label, value string) { rows = append(rows, installtui.ReviewRow{Label: label, Value: value}) }
+	if eff.KubeContext != "" {
+		add("Target", "existing cluster, context "+reviewValue("kube-context", eff.KubeContext)+
+			": reused as it is; dcctl never creates or deletes it")
+	} else {
+		add("Target", "local kind cluster "+reviewValue("cluster", kindClusterName(eff.Cluster))+
+			": created if it does not exist, reused if it does")
+	}
+	add("Identity", "the cluster's UID, read when the install starts; a context name is not an identity")
+	if opts.BuildImages {
+		add("Release", fmt.Sprintf("dcctl %s; images built from this source checkout, pushed to %s as %s",
+			Version, reviewValue("registry", opts.ImageRegistry), reviewValue("version", opts.ImageVersion)))
+	} else {
+		add("Release", fmt.Sprintf("dcctl %s; published images %s from %s", Version,
+			reviewValue("version", opts.ImageVersion), reviewValue("registry", opts.ImageRegistry)))
+	}
+	shape := "Standard footprint"
+	if eff.Compact {
+		shape = "Compact footprint"
+	}
+	if eff.HA {
+		shape += ", HA"
+	} else {
+		shape += ", Single"
+	}
+	add("Shape", shape)
+	add("TLS", onOff(!eff.NoTLS)+" (cert-manager)")
+	add("Monitoring", onOff(!eff.NoMonitoring))
+	backups := bootstrap.DatabaseBackupsEnabled(eff.NoCNPG, eff.Compact, eff.NoTLS)
+	switch {
+	case !backups:
+		add("Backups", "off: this plan leaves the cluster with no database backups")
+	case eff.BackupCredentials != "":
+		add("Backups", "on, with an off-site archive (credentials file "+configuredHidden+")")
+	default:
+		add("Backups", "on, to a store the cluster provisions for itself (no off-site archive)")
+	}
+	if eff.BackupSnapClass != "" {
+		add("Snapshots", "volume snapshots with class "+reviewValue("backup-snapshot-class", eff.BackupSnapClass))
+	}
+	if eff.RestoreRdbFrom != "" {
+		// 🔴 A RESTORE IS READ ONLY WHEN THE DATABASE IS CREATED. The plan does not read
+		// the cluster, so it cannot say whether this install creates dc-rdb; an existing
+		// database keeps its data and ignores the restore settings.
+		add("Recovery", "restores the relational store from "+reviewValue("restore-rdb-from", eff.RestoreRdbFrom)+
+			" if this install creates it; an existing relational database is left as it is")
+	}
+	state := filepath.Join("~", dcdir.DirName, dcdir.Clusters, assignedAfterIdentification, "infra")
+	if dir, err := dcdir.Sibling(dcdir.Clusters); err == nil {
+		state = filepath.Join(dir, assignedAfterIdentification, "infra")
+	}
+	add("State", state)
+
+	var warnings []string
+	if eff.SkipPreflight {
+		warnings = append(warnings, "--skip-preflight: the read-only checks are not run, here or by the install")
+	}
+	if !backups {
+		warnings = append(warnings, "no database backups: a lost volume cannot be recovered")
+	}
+	if eff.AllowLegacyDb {
+		warnings = append(warnings, "--allow-legacy-db-removal: a pre-CloudNativePG relational StatefulSet (dc-postgresql) is "+
+			"destroyed, and an empty database comes up in its place")
+	}
+	if eff.RestoreRdbFrom != "" {
+		warnings = append(warnings, "--restore-rdb-from: if this install creates the relational database, "+
+			"it is built from the backup instead of starting empty; an existing one is not rebuilt")
+	}
+	return installtui.Review{Rows: rows, Warnings: warnings}
 }
 
 // kubeContextNames is the context picker's list: the kubeconfig's context names, sorted,

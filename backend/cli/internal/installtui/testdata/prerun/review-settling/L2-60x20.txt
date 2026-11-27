@@ -1,0 +1,20 @@
+DeviceChain - dcctl install - kind devicechain dcctl v1.12.0
+------------------------------------------------------------
+Review - kind devicechain, Standard, Single
+
+This is the plan the install will run, as the command line
+would resolve it. Nothing has been changed yet. Approve
+starts it; Back returns to the choices, and a change there
+needs its own checks and its own review.
+
+  Target       local kind cluster devicechain: created if it
+               does not exist, reused if it does
+  Release      dcctl v1.12.0; published images v1.12.0 from
+... 16 lines below
+
+Approve becomes available once this screen has settled; a
+key pressed before then does nothing.
+> Back    Approve and install (unavailable)    Exit
+------------------------------------------------------------
+Tab action - Enter select - up/down scroll - Esc back
+q exit - Ctrl+C exit

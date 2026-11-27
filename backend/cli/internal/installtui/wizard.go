@@ -7,6 +7,7 @@ import (
 	"maps"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/installtui/result"
 )
 
 // Wizard is what the screens before the run show and may change: the welcome screen's
@@ -27,6 +28,32 @@ type Wizard struct {
 	// can be changed here. A refusal (a combination the command line would refuse too)
 	// is shown, and the plan stays as it was.
 	Replan func(Edits) (Replanned, error)
+	// Review is the plan as the review screen states it, and Command the equivalent
+	// non-interactive command for it, quoted for Shell: both for the command line's
+	// request as it stands, and replaced by each replan's own.
+	Review  Review
+	Command result.Command
+	Shell   result.Shell
+	// Secrets are the credential values the request carries (a webhook, a URL's
+	// userinfo). The presenter registers them with its hub before anything is drawn,
+	// so no screen, log line or event shows them, whichever text they turn up in.
+	Secrets []string
+}
+
+// Review is the plan as the review screen states it: built by the command from the
+// RESOLVED plan, never from what the screens hold, so what is approved is what runs.
+// Every text is sanitised and redacted before it is drawn.
+type Review struct {
+	// Rows are the plan's facts in order: a label and its value in words.
+	Rows []ReviewRow
+	// Warnings are what the plan does that deserves a second look: an escape hatch
+	// taken, backups left out. The preflight's own warnings are added on screen.
+	Warnings []string
+}
+
+// ReviewRow is one fact of the review.
+type ReviewRow struct {
+	Label, Value string
 }
 
 // Edits are the changes the screens have made to the command line's request. Each is
@@ -74,6 +101,8 @@ type Replanned struct {
 	Preflight installflow.PreflightRunner
 	Facts     Facts
 	Settings  []Setting
+	Review    Review
+	Command   result.Command
 }
 
 // Setting is one row of the advanced drawer. Every text is sanitised and redacted

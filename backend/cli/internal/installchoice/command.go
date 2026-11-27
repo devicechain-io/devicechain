@@ -20,11 +20,43 @@ const (
 
 const privateValue = "<redacted: supply privately>"
 
+// powerShellValue stands for a value Windows PowerShell 5.1 cannot hand a native
+// program exactly (see nativeSafe). The command is then a template.
+const powerShellValue = "<value PowerShell cannot pass exactly: supply it yourself>"
+
+// nativeSafe reports whether Windows PowerShell 5.1 passes arg to a native
+// program (dcctl.exe) exactly. 5.1 builds the program's command line from its
+// parsed arguments by its legacy rules, and the program splits that line by the
+// Microsoft C runtime's:
+//
+//   - an argument containing whitespace is wrapped in double quotes, and nothing
+//     inside it is escaped;
+//   - an embedded double quote is passed through raw, so the runtime reads it as
+//     the start or end of a quoted span and drops it (or splits the argument);
+//   - backslashes are passed through, and a run of them before the closing quote
+//     the wrapping added escapes that quote;
+//   - an empty argument is dropped altogether.
+//
+// So an argument is passed exactly when it is not empty, holds no double quote,
+// and, when it is wrapped, does not end in a backslash. PowerShell 7.3 and later
+// escape correctly, but the command must be right in 5.1 too, so anything else is
+// never rendered as runnable.
+func nativeSafe(arg string) bool {
+	if arg == "" || strings.Contains(arg, `"`) {
+		return false
+	}
+	return !(strings.ContainsAny(arg, " \t") && strings.HasSuffix(arg, `\`))
+}
+
 // Command contains only display-safe arguments. Template means credentials must
 // be supplied privately before execution; its Argv never contains those values.
 type Command struct {
-	Argv     []string
-	Line     string
+	Argv []string
+	Line string
+	// Words are Line's words exactly as they appear in it, quotes and all, in
+	// order: joined with single spaces they are Line. A screen that wraps the
+	// command breaks it only between them.
+	Words    []string
 	Template bool
 }
 
@@ -74,7 +106,12 @@ func (p Plan) Command(shell Shell, approved bool) (Command, error) {
 					value = `""`
 				}
 			}
-			result.Argv = append(result.Argv, "--"+f.name+"="+value)
+			arg := "--" + f.name + "=" + value
+			if shell == PowerShell && !nativeSafe(arg) {
+				arg = "--" + f.name + "=" + powerShellValue
+				result.Template = true
+			}
+			result.Argv = append(result.Argv, arg)
 		}
 	}
 	// Provider is also input. It is currently an identifier, but keep the safety
@@ -83,16 +120,24 @@ func (p Plan) Command(shell Shell, approved bool) (Command, error) {
 		result.Argv[2] = privateValue
 		result.Template = true
 	}
-	quoted := make([]string, len(result.Argv))
-	for i, arg := range result.Argv {
-		quoted[i] = quote(arg, shell)
-	}
-	result.Line = strings.Join(quoted, " ")
+	quoted := make([]string, 0, len(result.Argv)+1)
 	if shell == PowerShell {
 		// PowerShell requires the call operator for a quoted executable.
-		result.Line = "& " + result.Line
+		quoted = append(quoted, "&")
 	}
+	for _, arg := range result.Argv {
+		quoted = append(quoted, quote(arg, shell))
+	}
+	result.Words = quoted
+	result.Line = strings.Join(quoted, " ")
 	return result, nil
+}
+
+// Command is Plan.Command for a request settled only as far as Prepare takes it:
+// the same choices and explicitness, without reading any alert file. A screen
+// that reviews a plan before its run shows this.
+func (p Prepared) Command(shell Shell, approved bool) (Command, error) {
+	return Plan{choices: p.choices}.Command(shell, approved)
 }
 
 func quote(value string, shell Shell) string {
