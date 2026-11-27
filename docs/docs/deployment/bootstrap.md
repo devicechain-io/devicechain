@@ -716,6 +716,15 @@ The alerts for snapshots are described under
 - **Free host ports 80, 443 and 1883** for a local kind cluster, which publishes them for the
   console, HTTPS and MQTT. `dcctl preflight local` fails, naming the container that holds one,
   rather than letting the cluster create fail on Docker's bind error.
+- **Reachable from this machine only, unless you ask otherwise.** The kind cluster that
+  `dcctl install local` creates publishes those ports on `127.0.0.1`, so the console and the MQTT
+  broker answer on this machine and nowhere else. To reach them from another machine on your
+  network (a device, a phone, a second computer), create the cluster with
+  `dcctl install local --expose-lan` (or `dcctl setup local --expose-lan`), which publishes them on
+  every interface. Do that only on a network you trust, and not with `--no-tls` or `--dev`, which
+  serve the console's sign-in over plain HTTP. kind sets a cluster's ports when it creates it, so
+  the flag does nothing to a cluster that already exists: delete and re-create the cluster to
+  change it.
 - **On Linux, a raised inotify limit.** `dcctl preflight local` requires `fs.inotify.max_user_instances` of at least 256 for a local kind cluster, and a stock Ubuntu 24.04 ships 128, so it fails
   on it and prints the command to run. The first line raises
   the limit (the second, `max_user_watches`, is only a warning) and `/etc/sysctl.d` keeps it

@@ -26,6 +26,7 @@ var (
 	setupKubeContext string
 	setupCluster     string
 	setupCompact     bool
+	setupExposeLAN   bool
 	setupHA          bool
 	setupNoSplash    bool
 )
@@ -212,6 +213,9 @@ func setupInstallChoices(fs *pflag.FlagSet) installchoice.Choices {
 	if fs.Changed("ha") {
 		c.HA, c.Given["ha"] = setupHA, true
 	}
+	if fs.Changed("expose-lan") {
+		c.ExposeLAN, c.Given["expose-lan"] = setupExposeLAN, true
+	}
 	return c
 }
 
@@ -366,6 +370,7 @@ func init() {
 	setupLocalCmd.Flags().StringVar(&setupCluster, "cluster", bootstrap.DefaultClusterName, "Preview. Start from this local kind cluster, created if it does not exist; it can be changed on screen")
 	setupLocalCmd.Flags().BoolVar(&setupCompact, "compact", false, "Preview. Start with the small-footprint cluster preset (as dcctl install --compact); it can be changed on screen")
 	setupLocalCmd.Flags().BoolVar(&setupHA, "ha", false, "Preview. Start with the HA cluster topology (as dcctl install --ha); it can be changed on screen")
+	setupLocalCmd.Flags().BoolVar(&setupExposeLAN, "expose-lan", false, "Preview. "+exposeLANUsage+" (as dcctl install --expose-lan)")
 	setupLocalCmd.Flags().BoolVar(&setupNoSplash, "no-splash", false, "Preview. Skip the DeviceChain logo shown before the first screen")
 	setupLocalCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return refusedBeforeStart(err) })
 	setupCmd.AddCommand(setupLocalCmd)

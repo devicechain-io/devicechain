@@ -137,6 +137,11 @@ func FromFlags(fs *pflag.FlagSet) (Choices, error) {
 		return Choices{}, err
 	}
 	c.Given["dry-run"] = fs.Changed("dry-run")
+	c.ExposeLAN, err = fs.GetBool("expose-lan")
+	if err != nil {
+		return Choices{}, err
+	}
+	c.Given["expose-lan"] = fs.Changed("expose-lan")
 	c.HA, err = fs.GetBool("ha")
 	if err != nil {
 		return Choices{}, err
@@ -274,6 +279,7 @@ func (c Choices) flagValues() []flagValue {
 		{"database-toleration", c.DBTolerations, true},
 		{"dev", []string{strconv.FormatBool(c.Dev)}, false},
 		{"dry-run", []string{strconv.FormatBool(c.DryRun)}, false},
+		{"expose-lan", []string{strconv.FormatBool(c.ExposeLAN)}, false},
 		{"ha", []string{strconv.FormatBool(c.HA)}, false},
 		{"help", []string{strconv.FormatBool(c.Help)}, false},
 		{"kube-context", []string{c.KubeContext}, false},
