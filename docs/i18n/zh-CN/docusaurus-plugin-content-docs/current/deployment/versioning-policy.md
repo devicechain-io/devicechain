@@ -101,6 +101,8 @@ GraphQL 预览接口包括其专用的输入和结果类型、字段、参数及
 规划、创建、启动、恢复、撤销和裁定需要 `device:write` 和 `fleet:operate`；暂停和中止需要
 `device:write`；读取需要 `device:read`。代理和服务身份以及具有受限范围的成员会被拒绝。
 
+在 **v1.10** 中，`dcctl setup local` 进入预览层级：`dcctl setup` 和 `dcctl setup local` 命令、它们的标志（`--kube-context`、`--cluster`、`--compact`、`--ha`、`--no-splash`）、它们的屏幕以及退出状态（参见[引导式设置](./install-terminal-ui.md#setup-local)）。提升条件：**进入预览后经过两个次版本（默认）**。它所运行的 `dcctl install` 和 `dcctl bootstrap` 仍受覆盖，且不受其影响。
+
 ## 支持的升级路径 {#upgrade-paths}
 
 - **同一次版本内**（`1.4.0` 到 `1.4.3`）以及**升级到下一个次版本**（`1.4.x` 到 `1.5.0`）是支持的路径。按[滚动升级](./releases-and-upgrades.md#rolling-upgrades)所述，先运行 `dcctl install`，再运行 `dcctl upgrade`。

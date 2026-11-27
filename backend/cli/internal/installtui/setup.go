@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync/atomic"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/internal/installtui/terminal"
@@ -75,16 +76,41 @@ func (r SetupResult) ExitCode() int {
 	return SetupExitInstanceNotCreated
 }
 
-// phaseOf is a stage's outcome from its presenter's error: nil is success, a run nobody
-// approved is ErrNotConfirmed, and anything else failed.
-func phaseOf(err error) PhaseOutcome {
+// phaseOf is a stage's outcome: nil is success; otherwise what decides it is whether the
+// stage's approval was given, never what kind of error it was. A presenter that could
+// not even start, or a run nobody approved, changed nothing; an approved stage that did
+// not finish may have.
+func phaseOf(err error, approved bool) PhaseOutcome {
 	switch {
 	case err == nil:
 		return PhaseSucceeded
-	case errors.Is(err, ErrNotConfirmed):
+	case !approved || errors.Is(err, ErrNotConfirmed):
 		return PhaseNotApproved
 	}
 	return PhaseFailed
+}
+
+// errDeclinedAfterCluster is the instance stage declined by an interrupt once the cluster
+// had been installed.
+var errDeclinedAfterCluster = errors.New("interrupted after the cluster was installed; no instance was created")
+
+// stage is one stage's presenter state, as the presenter reports it.
+type stage struct {
+	approved, interrupted atomic.Bool
+}
+
+// presenter is p wired to report into st, with the stage's forced-exit statuses: a second
+// interrupt exits beforeApproval or afterApproval, never 1 for a stage it does not mean.
+func (st *stage) presenter(p Presenter, beforeApproval, afterApproval int) Presenter {
+	p.OnApproved = func() { st.approved.Store(true) }
+	p.OnInterrupt = func() { st.interrupted.Store(true) }
+	p.ForcedExitCode = func(approved bool) int {
+		if approved {
+			return afterApproval
+		}
+		return beforeApproval
+	}
+	return p
 }
 
 // Setup is dcctl setup local: the cluster journey, then the instance journey, each
@@ -120,8 +146,17 @@ type Setup struct {
 		preflight installflow.PreflightRunner) error
 }
 
-func (s Setup) runStage(ctx context.Context, p Presenter, e installflow.Engine, req installflow.Request,
-	preflight installflow.PreflightRunner) error {
+// runStage runs one stage's presenter. A panic out of it (the presenter raises an engine's
+// panic again once the terminal is restored) is the stage's failure, reported here, so
+// the exit status is still setup's own and never Go's 2, which would say nothing changed.
+func (s Setup) runStage(ctx context.Context, name string, p Presenter, e installflow.Engine, req installflow.Request,
+	preflight installflow.PreflightRunner) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(s.Stderr, "dcctl setup: the %s stage panicked: %v\n", name, r)
+			err = fmt.Errorf("the %s stage panicked: %v", name, r)
+		}
+	}()
 	if s.run != nil {
 		return s.run(ctx, p, e, req, preflight)
 	}
@@ -133,35 +168,43 @@ func (s Setup) runStage(ctx context.Context, p Presenter, e installflow.Engine, 
 // stays installed and the exact command that creates the instance later.
 func (s Setup) Run(ctx context.Context) SetupResult {
 	var res SetupResult
-	cluster := Presenter{Stdin: s.Stdin, Stdout: s.Stdout, Stderr: s.Stderr, Caps: s.Caps,
-		OwnProcessStreams: s.OwnProcessStreams, Wizard: s.Wizard, Continues: true}
-	err := s.runStage(ctx, cluster, s.Cluster, s.ClusterRequest, s.ClusterPreflight)
-	res.Cluster, res.Err = phaseOf(err), err
+	var first, second stage
+	cluster := first.presenter(Presenter{Stdin: s.Stdin, Stdout: s.Stdout, Stderr: s.Stderr, Caps: s.Caps,
+		OwnProcessStreams: s.OwnProcessStreams, Wizard: s.Wizard, Continues: true},
+		SetupExitNothingChanged, SetupExitClusterFailed)
+	err := s.runStage(ctx, "cluster", cluster, s.Cluster, s.ClusterRequest, s.ClusterPreflight)
+	res.Cluster, res.Err = phaseOf(err, first.approved.Load()), err
 	if res.Cluster != PhaseSucceeded {
 		return res
 	}
 
 	var planned *BootstrapPlanned
-	scr := *s.Instance()
-	chosen := scr.Chosen
-	scr.Chosen = func(p BootstrapPlanned) {
-		planned = &p
-		if chosen != nil {
-			chosen(p)
-		}
-	}
-	if ctx.Err() != nil {
+	switch {
+	case ctx.Err() != nil:
 		// Interrupted between the stages: the instance stage is not begun.
 		res.Instance, res.Err = PhaseNotApproved, ctx.Err()
-	} else {
+	case first.interrupted.Load():
+		// Ctrl+C on the cluster stage's screen, after it had succeeded: the operator
+		// declined what follows, so the hand-over is not opened.
+		res.Instance, res.Err = PhaseNotApproved, errDeclinedAfterCluster
+	default:
+		scr := *s.Instance()
+		chosen := scr.Chosen
+		scr.Chosen = func(p BootstrapPlanned) {
+			planned = &p
+			if chosen != nil {
+				chosen(p)
+			}
+		}
 		// The logo was the cluster stage's; the instance stage opens on the hand-over.
 		caps := s.Caps
 		caps.Splash, caps.Animate, caps.ProgressOnly = terminal.NoArt, false, false
-		instance := Presenter{Stdin: s.Stdin, Stdout: s.Stdout, Stderr: s.Stderr, Caps: caps,
-			OwnProcessStreams: s.OwnProcessStreams, Bootstrap: &scr}
-		err = s.runStage(ctx, instance, nil,
+		instance := second.presenter(Presenter{Stdin: s.Stdin, Stdout: s.Stdout, Stderr: s.Stderr, Caps: caps,
+			OwnProcessStreams: s.OwnProcessStreams, Bootstrap: &scr},
+			SetupExitInstanceNotCreated, SetupExitInstanceFailed)
+		err = s.runStage(ctx, "instance", instance, nil,
 			installflow.Request{Operation: installflow.OperationBootstrap}, nil)
-		res.Instance, res.Err = phaseOf(err), err
+		res.Instance, res.Err = phaseOf(err, second.approved.Load()), err
 	}
 	if res.Instance == PhaseSucceeded {
 		return res

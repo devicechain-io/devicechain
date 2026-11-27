@@ -225,7 +225,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd, _ := m.pre.update(msg)
 			return m, cmd
 		}
-	case instSettled, InstanceChosen, EscrowChosen, ScreenBack, BootstrapPlanned:
+	case settleMsg, frameShownMsg:
+		// The settling of the screen whose Enter leads on: the instance journey's, or
+		// the install review's.
+		switch {
+		case m.inst != nil && m.prePhase:
+			cmd, _ := m.inst.update(msg)
+			return m, cmd
+		case m.pre != nil && m.prePhase:
+			cmd, _ := m.pre.update(msg)
+			return m, cmd
+		}
+	case InstanceChosen, EscrowChosen, ScreenBack, BootstrapPlanned:
 		if m.inst != nil && m.prePhase {
 			cmd, _ := m.inst.update(msg)
 			return m, cmd
@@ -274,6 +285,13 @@ func (m model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if k.String() == "ctrl+c" && m.inst != nil && m.inst.stage == instAfter && m.summary != nil {
 		// The instance run is over and its screens are up: there is nothing left to stop,
 		// and its one-time disclosures are discarded on the way out (BootstrapFlow.Close).
+		return m, tea.Quit
+	}
+	if k.String() == "ctrl+c" && m.continues && m.summary != nil && !m.caps.ProgressOnly {
+		// The run is over and another journey would follow it: Ctrl+C is the operator
+		// declining it. It is counted as the interrupt it is (the caller learns of it and
+		// opens nothing more), and the program ends; there is nothing left to stop.
+		m.intr.interrupt()
 		return m, tea.Quit
 	}
 	if k.String() == "ctrl+c" {

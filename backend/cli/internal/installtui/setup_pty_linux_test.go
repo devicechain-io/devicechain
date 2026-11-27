@@ -176,6 +176,75 @@ func TestSetupPTYAFailedClusterNeverReachesTheInstance(t *testing.T) {
 	}
 }
 
+// 🔴 A SECOND CTRL+C AFTER THE INSTANCE'S APPROVAL EXITS 4: the cluster is installed and
+// the instance may be partly built. It never exits 1, which would say the cluster failed.
+func TestSetupPTYADoubleCtrlCAfterTheInstanceApprovalExitsFour(t *testing.T) {
+	r := startSetupPTYChild(t, "instance-stubborn")
+	r.throughCluster()
+	r.toInstanceReview()
+	settled()
+	r.press("\t\r")
+	waitFor(t, "the instance run", r.out, func() bool { return strings.Contains(r.markers(), "instance ran") })
+	r.press("\x03")
+	waitFor(t, "the cancel", r.out, func() bool { return strings.Contains(r.markers(), "cancelled") })
+	r.press("\x03")
+	if code := r.wait(); code != SetupExitInstanceFailed {
+		t.Fatalf("exit %d; terminal:\n%q", code, r.out.String())
+	}
+	assertRestored(t, r.out.String(), "interrupted again")
+}
+
+// Ctrl+C before the cluster's approval exits 2: nothing was changed.
+func TestSetupPTYCtrlCBeforeTheClusterApprovalExitsTwo(t *testing.T) {
+	r := startSetupPTYChild(t, "success")
+	waitFor(t, "the welcome screen", r.out, screenShows(r.out, welcomeNoChanges))
+	r.press("\x03")
+	if code := r.wait(); code != SetupExitNothingChanged {
+		t.Fatalf("exit %d; terminal:\n%q", code, r.out.String())
+	}
+	if m := r.markers(); m != "" {
+		t.Fatalf("an engine ran: %q", m)
+	}
+}
+
+// Ctrl+C on the cluster's success screen declines the instance: no hand-over, exit 3,
+// and the command that creates the instance later.
+func TestSetupPTYCtrlCAfterTheClusterSucceededExitsThree(t *testing.T) {
+	r := startSetupPTYChild(t, "success")
+	waitFor(t, "the welcome screen", r.out, screenShows(r.out, welcomeNoChanges))
+	r.press("\r")
+	waitFor(t, "the checks", r.out, screenShows(r.out, "all checks passed"))
+	r.press("\x1b[Z\r")
+	waitFor(t, "the cluster choices", r.out, screenShows(r.out, choicesTitle))
+	r.press("\t\t\t\t\r")
+	waitFor(t, "the cluster review", r.out, screenShows(r.out, reviewCommandTitle))
+	settled()
+	r.press("\t\r")
+	waitFor(t, "the cluster verdict", r.out, screenShows(r.out, "Press Enter to continue."))
+	r.press("\x03")
+	if code := r.wait(); code != SetupExitInstanceNotCreated {
+		t.Fatalf("exit %d; terminal:\n%q", code, r.out.String())
+	}
+	out := r.out.String()
+	if strings.Contains(out, handoverTitle) {
+		t.Fatal("the hand-over was opened after Ctrl+C")
+	}
+	assertRestored(t, out, "dcctl bootstrap local <instance> --cluster=devicechain")
+}
+
+// An engine panic after the instance's approval exits 4, with the terminal restored.
+func TestSetupPTYAnInstancePanicExitsFour(t *testing.T) {
+	r := startSetupPTYChild(t, "instance-panic")
+	r.throughCluster()
+	r.toInstanceReview()
+	settled()
+	r.press("\t\r")
+	if code := r.wait(); code != SetupExitInstanceFailed {
+		t.Fatalf("exit %d; terminal:\n%q", code, r.out.String())
+	}
+	assertRestored(t, r.out.String(), "panicked: instance engine exploded")
+}
+
 // TestSetupPTYChild is the child half. It does nothing unless a parent started it.
 func TestSetupPTYChild(t *testing.T) {
 	scenario := os.Getenv(setupPTYChildEnv)
@@ -211,6 +280,14 @@ func TestSetupPTYChild(t *testing.T) {
 	})
 	instance := engineFunc(func(ctx context.Context, rt installflow.Runtime) (installflow.Summary, error) {
 		mark("instance ran")
+		switch scenario {
+		case "instance-stubborn":
+			<-ctx.Done()
+			mark("cancelled")
+			select {} // still stopping gracefully
+		case "instance-panic":
+			panic("instance engine exploded")
+		}
 		if err := rt.Events.Emit(installflow.Event{Payload: installflow.RunStarted{
 			Target: installflow.Target{Mode: "existing", Context: installflow.Text("kind-devicechain")},
 			Manifest: []installflow.ManifestStep{{ID: installflow.StepBootstrapInputs}, {ID: installflow.StepBootstrapEscrow},

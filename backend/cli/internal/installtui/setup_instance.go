@@ -4,8 +4,6 @@
 package installtui
 
 import (
-	"time"
-
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
@@ -68,10 +66,6 @@ const (
 	instAfter
 )
 
-// instSettled arms the hand-over or the instance review: visit gen has been on screen
-// for reviewSettle, and keys count from now on.
-type instSettled struct{ gen int }
-
 // The hand-over's actions.
 const (
 	handoverExit = iota
@@ -99,10 +93,9 @@ type instancePhase struct {
 	flow  *BootstrapFlow
 	theme bsTheme
 	stage instStage
-	// gen counts the visits to the hand-over and the review; armed is set when the
-	// visit on screen has settled.
-	gen   int
-	armed bool
+	// gate arms each visit to the hand-over and the review: only after a frame of it
+	// was written and the keyboard then stayed quiet (see settleGate).
+	gate  settleGate
 	focus int
 	// plan is the run the review shows; planErr is why there is none.
 	plan    *BootstrapPlan
@@ -128,12 +121,10 @@ func (p *instancePhase) start() tea.Cmd {
 }
 
 // visit shows the hand-over or the review afresh: unarmed, with focus on def, and
-// taking no key until its own settle message arrives.
+// taking no key until a frame of it has been shown and the keyboard has gone quiet.
 func (p *instancePhase) visit(stage instStage, def int) tea.Cmd {
-	p.stage, p.armed, p.focus = stage, false, def
-	p.gen++
-	gen := p.gen
-	return tea.Tick(reviewSettle, func(time.Time) tea.Msg { return instSettled{gen: gen} })
+	p.stage, p.focus = stage, def
+	return p.gate.enter()
 }
 
 func (p *instancePhase) resize(w, h int) {
@@ -144,16 +135,21 @@ func (p *instancePhase) resize(w, h int) {
 // canApprove is the one gate on the instance's Approve: the review has settled, and a
 // run was built for the choices on it.
 func (p *instancePhase) canApprove() bool {
-	return p.stage == instReview && p.armed && p.plan != nil && p.plan.Engine != nil
+	return p.stage == instReview && p.gate.armed && p.plan != nil && p.plan.Engine != nil
 }
 
 // update takes a message while the screens before the run are up. Only a key can
 // decide anything: proceed is Approve on a settled review, leave is Exit.
 func (p *instancePhase) update(msg tea.Msg) (tea.Cmd, prerunOutcome) {
 	switch msg := msg.(type) {
-	case instSettled:
-		if msg.gen == p.gen && (p.stage == instHandover || p.stage == instReview) {
-			p.armed = true
+	case frameShownMsg:
+		if p.stage == instHandover || p.stage == instReview {
+			return p.gate.frameShown(msg), stay
+		}
+		return nil, stay
+	case settleMsg:
+		if p.stage == instHandover || p.stage == instReview {
+			p.gate.settled(msg)
 		}
 		return nil, stay
 	case ScreenBack:
@@ -196,8 +192,11 @@ func (p *instancePhase) review(planned BootstrapPlanned) tea.Cmd {
 }
 
 func (p *instancePhase) handoverKey(k tea.KeyPressMsg) (tea.Cmd, prerunOutcome) {
-	if !p.armed || !p.shown() {
-		return nil, stay // typed before the screen settled: dropped, whatever it was
+	if !p.shown() {
+		return nil, stay // a screen the terminal cannot show whole takes no key
+	}
+	if ok, cmd := p.gate.admit(); !ok {
+		return cmd, stay // typed before the screen settled: dropped, whatever it was
 	}
 	switch k.String() {
 	case "tab", "shift+tab", "left", "right", "up", "down":
@@ -208,14 +207,18 @@ func (p *instancePhase) handoverKey(k tea.KeyPressMsg) (tea.Cmd, prerunOutcome) 
 		if p.focus == handoverExit {
 			return nil, leave
 		}
+		p.gate.leave()
 		p.stage = instChoices
 	}
 	return nil, stay
 }
 
 func (p *instancePhase) reviewKey(k tea.KeyPressMsg) (tea.Cmd, prerunOutcome) {
-	if !p.armed || !p.shown() {
-		return nil, stay // typed before the screen settled: dropped, whatever it was
+	if !p.shown() {
+		return nil, stay // a screen the terminal cannot show whole takes no key
+	}
+	if ok, cmd := p.gate.admit(); !ok {
+		return cmd, stay // typed before the screen settled: dropped, whatever it was
 	}
 	switch k.String() {
 	case "tab", "right", "down":
@@ -245,7 +248,8 @@ func (p *instancePhase) reviewKey(k tea.KeyPressMsg) (tea.Cmd, prerunOutcome) {
 // back returns from the review to the escrow choice, which is where the choices were
 // settled. Nothing is approved; the next review is a new visit that settles again.
 func (p *instancePhase) back() {
-	p.stage, p.armed, p.plan, p.planErr = instChoices, false, nil, ""
+	p.gate.leave()
+	p.stage, p.plan, p.planErr = instChoices, nil, ""
 	p.flow.phase = phaseEscrow
 }
 
@@ -253,17 +257,29 @@ func (p *instancePhase) back() {
 // act on it, as everywhere in the instance journey.
 func (p *instancePhase) shown() bool { return p.theme.fits(p.flow.header(), p.screen()) }
 
+// screen is the hand-over or the review. While it is settling it also says so, but
+// only where that note fits: the note must never be what makes the screen too large to
+// show, since a screen that is not shown never settles.
 func (p *instancePhase) screen() bsScreen {
+	build := p.reviewScreen
 	if p.stage == instHandover {
-		return p.handoverScreen()
+		build = p.handoverScreen
 	}
-	return p.reviewScreen()
+	if !p.gate.armed {
+		if s := build(true); p.theme.fits(p.flow.header(), s) {
+			return s
+		}
+	}
+	return build(false)
 }
 
 // render is the screen before the run.
 func (p *instancePhase) render() string {
 	if p.stage == instChoices {
 		return p.flow.Render()
+	}
+	if p.shown() {
+		p.gate.drew() // on this frame whole: its quiet period may start once it is written
 	}
 	return p.theme.frame(p.flow.header(), p.screen())
 }
@@ -278,7 +294,7 @@ func (p *instancePhase) buttons(labels []string) []string {
 	return out
 }
 
-func (p *instancePhase) handoverScreen() bsScreen {
+func (p *instancePhase) handoverScreen(pending bool) bsScreen {
 	t, h := p.theme, p.scr.Handover
 	w := t.contentWidth()
 	var body []string
@@ -293,13 +309,13 @@ func (p *instancePhase) handoverScreen() bsScreen {
 	body = append(body, t.para(roleLabel, "  ", h.Continue, w)...)
 	body = append(body, "")
 	body = append(body, p.buttons([]string{"Exit (the cluster stays installed)", "Continue to the instance"})...)
-	if !p.armed {
+	if pending {
 		body = append(body, "", t.paint(roleDim, "This screen takes keys once it has settled."))
 	}
 	return bsScreen{title: handoverTitle, body: body, keys: []key.Binding{bsKeyNext, bsKeyEnter}}
 }
 
-func (p *instancePhase) reviewScreen() bsScreen {
+func (p *instancePhase) reviewScreen(pending bool) bsScreen {
 	t := p.theme
 	w := t.contentWidth()
 	var body []string
@@ -327,7 +343,7 @@ func (p *instancePhase) reviewScreen() bsScreen {
 	}
 	body = append(body, "")
 	body = append(body, p.buttons([]string{"Back", "Approve and create the instance", "Exit"})...)
-	if !p.armed {
+	if pending {
 		body = append(body, "", t.paint(roleDim, instReviewPending))
 	}
 	return bsScreen{title: instReviewTitle, body: body, before: true,

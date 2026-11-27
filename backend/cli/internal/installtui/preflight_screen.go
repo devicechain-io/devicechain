@@ -61,10 +61,6 @@ type checkMsg struct {
 	res  installflow.PreflightResult
 	err  error
 	next <-chan checkMsg
-	// settled, when it is not zero, is not a check at all: it says review visit
-	// settled has settled. It travels as a checkMsg because that is the message the
-	// program hands the screens before the run, whatever their screen.
-	settled int
 }
 
 // preflightState is the preflight screen.

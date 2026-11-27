@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/internal/installtui/terminal"
@@ -60,19 +61,24 @@ func TestPhaseOfReadsTheStagesError(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range []struct {
-		err  error
-		want PhaseOutcome
+		err      error
+		approved bool
+		want     PhaseOutcome
 	}{
-		{nil, PhaseSucceeded},
-		{errNotStarted, PhaseNotApproved},
-		{errInstanceNotStarted, PhaseNotApproved},
-		{hub.RedactError(errInstanceNotStarted), PhaseNotApproved},
-		{errors.New("the instance was not started"), PhaseFailed}, // the words alone are not the verdict
-		{context.Canceled, PhaseFailed},
-		{hub.RedactError(errors.New("helm: timed out")), PhaseFailed},
+		{nil, true, PhaseSucceeded},
+		{errNotStarted, false, PhaseNotApproved},
+		{errInstanceNotStarted, false, PhaseNotApproved},
+		{hub.RedactError(errInstanceNotStarted), false, PhaseNotApproved},
+		{errors.New("the instance was not started"), true, PhaseFailed}, // the words alone are not the verdict
+		{context.Canceled, true, PhaseFailed},
+		{hub.RedactError(errors.New("helm: timed out")), true, PhaseFailed},
+		// 🔴 BEFORE ITS APPROVAL A STAGE CHANGED NOTHING, whatever its error: a presenter
+		// that could not take the process streams, or a terminal that failed to start.
+		{errors.New("taking the process streams: too many open files"), false, PhaseNotApproved},
+		{context.Canceled, false, PhaseNotApproved},
 	} {
-		if got := phaseOf(c.err); got != c.want {
-			t.Errorf("%v: %d, want %d", c.err, got, c.want)
+		if got := phaseOf(c.err, c.approved); got != c.want {
+			t.Errorf("%v (approved %v): %d, want %d", c.err, c.approved, got, c.want)
 		}
 	}
 }
@@ -84,12 +90,22 @@ type stageRecorder struct {
 	requests   []installflow.Request
 	results    []error
 	during     []func(Presenter)
+	// unapproved marks the stages whose screens end before their approval; every other
+	// stage is approved (OnApproved) unless its result is a run nobody approved.
+	unapproved map[int]bool
 }
 
 func (r *stageRecorder) run(_ context.Context, p Presenter, _ installflow.Engine, req installflow.Request,
 	_ installflow.PreflightRunner) error {
 	i := len(r.presenters)
 	r.presenters, r.requests = append(r.presenters, p), append(r.requests, req)
+	var res error = errors.New("no stage was scripted here")
+	if i < len(r.results) {
+		res = r.results[i]
+	}
+	if !r.unapproved[i] && !errors.Is(res, ErrNotConfirmed) && p.OnApproved != nil {
+		p.OnApproved()
+	}
 	if i < len(r.during) && r.during[i] != nil {
 		r.during[i](p)
 	}
@@ -235,4 +251,144 @@ func TestAnInterruptBetweenTheStagesBeginsNoInstance(t *testing.T) {
 	if !strings.Contains(out.String(), "stays installed") {
 		t.Fatalf("the hand-over was not said:\n%s", out.String())
 	}
+}
+
+// 🔴 A STAGE THAT FAILS BEFORE ITS APPROVAL CHANGED NOTHING. A presenter that cannot even
+// start (it could not take the process streams) is classified by the approval it never
+// had, not by its error: 2 for the cluster stage, 3 for the instance stage.
+func TestAStageThatFailsBeforeItsApprovalIsNotAFailedStage(t *testing.T) {
+	broken := errors.New("taking the process streams: too many open files")
+	for _, c := range []struct {
+		name    string
+		results []error
+		want    int
+	}{
+		{"cluster", []error{broken}, SetupExitNothingChanged},
+		{"instance", []error{nil, broken}, SetupExitInstanceNotCreated},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := &stageRecorder{results: c.results, unapproved: map[int]bool{len(c.results) - 1: true}}
+			var out bytes.Buffer
+			res := setupUnderTest(rec, &out, func() *BootstrapScreens { return &BootstrapScreens{} }).Run(context.Background())
+			if res.ExitCode() != c.want || !errors.Is(res.Err, broken) {
+				t.Fatalf("exit %d (%v), want %d", res.ExitCode(), res.Err, c.want)
+			}
+		})
+	}
+}
+
+// 🔴 A PANIC IN A STAGE EXITS WITH SETUP'S STATUS, never Go's 2 (which says nothing
+// changed): 1 or 4 after the stage's approval, 2 or 3 before it.
+func TestAPanicInAStageExitsWithSetupsStatus(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		at         int
+		unapproved bool
+		want       int
+	}{
+		{"cluster after approval", 0, false, SetupExitClusterFailed},
+		{"cluster before approval", 0, true, SetupExitNothingChanged},
+		{"instance after approval", 1, false, SetupExitInstanceFailed},
+		{"instance before approval", 1, true, SetupExitInstanceNotCreated},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			during := make([]func(Presenter), 2)
+			during[c.at] = func(Presenter) { panic("engine exploded") }
+			rec := &stageRecorder{results: []error{nil, nil}, during: during, unapproved: map[int]bool{c.at: c.unapproved}}
+			var out bytes.Buffer
+			res := setupUnderTest(rec, &out, func() *BootstrapScreens { return &BootstrapScreens{} }).Run(context.Background())
+			if res.ExitCode() != c.want {
+				t.Fatalf("exit %d (%v), want %d", res.ExitCode(), res.Err, c.want)
+			}
+			if !strings.Contains(out.String(), "panicked: engine exploded") {
+				t.Fatalf("the panic was not reported:\n%s", out.String())
+			}
+			if c.at == 1 && !strings.Contains(out.String(), "stays installed") {
+				t.Fatalf("an instance stage that panicked does not say the cluster stays installed:\n%s", out.String())
+			}
+		})
+	}
+}
+
+// 🔴 CTRL+C AFTER THE CLUSTER STAGE SUCCEEDED OPENS NO HAND-OVER. The interrupt was the
+// cluster presenter's to see (a raw-mode keypress reaches no other context); it reports
+// it, and setup stops there: exit 3, with the command that continues.
+func TestCtrlCAfterTheClusterSucceededOpensNoHandover(t *testing.T) {
+	rec := &stageRecorder{results: []error{nil, nil}, during: []func(Presenter){func(p Presenter) { p.OnInterrupt() }}}
+	var out bytes.Buffer
+	res := setupUnderTest(rec, &out, func() *BootstrapScreens {
+		t.Fatal("the instance screens were built after an interrupt")
+		return nil
+	}).Run(context.Background())
+	if len(rec.presenters) != 1 || res.ExitCode() != SetupExitInstanceNotCreated {
+		t.Fatalf("%d stages, exit %d", len(rec.presenters), res.ExitCode())
+	}
+	if got := out.String(); !strings.Contains(got, "stays installed") ||
+		!strings.Contains(got, "dcctl bootstrap local <instance> --cluster=devicechain") {
+		t.Fatalf("the hand-over was not said:\n%s", got)
+	}
+}
+
+// 🔴 A SECOND CTRL+C EXITS WITH SETUP'S STATUS FOR WHERE IT CAME: 2 before the cluster's
+// approval, 1 after it, 3 before the instance's approval, 4 after it.
+func TestEachStagesForcedExitIsSetups(t *testing.T) {
+	rec := &stageRecorder{results: []error{nil, nil}}
+	var out bytes.Buffer
+	setupUnderTest(rec, &out, func() *BootstrapScreens { return &BootstrapScreens{} }).Run(context.Background())
+	if len(rec.presenters) != 2 {
+		t.Fatalf("%d stages", len(rec.presenters))
+	}
+	for i, want := range [][2]int{{SetupExitNothingChanged, SetupExitClusterFailed},
+		{SetupExitInstanceNotCreated, SetupExitInstanceFailed}} {
+		f := rec.presenters[i].ForcedExitCode
+		if f == nil || f(false) != want[0] || f(true) != want[1] {
+			t.Fatalf("stage %d: forced exit is not setup's", i)
+		}
+	}
+}
+
+// Through the real program: the second interrupt exits with the code the caller gives
+// for the approval as it stands. Install's presenter has none, and exits 1 as always.
+func TestTheForcedExitUsesTheCallersCode(t *testing.T) {
+	stubborn := engineFunc(func(ctx context.Context, rt installflow.Runtime) (installflow.Summary, error) {
+		if err := startRun(rt); err != nil {
+			return installflow.Summary{}, err
+		}
+		<-ctx.Done()
+		select {} // stopping gracefully, for ever
+	})
+	for _, c := range []struct {
+		name string
+		code func(bool) int
+		want int
+	}{
+		{"install, unchanged", nil, 1},
+		{"a caller's code, no approval given", func(a bool) int {
+			if a {
+				return 44
+			}
+			return 33
+		}, 33},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t, tuiCaps(true))
+			h.p.ForcedExitCode = c.code
+			done := h.run(stubborn, installflow.Request{Operation: installflow.OperationInstall, AssumeYes: true})
+			waitFor(t, "the run", h.out, screenShows(h.out, "Resolve target"))
+			h.press("\x03")
+			waitFor(t, "the stopping notice", h.out, screenShows(h.out, "Interrupt received."))
+			h.press("\x03")
+			select {
+			case code := <-h.exits:
+				if code != c.want {
+					t.Fatalf("forced exit %d, want %d", code, c.want)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("no forced exit")
+			}
+			_ = h.result(done)
+		})
+	}
+	// After an approval, the code is the caller's for an approved stage: the PTY test
+	// TestSetupPTYADoubleCtrlCAfterTheInstanceApprovalExitsFour drives that end to end.
 }

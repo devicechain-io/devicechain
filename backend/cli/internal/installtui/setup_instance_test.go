@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -76,7 +77,7 @@ func (d *instDriver) run(cmd tea.Cmd) {
 	for _, msg := range messages(cmd) {
 		switch msg.(type) {
 		case nil:
-		case instSettled:
+		case settleMsg:
 			d.held = append(d.held, msg)
 		case tea.QuitMsg:
 			d.quit = true
@@ -100,13 +101,26 @@ func (d *instDriver) keys(names ...string) {
 	}
 }
 
-// settle delivers the settle messages held so far: the screen on now has settled.
-func (d *instDriver) settle() {
+// show draws the screen and reports its frame written, as the screen writer does.
+func (d *instDriver) show() {
+	d.t.Helper()
+	d.m.render()
+	d.send(frameShownMsg{seq: math.MaxUint64})
+}
+
+// release delivers the settle messages held so far, oldest first.
+func (d *instDriver) release() {
 	held := d.held
 	d.held = nil
 	for _, m := range held {
 		d.send(m)
 	}
+}
+
+// settle shows the screen on now and lets its quiet period end with no key typed.
+func (d *instDriver) settle() {
+	d.show()
+	d.release()
 }
 
 func (d *instDriver) screen() string { return bsStrip(d.m.render()) }
@@ -170,7 +184,7 @@ func TestTheInstanceIsApprovedOnlyOnItsSettledReview(t *testing.T) {
 		t.Fatalf("a key before the review settled approved it: chose %d, started %d", len(d.chose), d.started)
 	}
 	// A settle left over from an earlier visit arms nothing.
-	d.send(instSettled{gen: d.m.inst.gen - 1})
+	d.send(settleMsg{gen: d.m.inst.gate.gen - 1, token: d.m.inst.gate.token})
 	d.keys("tab", "enter")
 	if len(d.chose) != 0 {
 		t.Fatal("a stale settle armed the review")
@@ -260,8 +274,8 @@ func TestBackFromTheInstanceScreenReturnsToTheHandover(t *testing.T) {
 		d.keys("tab")
 	}
 	d.keys("enter")
-	if d.stage() != instHandover || d.m.inst.armed {
-		t.Fatalf("Back from the instance screen: stage %d, armed %v", d.stage(), d.m.inst.armed)
+	if d.stage() != instHandover || d.m.inst.gate.armed {
+		t.Fatalf("Back from the instance screen: stage %d, armed %v", d.stage(), d.m.inst.gate.armed)
 	}
 }
 
@@ -386,5 +400,50 @@ func TestSetupScreenGoldens(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// 🔴 A STALLED TERMINAL CANNOT APPROVE THE INSTANCE FOR KEYS TYPED AHEAD. While the
+// renderer is stalled nothing of the review has been written, so no quiet period runs and
+// every key is dropped; once its frame is written, a key typed ahead and delivered then
+// restarts the quiet period, so a timer that fires after it arms nothing. Only a key
+// pressed after the screen was written and the keyboard went quiet acts.
+func TestATypedAheadBurstNeverArmsTheInstanceReviewAfterAStall(t *testing.T) {
+	d := newInstDriver(t, instCaps(), instScreens(goodPlan))
+	d.toReview()
+	// The stall: the review is entered but no frame of it has been written. Keys typed now
+	// are dropped, and any timer that fires arms nothing.
+	d.keys("tab", "enter")
+	d.release()
+	d.keys("tab", "enter")
+	if len(d.chose) != 0 || d.m.inst.gate.armed {
+		t.Fatalf("keys typed during the stall: chose %d, armed %v", len(d.chose), d.m.inst.gate.armed)
+	}
+	// The frame is written; the burst typed ahead is delivered after it, and then the
+	// first quiet period's timer fires.
+	d.show()
+	first := d.held
+	d.held = nil
+	d.keys("tab")
+	for _, m := range first {
+		d.send(m)
+	}
+	if d.m.inst.gate.armed {
+		t.Fatal("a quiet period a key interrupted armed the review")
+	}
+	d.keys("tab", "enter")
+	if len(d.chose) != 0 {
+		t.Fatal("a burst typed ahead approved the instance")
+	}
+	// Quiet at last: the latest period ends with no key, and only now a key counts.
+	last := d.held[len(d.held)-1]
+	d.held = nil
+	d.send(last)
+	if !d.m.inst.gate.armed || d.m.inst.focus != reviewBack {
+		t.Fatalf("after a quiet period: armed %v, focus %d", d.m.inst.gate.armed, d.m.inst.focus)
+	}
+	d.keys("tab", "enter")
+	if len(d.chose) != 1 {
+		t.Fatalf("Approve after the quiet period: chose %d", len(d.chose))
 	}
 }

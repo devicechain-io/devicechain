@@ -45,6 +45,14 @@ type Presenter struct {
 	// Continues says another journey follows this one in the same command (dcctl setup
 	// local): the success verdict's Enter leads on rather than out.
 	Continues bool
+	// ForcedExitCode, when set, is the status the process exits with on a second
+	// interrupt, given whether this run's approval had been given. Nil exits 1, as dcctl
+	// always has; dcctl setup local maps it onto its own exit statuses.
+	ForcedExitCode func(approved bool) int
+	// OnApproved, when set, is called when the screens' approval starts the run.
+	OnApproved func()
+	// OnInterrupt, when set, is called on the first interrupt (Ctrl+C or a signal).
+	OnInterrupt func()
 
 	// Test seams. Zero values are the real process: signal.Notify for SIGINT and
 	// SIGTERM, os.Exit, and no extra program options.
@@ -134,6 +142,9 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 		planMu.Lock()
 		defer planMu.Unlock()
 		confirmed = true
+		if p.OnApproved != nil {
+			p.OnApproved()
+		}
 		if ce != nil {
 			e, preflight = ce, cp
 		}
@@ -158,6 +169,9 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	// The instance journey: its screens, its passphrase form, and the inbox its one-time
 	// disclosures wait in for the first-login screen. Whatever they still hold is cleared
 	// on every way out of Run.
+	// The screens that settle before they take a key learn from the screen writer when a
+	// frame of theirs has actually been written (see settleGate).
+	clock := &frameClock{}
 	var inst *instancePhase
 	var reveals installflow.RevealSink
 	if p.Bootstrap != nil {
@@ -165,6 +179,7 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 		setup := p.Bootstrap.Setup
 		setup.Caps, setup.Reveals = p.Caps, inbox
 		inst = newInstancePhase(p.Bootstrap, setup)
+		inst.gate.clock = clock
 		defer inst.flow.Close()
 		reveals = inbox
 		b.secrets = true
@@ -172,7 +187,11 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 
 	forced := make(chan struct{})
 	var forceOnce sync.Once
-	intr := &interrupter{cancel: cancel, force: func() {
+	interruptCancel := cancel
+	if p.OnInterrupt != nil {
+		interruptCancel = func() { p.OnInterrupt(); cancel() }
+	}
+	intr := &interrupter{cancel: interruptCancel, force: func() {
 		forceOnce.Do(func() {
 			close(forced)
 			// Run returns, with the terminal restored, before the exit. v2's Kill shuts the
@@ -189,7 +208,9 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	// A screen that stops accepting writes is a failed renderer. Bubble Tea discards its
 	// write errors, so they are caught here: the program is stopped and the run falls back.
 	var screenFailed atomic.Bool
-	screen := &latchWriter{w: p.Stdout, failed: func() {
+	screen := &latchWriter{w: p.Stdout, clock: clock, report: func(m frameShownMsg) {
+		go prog.Send(m) // from the renderer's write: never block it on the event loop
+	}, failed: func() {
 		if screenFailed.CompareAndSwap(false, true) {
 			go prog.Kill() // this write is the renderer's, which the shutdown waits for
 		}
@@ -212,6 +233,7 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 		if !p.Caps.ProgressOnly {
 			// The checks on screen run under the run's context, so an interrupt reaches them.
 			mo.pre = newPrerun(runCtx, p.Caps, p.Wizard, preflight, hub.Redact)
+			mo.pre.rv.clock = clock
 			mo.choose = choose
 			pre = mo.pre
 		}
@@ -310,7 +332,14 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	select {
 	case <-forced:
 		fmt.Fprintln(p.Stderr, "dcctl: interrupted again; exiting without waiting for the operation to stop")
-		p.exitProcess(1)
+		code := 1
+		if p.ForcedExitCode != nil {
+			planMu.Lock()
+			approved := confirmed
+			planMu.Unlock()
+			code = p.ForcedExitCode(approved)
+		}
+		p.exitProcess(code)
 		return errForced
 	default:
 	}
@@ -471,9 +500,15 @@ func (l *latchWriter) Write(p []byte) (n int, err error) {
 			l.failed()
 		}
 	}()
+	var start uint64
+	if l.clock != nil {
+		start = l.clock.drawn.Load()
+	}
 	n, err = l.w.Write(p)
 	if err != nil {
 		l.failed()
+	} else if l.report != nil {
+		l.clock.wrote(start, l.report)
 	}
 	return n, err
 }
@@ -481,6 +516,10 @@ func (l *latchWriter) Write(p []byte) (n int, err error) {
 type latchWriter struct {
 	w      io.Writer
 	failed func()
+	// clock and report, when set, tell a settling screen that a frame begun after its
+	// draw was written (frameClock.wrote).
+	clock  *frameClock
+	report func(frameShownMsg)
 }
 
 func isClosed(c chan struct{}) bool {

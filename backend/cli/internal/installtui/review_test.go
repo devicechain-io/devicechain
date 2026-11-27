@@ -5,6 +5,7 @@ package installtui
 
 import (
 	"context"
+	"math"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -131,8 +132,8 @@ func TestContinueLeadsToTheReviewNeverToTheRun(t *testing.T) {
 	toChoices(t, p)
 	focusOn(t, p, chContinue)
 	cmd, out := p.update(keyOf("enter"))
-	if out != stay || p.screen != screenReview || cmd == nil {
-		t.Fatalf("Continue gave %v on screen %v (settle %v)", out, p.screen, cmd != nil)
+	if out != stay || p.screen != screenReview {
+		t.Fatalf("Continue gave %v on screen %v", out, p.screen)
 	}
 	if p.rv.focus != reviewBack || p.approval != nil {
 		t.Fatalf("the review opened focused on %d, approval %v", p.rv.focus, p.approval)
@@ -186,7 +187,7 @@ func TestAQueuedKeyNeverApproves(t *testing.T) {
 	if p.screen != screenReview || p.rv.armed {
 		t.Fatal("the second visit is settled before its own settle")
 	}
-	p.update(checkMsg{settled: p.rv.gen - 1})
+	p.update(settleMsg{gen: p.rv.gen - 1, token: p.rv.token})
 	for _, k := range []string{"tab", "enter"} {
 		if _, out := p.update(keyOf(k)); out != stay {
 			t.Fatalf("a key after an earlier visit's settle gave %v", out)
@@ -491,5 +492,64 @@ func TestTheApprovalAnswersForTheResolvedClusterName(t *testing.T) {
 		Params: []installflow.Param{{Name: "cluster", Value: installflow.Text("devicechain")}}}
 	if !ok || !b.answeredByApproval(q) {
 		t.Fatalf("approved %q %v; the run's question for devicechain is not answered", c, ok)
+	}
+}
+
+// 🔴 THE INSTALL REVIEW (APPROVAL 1) HAS THE SAME PROTECTION: a stalled renderer and a
+// burst typed ahead never arm it. Nothing arms the review before a frame of it has been
+// written, and a key after that restarts the quiet period, so a timer that fires after a
+// typed-ahead key arms nothing.
+func TestATypedAheadBurstNeverArmsTheInstallReviewAfterAStall(t *testing.T) {
+	p, _ := reviewPrerun()
+	toChoices(t, p)
+	focusOn(t, p, chContinue)
+	var held []tea.Cmd
+	hold := func(cmd tea.Cmd, _ prerunOutcome) {
+		if cmd != nil {
+			held = append(held, cmd)
+		}
+	}
+	deliver := func(cmds []tea.Cmd) {
+		for _, c := range cmds {
+			for _, m := range messages(c) {
+				p.update(m)
+			}
+		}
+	}
+	key := func(names ...string) {
+		for _, n := range names {
+			hold(p.update(keyOf(n)))
+		}
+	}
+	hold(p.update(keyOf("enter"))) // Continue: the review, not yet written to the terminal
+	key("tab", "enter")            // typed during the stall
+	deliver(held)                  // whatever timer there is fires
+	held = nil
+	key("tab", "enter")
+	if p.rv.armed || p.approval != nil {
+		t.Fatalf("keys during the stall: armed %v, approval %v", p.rv.armed, p.approval)
+	}
+	p.render()
+	hold(p.update(frameShownMsg{seq: math.MaxUint64})) // the frame is written
+	first := held
+	held = nil
+	key("tab") // the burst, delivered after the frame
+	deliver(first)
+	if p.rv.armed {
+		t.Fatal("a quiet period a key interrupted armed the review")
+	}
+	key("tab", "enter")
+	if p.approval != nil {
+		t.Fatal("a burst typed ahead approved the install")
+	}
+	deliver(held[len(held)-1:]) // quiet at last
+	if !p.rv.armed || p.rv.focus != reviewBack {
+		t.Fatalf("after a quiet period: armed %v, focus %d", p.rv.armed, p.rv.focus)
+	}
+	if _, out := p.update(keyOf("tab")); out != stay {
+		t.Fatal("Tab acted")
+	}
+	if _, out := p.update(keyOf("enter")); out != proceed || p.approval == nil {
+		t.Fatalf("Approve after the quiet period: %v", out)
 	}
 }

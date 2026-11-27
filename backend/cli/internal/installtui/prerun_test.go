@@ -6,6 +6,7 @@ package installtui
 import (
 	"context"
 	"errors"
+	"math"
 	"regexp"
 	"strings"
 	"sync"
@@ -104,14 +105,25 @@ func newTestPrerun(w *Wizard, runner installflow.PreflightRunner) *prerun {
 	return newPrerun(context.Background(), preCaps(terminal.L4, 200, 40), w, runner, nil)
 }
 
-// pump runs a command and feeds what it produces back in, until the screen is idle.
+// pump runs a command and feeds what it produces back in, until the screen is idle. A
+// review on screen is drawn and its frame reported written, as the program's screen
+// writer would, so it settles once the keyboard is quiet.
 func pump(p *prerun, cmd tea.Cmd) {
-	for cmd != nil {
-		msg := cmd()
-		if msg == nil {
+	drawn := false
+	for {
+		for cmd != nil {
+			msg := cmd()
+			if msg == nil {
+				break
+			}
+			cmd, _ = p.update(msg)
+		}
+		if drawn || p.screen != screenReview || p.rv.shown || p.tooSmall() {
 			return
 		}
-		cmd, _ = p.update(msg)
+		drawn = true
+		p.render()
+		cmd, _ = p.update(frameShownMsg{seq: math.MaxUint64})
 	}
 }
 
