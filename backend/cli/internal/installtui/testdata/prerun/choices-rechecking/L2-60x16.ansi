@@ -1,0 +1,16 @@
+\x1b[1mDeviceChain - dcctl install - kind devicechain\x1b[m dcctl v1.12.0
+------------------------------------------------------------
+\x1b[1mCluster choices\x1b[m
+
+... 3 lines above
+> Footprint  ( ) Standard (*) \x1b[7mCompact\x1b[m (changed in this
+             installer)
+... 10 lines below
+
+working: the checks are running for this plan. Continue
+waits for them.
+
+  Continue (unavailable)    Advanced    Preflight    Exit
+------------------------------------------------------------
+up/down/Space choose - Tab next - Esc back - q exit
+Ctrl+C exit

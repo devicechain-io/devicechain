@@ -134,8 +134,8 @@ var preScenarios = []struct {
 	}},
 }
 
-func noReplan(bool) (installflow.Engine, installflow.PreflightRunner, error) {
-	return nil, nil, fmt.Errorf("not in a golden")
+func noReplan(Edits) (Replanned, error) {
+	return Replanned{}, fmt.Errorf("not in a golden")
 }
 
 var preLevels = []struct {

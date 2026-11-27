@@ -1,0 +1,40 @@
+╭─\x1b[1m DeviceChain · dcctl install · kind devicechain \x1b[m─────────────────────────────────────────────────────\x1b[38;5;109m dcctl v1.12.0 \x1b[m─╮
+│ \x1b[1mAdvanced settings\x1b[m                                                                                                    │
+│ Editors change the plan at once and re-run the checks. Every other flag from the command line is carried as given.   │
+│                                                                                                                      │
+│ \x1b[1mImages and developer build\x1b[m                                                                                           │
+│ › --registry \x1b[7mlocalhost:5000\x1b[m \x1b[38;5;109mcarried\x1b[m \x1b[38;5;109m(from the command line)\x1b[m                                                          │
+│                                                                                                                      │
+│ \x1b[1mMonitoring and alerts\x1b[m                                                                                                │
+│   Monitoring stack (--no-monitoring): on \x1b[38;5;109m(default)\x1b[m                                                                   │
+│   --alert-webhook configured (hidden) \x1b[38;5;109mcarried\x1b[m \x1b[38;5;109m(from the command line)\x1b[m                                                │
+│                                                                                                                      │
+│ \x1b[1mDatabase placement, connection budget and WAL\x1b[m                                                                        │
+│   --database-toleration dedicated=db:NoSchedule, spot=true:NoSchedule \x1b[38;5;109mcarried\x1b[m \x1b[38;5;109m(from the command line)\x1b[m                │
+│                                                                                                                      │
+│ \x1b[1mBackups and snapshots\x1b[m                                                                                                │
+│   TLS and database backups (--no-tls): on \x1b[38;5;109m(default)\x1b[m \x1b[38;5;109munavailable: Standard always installs cert-manager\x1b[m               │
+│                                                                                                                      │
+│ \x1b[1mRelational recovery\x1b[m                                                                                                  │
+│   \x1b[38;5;109mnothing set; the defaults apply\x1b[m                                                                                    │
+│                                                                                                                      │
+│ \x1b[1mGateway, MQTT and legacy ingress\x1b[m                                                                                     │
+│   \x1b[38;5;109mnothing set; the defaults apply\x1b[m                                                                                    │
+│                                                                                                                      │
+│ \x1b[1mEscape hatches\x1b[m                                                                                                       │
+│   --yes true \x1b[38;5;109mcarried\x1b[m \x1b[38;5;109m(from the command line)\x1b[m                                                                         │
+│                                                                                                                      │
+│ \x1b[38;5;78mPreflight: all checks passed.\x1b[m                                                                                        │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;5;109m↑/↓ setting · Esc close · Ctrl+C exit\x1b[m                                                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

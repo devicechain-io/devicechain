@@ -1,0 +1,20 @@
+\x1b[1mDeviceChain - dcctl install - kind devicechain\x1b[m dcctl v1.12.0
+------------------------------------------------------------
+\x1b[1mAdvanced settings\x1b[m
+Editors change the plan at once and re-run the checks. Every
+other flag from the command line is carried as given.
+... 2 lines above
+> --registry \x1b[7mlocalhost:5000\x1b[m carried (from the command line)
+
+\x1b[1mMonitoring and alerts\x1b[m
+  Monitoring stack (--no-monitoring): on (default)
+  --alert-webhook configured (hidden) carried (from the
+  command line)
+
+\x1b[1mDatabase placement, connection budget and WAL\x1b[m
+  --database-toleration dedicated=db:NoSchedule,
+... 14 lines below
+
+Preflight: all checks passed.
+------------------------------------------------------------
+up/down setting - Esc close - Ctrl+C exit

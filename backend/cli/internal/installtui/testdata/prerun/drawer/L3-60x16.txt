@@ -1,0 +1,16 @@
+DeviceChain · dcctl install · kind devicechain dcctl v1.12.0
+────────────────────────────────────────────────────────────
+Advanced settings
+Editors change the plan at once and re-run the checks. Every
+other flag from the command line is carried as given.
+… 2 lines above
+› --registry localhost:5000 carried (from the command line)
+
+Monitoring and alerts
+  Monitoring stack (--no-monitoring): on (default)
+  --alert-webhook configured (hidden) carried (from the
+… 18 lines below
+
+Preflight: all checks passed.
+────────────────────────────────────────────────────────────
+↑/↓ setting · Esc close · Ctrl+C exit

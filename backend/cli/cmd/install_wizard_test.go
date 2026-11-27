@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
+	"github.com/devicechain-io/dcctl/internal/installtui"
 )
 
 // The welcome screen states the request as the command line resolved it, naming the flag
@@ -59,13 +60,16 @@ func TestTheWizardReplansTheFootprintThroughTheResolver(t *testing.T) {
 		}
 		w := installWizardFor(provider, c, prepared)
 		for _, want := range []bool{true, false} {
-			e, pf, err := w.Replan(want)
+			r, err := w.Replan(installtui.Edits{Compact: &want})
 			if err != nil {
 				t.Fatalf("%v -> compact %v: %v", args, want, err)
 			}
-			ie, ok := e.(*bootstrap.InstallEngine)
-			if !ok || pf == nil {
-				t.Fatalf("%v: replan returned %T and preflight %v", args, e, pf)
+			ie, ok := r.Engine.(*bootstrap.InstallEngine)
+			if !ok || r.Preflight == nil {
+				t.Fatalf("%v: replan returned %T and preflight %v", args, r.Engine, r.Preflight)
+			}
+			if r.Facts.Compact != want || r.Facts.FootprintFlag != "" {
+				t.Errorf("%v -> compact %v: the screens are told %+v", args, want, r.Facts)
 			}
 			opts, err := ie.ResolveOptions()
 			if err != nil {

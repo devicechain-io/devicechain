@@ -1,0 +1,16 @@
+DeviceChain - dcctl install - kind devicechain dcctl v1.12.0
+------------------------------------------------------------
+Cluster choices
+
+  Target     (*) Managed local kind ( ) Existing context
+> Cluster    devicechain-lab_
+  Footprint  (*) Standard ( ) Compact
+  Topology   (*) Single ( ) HA
+
+Preflight: all checks passed.
+
+Name the local kind cluster
+
+
+------------------------------------------------------------
+Enter use - Backspace erase - Esc close - Ctrl+C exit

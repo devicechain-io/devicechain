@@ -1,0 +1,30 @@
++-\x1b[1m DeviceChain - dcctl install - kind devicechain \x1b[m--------------------------------- dcctl v1.12.0 -+
+| \x1b[1mAdvanced settings\x1b[m                                                                                |
+| Editors change the plan at once and re-run the checks. Every other flag from the command line is |
+| carried as given.                                                                                |
+| ... 3 lines above                                                                                |
+|                                                                                                  |
+| \x1b[1mMonitoring and alerts\x1b[m                                                                            |
+|   Monitoring stack (--no-monitoring): on (default)                                               |
+|   --alert-webhook configured (hidden) carried (from the command line)                            |
+|                                                                                                  |
+| \x1b[1mDatabase placement, connection budget and WAL\x1b[m                                                    |
+|   --database-toleration dedicated=db:NoSchedule, spot=true:NoSchedule carried (from the command  |
+|   line)                                                                                          |
+|                                                                                                  |
+| \x1b[1mBackups and snapshots\x1b[m                                                                            |
+| > TLS and database backups (--no-tls): \x1b[7mon\x1b[m (default)                                              |
+|                                                                                                  |
+| \x1b[1mRelational recovery\x1b[m                                                                              |
+|   nothing set; the defaults apply                                                                |
+|                                                                                                  |
+| \x1b[1mGateway, MQTT and legacy ingress\x1b[m                                                                 |
+|   nothing set; the defaults apply                                                                |
+|                                                                                                  |
+| \x1b[1mEscape hatches\x1b[m                                                                                   |
+|   --yes true carried (from the command line)                                                     |
+|                                                                                                  |
+| Preflight: all checks passed.                                                                    |
++--------------------------------------------------------------------------------------------------+
+| up/down setting - Space toggle - Esc close - Ctrl+C exit                                         |
++--------------------------------------------------------------------------------------------------+

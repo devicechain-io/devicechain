@@ -1,0 +1,30 @@
+╭─ DeviceChain · dcctl install · kind devicechain ───────────────────────────────── dcctl v1.12.0 ─╮
+│ Cluster choices                                                                                  │
+│                                                                                                  │
+│   Target     (*) Managed local kind ( ) Existing context                                         │
+│   Cluster    devicechain, created if it does not exist (Enter to rename)                         │
+│ › Footprint  ( ) Standard (*) Compact (changed in this installer)                                │
+│              Compact is the small-footprint preset for the cluster and every instance on it:     │
+│              smaller volumes, lowered JetStream/KV ceilings and scheduling requests, no          │
+│              monitoring stack, and, unless --no-tls=false, no cert-manager and therefore no      │
+│              database backups.                                                                   │
+│   Topology   (*) Single ( ) HA                                                                   │
+│                                                                                                  │
+│ Each change re-resolves the plan as the command line would, and runs the read-only checks again  │
+│ for it.                                                                                          │
+│                                                                                                  │
+│ working: the checks are running for this plan. Continue waits for them.                          │
+│                                                                                                  │
+│   Continue (unavailable)    Advanced    Preflight    Exit                                        │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ↑/↓/Space choose · Tab next · Esc back · q exit · Ctrl+C exit                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

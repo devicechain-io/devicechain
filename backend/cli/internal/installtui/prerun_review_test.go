@@ -35,8 +35,9 @@ func TestARendererFailureBeforeContinueStartsNothing(t *testing.T) {
 	for _, switchFirst := range []bool{false, true} {
 		t.Run(fmt.Sprintf("switched=%v", switchFirst), func(t *testing.T) {
 			var original, replanned atomic.Int32
-			h := wizardHarness(t, &Wizard{Facts: preFacts(), Replan: func(bool) (installflow.Engine, installflow.PreflightRunner, error) {
-				return countingEngine(&replanned), runnerOf(preCheck(installflow.CheckFail, "engine memory: 6.0Gi", capacityFix)), nil
+			h := wizardHarness(t, &Wizard{Facts: preFacts(), Replan: func(e Edits) (Replanned, error) {
+				return Replanned{Engine: countingEngine(&replanned),
+					Preflight: runnerOf(preCheck(installflow.CheckFail, "engine memory: 6.0Gi", capacityFix)), Facts: planFacts(e)}, nil
 			}})
 			h.p.Caps.ErrorTTY = true
 			out := &failingWriter{}
@@ -124,14 +125,20 @@ func TestTheActionsAreVisibleAtEveryAcceptedSize(t *testing.T) {
 					preFits(t, view, w, h)
 					var want []string
 					switch {
+					case p.ch.picker != nil, p.ch.drawer:
+						// An overlay: its only keys are in the footer.
+					case p.ch.naming != nil:
+						want = []string{nameTitle}
+					case p.screen == screenChoices:
+						want = []string{"Continue", "Advanced", "Preflight", "Exit"}
 					case p.screen == screenWelcome:
 						want = []string{"Continue", "Exit"}
 					case p.pf.confirm:
-						want = []string{"Switch to " + footprintWord(!p.pf.compact) + "?"}
+						want = []string{"Switch to " + footprintWord(!p.facts.Compact) + "?"}
 					default:
 						acts, _ := p.actions()
 						for _, a := range acts {
-							want = append(want, actionLabel(a, p.pf.compact))
+							want = append(want, actionLabel(a, p.facts.Compact))
 						}
 					}
 					for _, s := range want {
@@ -268,6 +275,8 @@ func TestTheScreenRunsTheBoundPreflightAndTheRunDoesNot(t *testing.T) {
 	h.press("\r")
 	waitFor(t, "the checks", h.out, screenShows(h.out, "all checks passed"))
 	h.press("\x1b[Z\r") // Shift+Tab to Continue
+	waitFor(t, "the cluster choices", h.out, screenShows(h.out, choicesTitle))
+	h.press("\r") // Continue, focused: no replan, so the choices are read-only
 	waitFor(t, "the verdict", h.out, screenShows(h.out, "Install succeeded."))
 	h.press("\r")
 	if err := h.result(done); err != nil {

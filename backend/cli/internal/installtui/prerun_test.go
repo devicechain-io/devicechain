@@ -79,6 +79,23 @@ func preCaps(level terminal.Level, w, h int) terminal.Capabilities {
 		Width: w, Height: h, SizeKnown: true}
 }
 
+// planFacts is preFacts with edits applied, as a command's replan would state them.
+func planFacts(e Edits) Facts { return planFactsFrom(preFacts(), e) }
+
+// planFactsFrom is base with edits applied.
+func planFactsFrom(f Facts, e Edits) Facts {
+	if e.Compact != nil {
+		f.Compact = *e.Compact
+	}
+	if e.HA != nil {
+		f.HA = *e.HA
+	}
+	if e.Target != nil {
+		f.KubeContext, f.Cluster = e.Target.KubeContext, e.Target.Cluster
+	}
+	return f
+}
+
 func newTestPrerun(w *Wizard, runner installflow.PreflightRunner) *prerun {
 	// Wide enough that no sentence the tests look for is wrapped.
 	return newPrerun(context.Background(), preCaps(terminal.L4, 200, 40), w, runner, nil)
@@ -109,6 +126,10 @@ func keyOf(name string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyUp}
 	case "down":
 		return tea.KeyPressMsg{Code: tea.KeyDown}
+	case "space":
+		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
+	case "backspace":
+		return tea.KeyPressMsg{Code: tea.KeyBackspace}
 	}
 	r := []rune(name)[0]
 	return tea.KeyPressMsg{Code: r, Text: name}
@@ -142,7 +163,7 @@ func tabTo(t *testing.T, p *prerun, a pfAction) {
 		}
 		press(p, "tab")
 	}
-	t.Fatalf("Tab never reached %s; actions %v", actionLabel(a, p.pf.compact), p.pf.action)
+	t.Fatalf("Tab never reached %s; actions %v", actionLabel(a, p.facts.Compact), p.pf.action)
 }
 
 func screenText(p *prerun) string { return preStrip(p.render()) }
@@ -198,7 +219,7 @@ func TestAFailReadsFailAndBlocksContinue(t *testing.T) {
 		p.pf.confirm = false
 		p.screen = screenPreflight
 		for _, k := range keys {
-			if out := press(p, k); out == proceed {
+			if out := press(p, k); out == proceed || p.screen == screenChoices {
 				t.Fatalf("keys %v proceeded past a failing check", keys)
 			}
 		}
@@ -239,8 +260,11 @@ func TestAWarningDoesNotBlockContinue(t *testing.T) {
 		t.Fatal("the checks finished with Continue focused")
 	}
 	tabTo(t, p, actContinue)
+	if out := press(p, "enter"); out != stay || p.screen != screenChoices {
+		t.Fatalf("Continue gave %v on screen %v, not the cluster choices", out, p.screen)
+	}
 	if out := press(p, "enter"); out != proceed {
-		t.Fatalf("Continue gave %v", out)
+		t.Fatalf("Continue on the cluster choices gave %v", out)
 	}
 }
 
@@ -333,9 +357,9 @@ func TestNothingIsChosenWhileTheChecksRun(t *testing.T) {
 		<-block
 		return installflow.PreflightResult{}, nil
 	})
-	p := newTestPrerun(&Wizard{Facts: preFacts(), Replan: func(bool) (installflow.Engine, installflow.PreflightRunner, error) {
+	p := newTestPrerun(&Wizard{Facts: preFacts(), Replan: func(Edits) (Replanned, error) {
 		t.Fatal("replanned while the checks ran")
-		return nil, nil, nil
+		return Replanned{}, nil
 	}}, r)
 	cmd, _ := p.update(keyOf("enter"))
 	cmd, _ = p.update(cmd()) // the first observation
@@ -422,9 +446,9 @@ func TestSwitchingTheFootprintReplansAndRechecks(t *testing.T) {
 		return installflow.Summary{}, nil
 	})
 	var asked []bool
-	p := newTestPrerun(&Wizard{Facts: preFacts(), Replan: func(c bool) (installflow.Engine, installflow.PreflightRunner, error) {
-		asked = append(asked, c)
-		return compactEngine, compactRunner, nil
+	p := newTestPrerun(&Wizard{Facts: preFacts(), Replan: func(e Edits) (Replanned, error) {
+		asked = append(asked, *e.Compact)
+		return Replanned{Engine: compactEngine, Preflight: compactRunner, Facts: planFacts(e)}, nil
 	}}, full)
 	toPreflight(t, p)
 	tabTo(t, p, actFootprint)
@@ -436,12 +460,12 @@ func TestSwitchingTheFootprintReplansAndRechecks(t *testing.T) {
 		t.Fatalf("the consequences are not shown before the switch:\n%s", screenText(p))
 	}
 	press(p, "esc")
-	if p.pf.confirm || len(asked) != 0 || p.pf.compact {
+	if p.pf.confirm || len(asked) != 0 || p.facts.Compact {
 		t.Fatal("Esc changed the plan")
 	}
 	press(p, "enter", "enter")
-	if len(asked) != 1 || !asked[0] || !p.pf.compact {
-		t.Fatalf("replan asked %v, compact %v", asked, p.pf.compact)
+	if len(asked) != 1 || !asked[0] || !p.facts.Compact {
+		t.Fatalf("replan asked %v, compact %v", asked, p.facts.Compact)
 	}
 	if compactRunner.calls.Load() != 1 || full.calls.Load() != 1 {
 		t.Fatalf("checks after the switch: full %d, compact %d", full.calls.Load(), compactRunner.calls.Load())
@@ -454,21 +478,21 @@ func TestSwitchingTheFootprintReplansAndRechecks(t *testing.T) {
 		t.Fatal("the switched plan is not what continues")
 	}
 	press(p, "esc")
-	if v := screenText(p); !strings.Contains(v, "Compact (changed on the preflight screen)") {
+	if v := screenText(p); !strings.Contains(v, "Compact (changed in this installer)") {
 		t.Errorf("the welcome screen does not show the changed footprint:\n%s", v)
 	}
 }
 
 func TestARefusedFootprintChangeKeepsThePlan(t *testing.T) {
 	full := runnerOf(preCheck(installflow.CheckFail, "engine memory: 6.0Gi", capacityFix))
-	p := newTestPrerun(&Wizard{Facts: preFacts(), Replan: func(bool) (installflow.Engine, installflow.PreflightRunner, error) {
-		return nil, nil, errors.New("--compact cannot be combined with --size base")
+	p := newTestPrerun(&Wizard{Facts: preFacts(), Replan: func(Edits) (Replanned, error) {
+		return Replanned{}, errors.New("--compact cannot be combined with --size base")
 	}}, full)
 	toPreflight(t, p)
 	tabTo(t, p, actFootprint)
 	press(p, "enter", "enter")
 	view := screenText(p)
-	if p.pf.compact || p.engine != nil || full.calls.Load() != 1 || !strings.Contains(view, "cannot be combined") {
+	if p.facts.Compact || p.engine != nil || full.calls.Load() != 1 || !strings.Contains(view, "cannot be combined") {
 		t.Fatalf("a refused change:\n%s", view)
 	}
 	if p.canContinue() {
@@ -545,8 +569,8 @@ func TestTheRunStartsWithThePlanTheScreensSettled(t *testing.T) {
 		enginePreflight.Store(compactRunner.calls.Load() - before)
 		return succeeded, endRun(rt)
 	})
-	h := wizardHarness(t, &Wizard{Facts: preFacts(), Replan: func(bool) (installflow.Engine, installflow.PreflightRunner, error) {
-		return compactEngine, compactRunner, nil
+	h := wizardHarness(t, &Wizard{Facts: preFacts(), Replan: func(e Edits) (Replanned, error) {
+		return Replanned{Engine: compactEngine, Preflight: compactRunner, Facts: planFacts(e)}, nil
 	}})
 	done := h.runWith(engineFunc(func(context.Context, installflow.Runtime) (installflow.Summary, error) {
 		original.Store(true)
@@ -563,6 +587,11 @@ func TestTheRunStartsWithThePlanTheScreensSettled(t *testing.T) {
 	h.press("\r")
 	waitFor(t, "the compact tally", h.out, screenShows(h.out, "ready, with 1 warning"))
 	h.press("\x1b[Z\r") // Shift+Tab from Recheck back to Continue
+	waitFor(t, "the cluster choices", h.out, screenShows(h.out, choicesTitle))
+	if started.Load() || original.Load() {
+		t.Fatal("the run started before the cluster choices were confirmed")
+	}
+	h.press("\t\t\t\t\r") // from the target field to Continue
 	waitFor(t, "the verdict", h.out, screenShows(h.out, "Install succeeded."))
 	h.press("\r")
 	if err := h.result(done); err != nil {

@@ -1,0 +1,16 @@
+\x1b[1mDeviceChain · dcctl install · kind devicechain\x1b[m \x1b[38;5;109mdcctl v1.12.0\x1b[m
+────────────────────────────────────────────────────────────
+\x1b[1mCluster choices\x1b[m
+
+… 4 lines above
+› \x1b[38;5;109mTopology  \x1b[m ( ) Single (*) \x1b[7mHA\x1b[m (changed in this installer)
+
+… 2 lines below
+
+\x1b[38;5;204mPreflight: 2 failures, 1 warning. Continue is unavailable\x1b[m
+\x1b[38;5;204mwhile any check fails. Fix each failure, then Recheck.\x1b[m
+
+  \x1b[38;5;109mContinue (unavailable)\x1b[m    Advanced    Preflight    Exit
+────────────────────────────────────────────────────────────
+\x1b[38;5;109m↑/↓/Space choose · Tab next · Esc back · q exit\x1b[m
+\x1b[38;5;109mCtrl+C exit\x1b[m

@@ -1,0 +1,40 @@
+╭─\x1b[1m DeviceChain · dcctl install · kind devicechain \x1b[m─────────────────────────────────────────────────────\x1b[38;5;109m dcctl v1.12.0 \x1b[m─╮
+│ \x1b[1mCluster choices\x1b[m                                                                                                      │
+│                                                                                                                      │
+│   \x1b[38;5;109mTarget    \x1b[m (*) Managed local kind ( ) Existing context                                                             │
+│   \x1b[38;5;109mCluster   \x1b[m devicechain, created if it does not exist\x1b[38;5;109m (Enter to rename)\x1b[m                                             │
+│ › \x1b[38;5;109mFootprint \x1b[m ( ) Standard (*) \x1b[7mCompact\x1b[m (changed in this installer)                                                    │
+│              \x1b[38;5;109mCompact is the small-footprint preset for the cluster and every instance on it: smaller volumes,\x1b[m        │
+│              \x1b[38;5;109mlowered JetStream/KV ceilings and scheduling requests, no monitoring stack, and, unless --no-tls=false,\x1b[m │
+│              \x1b[38;5;109mno cert-manager and therefore no database backups.\x1b[m                                                      │
+│   \x1b[38;5;109mTopology  \x1b[m (*) Single ( ) HA                                                                                       │
+│                                                                                                                      │
+│ \x1b[38;5;109mEach change re-resolves the plan as the command line would, and runs the read-only checks again for it.\x1b[m              │
+│                                                                                                                      │
+│ \x1b[38;5;109mworking: the checks are running for this plan. Continue waits for them.\x1b[m                                              │
+│                                                                                                                      │
+│   \x1b[38;5;109mContinue (unavailable)\x1b[m    Advanced    Preflight    Exit                                                            │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;5;109m↑/↓/Space choose · Tab next · Esc back · q exit · Ctrl+C exit\x1b[m                                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

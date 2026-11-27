@@ -307,3 +307,32 @@ func sliceValue(fs *pflag.FlagSet, name string) ([]string, error) {
 	}
 	return v.GetSlice(), nil
 }
+
+// Flag is one install flag as the choices hold it: its name, without the dashes, and
+// its values, in the order they were given. Repeated is a flag that may be given more
+// than once.
+type Flag struct {
+	Name     string
+	Values   []string
+	Repeated bool
+	// Given is whether the command line, or a screen, set it explicitly.
+	Given bool
+}
+
+// Flags is every install choice flag, in the same stable order the equivalent command
+// uses. A screen reads it to show a flag it has no editor for, so nothing is dropped.
+// Its values include credentials: a caller draws a value only when SecretValue says it
+// is not one.
+func (c Choices) Flags() []Flag {
+	fv := c.flagValues()
+	out := make([]Flag, len(fv))
+	for i, f := range fv {
+		out[i] = Flag{Name: f.name, Values: append([]string(nil), f.values...), Repeated: f.slice, Given: c.Given.Has(f.name)}
+	}
+	return out
+}
+
+// SecretValue reports whether a flag's value must never be shown: a webhook URL, or any
+// URL carrying userinfo, a query or a fragment. The equivalent command replaces exactly
+// these with a placeholder.
+func SecretValue(name, value string) bool { return secretFlagValue(name, value) }
