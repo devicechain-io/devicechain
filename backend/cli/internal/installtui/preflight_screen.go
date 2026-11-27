@@ -307,7 +307,7 @@ func (p *prerun) applyEdit(change func(*Edits)) tea.Cmd {
 	}
 	p.refusal = ""
 	p.edits, p.facts, p.settings = next, r.Facts, r.Settings
-	p.engine, p.runner = r.Engine, r.Preflight
+	p.engine, p.runner, p.advisory = r.Engine, r.Preflight, r.Advisory
 	p.review, p.command = r.Review, r.Command
 	// 🔴 AND IT HAS NO APPROVAL. Whatever was reviewed or approved was another plan: the
 	// review starts again, and settles again, for this one.
@@ -345,8 +345,11 @@ func (p *prerun) startChecks() tea.Cmd {
 	s.stop = stop
 	p.checks.Add(1)
 	// The screen runs the bound form, under its own context: a replaced plan's
-	// checks, the doctor's host commands included, end when this run is replaced.
-	return runChecks(ctx, s.gen, screenRunner(p.runner), p.checks.Done)
+	// checks, the doctor's host commands included, end when this run is replaced. The
+	// plan's advisory checks run on the same goroutine, after the checks, under the
+	// same context: a Recheck or a replan cancels them too, and the same join
+	// (p.checks) waits for them.
+	return runChecks(ctx, s.gen, screenRunner(p.runner), screenRunner(p.advisory), p.checks.Done)
 }
 
 // contextBound is a preflight that can also run with its commands bound to the
@@ -369,7 +372,7 @@ func screenRunner(r installflow.PreflightRunner) installflow.PreflightRunner {
 // runChecks runs the preflight on its own goroutine and streams what it observes back
 // to the program, one message at a time. The checks are the doctor's, read-only; the
 // screen only draws what they say.
-func runChecks(ctx context.Context, gen int, runner installflow.PreflightRunner, done func()) tea.Cmd {
+func runChecks(ctx context.Context, gen int, runner, advisory installflow.PreflightRunner, done func()) tea.Cmd {
 	ch := make(chan checkMsg, 16)
 	go func() {
 		defer done()
@@ -392,9 +395,46 @@ func runChecks(ctx context.Context, gen int, runner installflow.PreflightRunner,
 				send(checkMsg{gen: gen, obs: &o})
 			})
 		}()
+		if err == nil && advisory != nil && ctx.Err() == nil {
+			runAdvisory(ctx, advisory, func(o installflow.PreflightObservation) {
+				send(checkMsg{gen: gen, obs: &o})
+			})
+		}
 		send(checkMsg{gen: gen, done: true, res: res, err: err})
 	}()
 	return waitCheck(ch)
+}
+
+// advisoryStopped is the one row an advisory run that errored or panicked leaves.
+const advisoryStopped = "the advisory cluster checks could not finish; they are advice and do not block the install"
+
+// runAdvisory runs the advisory diagnostics after the checks. 🔴 NOTHING IT REPORTS CAN
+// BLOCK CONTINUE: a FAIL is shown as WARN, its result and its tally are dropped (the
+// doctor's are the run's), and an error or a panic is one UNKNOWN row, never the
+// screen's error, which would block Continue.
+func runAdvisory(ctx context.Context, r installflow.PreflightRunner, observe func(installflow.PreflightObservation)) {
+	stopped := false
+	func() {
+		defer func() {
+			if recover() != nil {
+				stopped = true
+			}
+		}()
+		_, err := r.RunPreflight(ctx, func(o installflow.PreflightObservation) {
+			switch {
+			case o.Observation == installflow.ObserveSummary:
+				return
+			case o.Observation == installflow.ObserveCheck && o.Verdict == installflow.CheckFail:
+				o.Verdict = installflow.CheckWarn
+			}
+			observe(o)
+		})
+		stopped = stopped || err != nil
+	}()
+	if stopped && ctx.Err() == nil {
+		observe(installflow.PreflightObservation{Observation: installflow.ObserveCheck, Verdict: installflow.CheckUnknown,
+			Text: installflow.Text(advisoryStopped), Fix: installflow.Text("Recheck to ask again")})
+	}
 }
 
 func waitCheck(ch <-chan checkMsg) tea.Cmd {

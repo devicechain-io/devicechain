@@ -134,6 +134,7 @@ func installWizardFor(provider bootstrap.Provider, choices installchoice.Choices
 		Command:  wizardCommand(prepared, shell),
 		Shell:    shell,
 		Contexts: kubeContextNames,
+		Advisory: advisoryFor(prepared),
 		Replan: func(ed installtui.Edits) (installtui.Replanned, error) {
 			c, err := applyWizardEdits(choices, ed)
 			if err != nil {
@@ -144,7 +145,7 @@ func installWizardFor(provider bootstrap.Provider, choices installchoice.Choices
 				return installtui.Replanned{}, err
 			}
 			e, preflight := installRunFor(provider, choices.Provider, p)
-			return installtui.Replanned{Engine: e, Preflight: preflight,
+			return installtui.Replanned{Engine: e, Preflight: preflight, Advisory: advisoryFor(p),
 				Facts: wizardFacts(choices, p, ed), Settings: wizardSettings(choices, p.Effective, ed),
 				Review: wizardReview(p), Command: wizardCommand(p, shell)}, nil
 		},
@@ -493,6 +494,24 @@ func wizardSettings(orig, eff installchoice.Choices, ed installtui.Edits) []inst
 	}
 	return out
 }
+
+// advisoryFor is a plan's advisory checks: for an existing cluster, the questions only
+// the preflight screen asks it, which never fail and never run outside that screen.
+// None for a local kind cluster, or under --skip-preflight. Every plan gets its own, so
+// a change of target on screen asks the new cluster, never the old one.
+func advisoryFor(p installchoice.Prepared) installflow.PreflightRunner {
+	eff := p.Effective
+	if eff.KubeContext == "" || eff.SkipPreflight {
+		return nil
+	}
+	opts := p.BootstrapOptions()
+	return cloudDiagnosticsRunner(cloudTarget{KubeContext: eff.KubeContext,
+		ImageRegistry: opts.ImageRegistry, Build: opts.BuildImages}, cloudProbesFor)
+}
+
+// cloudProbesFor builds the advisory diagnostics' windows onto a target. Tests replace it
+// with fakes; production never does.
+var cloudProbesFor = liveCloudProbes
 
 func init() {
 	installCmd.Flags().StringVar(&installUI, "ui", string(terminal.Plain), installUIUsage)

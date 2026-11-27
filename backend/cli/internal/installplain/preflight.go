@@ -24,6 +24,9 @@ const (
 	SectionDisk              installflow.MessageCode = "preflight.disk"
 	SectionWSL               installflow.MessageCode = "preflight.wsl2"
 	SectionSystem            installflow.MessageCode = "preflight.system"
+	// SectionCloud is the advisory diagnostics of an existing cluster. Only the
+	// terminal UI's preflight screen runs them; the plain report never has one.
+	SectionCloud installflow.MessageCode = "preflight.cloud"
 )
 
 type sectionHeading struct{ emoji, title string }
@@ -38,6 +41,7 @@ var sectionHeadings = map[installflow.MessageCode]sectionHeading{
 	SectionDisk:              {"💾", "Disk"},
 	SectionWSL:               {"🪟", "WSL2"},
 	SectionSystem:            {"🖥️", "System"},
+	SectionCloud:             {"☁️", "Existing cluster (advisory)"},
 }
 
 // SectionTitle is the words for a section code, the same words the plain report

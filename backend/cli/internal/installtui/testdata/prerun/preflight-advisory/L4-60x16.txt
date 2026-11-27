@@ -1,0 +1,16 @@
+DeviceChain · dcctl install · context prod     dcctl v1.12.0
+────────────────────────────────────────────────────────────
+Preflight · read-only checks · footprint Standard
+
+… 15 lines above
+› WARN        may create secrets: not permitted
+              fix: installing the shared prerequisites needs
+… 9 lines below
+
+Preflight: ready, with 1 warning and 1 check not determined.
+Review them before you continue.
+
+  Continue  › Recheck    Switch to Compact    Exit
+────────────────────────────────────────────────────────────
+↑/↓ check · Tab action · Enter select · Esc back · q exit
+Ctrl+C exit
