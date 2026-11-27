@@ -581,6 +581,7 @@ CREATE INDEX ix_entity_attributes_facet_value ON "device-management".entity_attr
 CREATE INDEX ix_entity_attributes_list_order ON "device-management".entity_attributes USING btree (tenant_id, created_at DESC, id DESC) WHERE (deleted_at IS NULL);
 CREATE INDEX ix_entity_relationships_list_order ON "device-management".entity_relationships USING btree (tenant_id, created_at DESC, token) WHERE (deleted_at IS NULL);
 CREATE INDEX ix_fleet_operation_lines_tenant_awaiting ON "device-management".fleet_operation_lines USING btree (tenant_id, id) WHERE (((posting)::text = 'POSTED'::text) AND (evidence_revision IS NULL) AND (redacted_at IS NULL));
+CREATE INDEX ix_fleet_operation_lines_unsettled ON "device-management".fleet_operation_lines USING btree (operation_id) WHERE (((posting)::text = 'POSTED'::text) AND (evidence_revision IS NULL) AND (redacted_at IS NULL) AND (settlement IS NULL));
 CREATE INDEX ix_geo_fences_list_order ON "device-management".geo_fences USING btree (tenant_id, created_at DESC, token) WHERE (deleted_at IS NULL);
 CREATE INDEX ix_profile_decoder_healths_profile_window ON "device-management".profile_decoder_healths USING btree (tenant_id, device_profile_id, window_start);
 CREATE INDEX ix_profile_decoder_healths_window_start ON "device-management".profile_decoder_healths USING btree (window_start);
