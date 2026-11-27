@@ -69,7 +69,9 @@ func (b *BackupDestination) Configured() bool { return b != nil && b.EndpointURL
 // nobody has wired to a pager yet.
 //
 // An empty path returns (nil, nil): no external destination, use the in-cluster one.
-func ParseBackupDestination(path string) (*BackupDestination, error) {
+// Each optional warning sink receives deprecations for an accepted destination;
+// callers can defer presenting them until the install's event stream starts.
+func ParseBackupDestination(path string, warn ...func(string)) (*BackupDestination, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
@@ -128,6 +130,17 @@ func ParseBackupDestination(path string) (*BackupDestination, error) {
 	// OpenTofu variable validation that used to is being retired with the variable.
 	if err := validateObjectStoreSecret(d.SecretAccessKey); err != nil {
 		return nil, fmt.Errorf("secretAccessKey: %w", err)
+	}
+	if u.User != nil || strings.ContainsAny(d.EndpointURL, "?#") {
+		warning := fmt.Sprintf("credentials in backup endpointUrl %q (userinfo, query or fragment) are deprecated and will be refused in the next major release. "+
+			"Use a credential-free endpointUrl and the accessKeyId and secretAccessKey fields in --backup-credentials-file; "+
+			"the endpoint is stored in the dc-infra/dc-install ConfigMap for later bootstrap and destroy operations.",
+			installflow.RedactURL(d.EndpointURL))
+		for _, sink := range warn {
+			if sink != nil {
+				sink(warning)
+			}
+		}
 	}
 	return &d, nil
 }
