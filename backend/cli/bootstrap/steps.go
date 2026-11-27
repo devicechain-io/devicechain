@@ -20,6 +20,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/secretenv"
 	"github.com/devicechain-io/dcctl/operator"
 	"github.com/fatih/color"
 	corev1 "k8s.io/api/core/v1"
@@ -642,7 +643,7 @@ func koBuild(ctx context.Context, root string, st *State, moduleDir, imageName s
 	cmd := exec.CommandContext(ctx, "ko", "build", "--bare",
 		"--tags", st.ImageVersion, "--platform", "linux/amd64", "./")
 	cmd.Dir = moduleDir
-	cmd.Env = append(append(os.Environ(),
+	cmd.Env = append(append(secretenv.Scrub(os.Environ()),
 		"KO_DOCKER_REPO="+imageName,
 		"KO_CONFIG_PATH="+filepath.Join(root, ".ko.yaml")), extraEnv...)
 	if out, err := cmd.CombinedOutput(); err != nil {

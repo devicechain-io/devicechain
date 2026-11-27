@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/secrets/escrow"
+	"github.com/devicechain-io/dcctl/internal/secretenv"
 	"github.com/fatih/color"
 )
 
@@ -273,10 +274,7 @@ func escrowPassphraseWithoutAsking(file string) string {
 		// nothing when typed by hand later.
 		return strings.TrimRight(string(raw), "\r\n")
 	}
-	if pass, ok := os.LookupEnv(EscrowPassphraseEnv); ok {
-		// Unset immediately, for the reason the bootstrap path does: what follows
-		// inherits this environment.
-		os.Unsetenv(EscrowPassphraseEnv)
+	if pass, ok := secretenv.LookupEscrowPassphrase(); ok {
 		return pass
 	}
 	return ""

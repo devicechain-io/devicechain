@@ -21,6 +21,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/secrets/escrow"
 	"github.com/devicechain-io/dcctl/dcdir"
 	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/secretenv"
 	"github.com/fatih/color"
 	"golang.org/x/term"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -51,8 +52,9 @@ import (
 // one-word answer for a throwaway, and --dev implies it.
 const (
 	// EscrowPassphraseEnv supplies the passphrase to an automated bootstrap that has
-	// no terminal to prompt at.
-	EscrowPassphraseEnv = "DCCTL_ESCROW_PASSPHRASE"
+	// no terminal to prompt at. dcctl takes it out of its own environment at process
+	// start (secretenv.Capture), so no child it starts inherits it.
+	EscrowPassphraseEnv = secretenv.EscrowPassphrase
 
 	// EscrowFileExt is the artifact suffix. destroy keys on it to decide what to
 	// spare, so it is a constant rather than a literal in two places.
@@ -451,12 +453,10 @@ func resolveEscrowPassphrase(f EscrowFlags, q escrowQuestion) (string, error) {
 	// LookupEnv, not Getenv: an empty DCCTL_ESCROW_PASSPHRASE is a broken pipeline
 	// (an unset CI secret expands to ""), not a request for an empty passphrase, and
 	// falling through to a prompt would hang a job instead of failing it.
-	if pass, ok := os.LookupEnv(EscrowPassphraseEnv); ok {
-		// Unset immediately. Bootstrap goes on to exec docker, kind, ko and tofu, all
-		// of which inherit the environment, and tofu dumps its whole environment under
-		// TF_LOG=trace. The passphrase has been read; there is no reason for it to stay
-		// reachable by every child process for the next ten minutes.
-		os.Unsetenv(EscrowPassphraseEnv)
+	// Taken from memory, not the environment: the process's entry point moved it there
+	// before any command ran, so docker, kind, ko and tofu (which dumps its whole
+	// environment under TF_LOG=trace) never inherit it. See secretenv.
+	if pass, ok := secretenv.LookupEscrowPassphrase(); ok {
 		if pass == "" {
 			return "", fmt.Errorf("%s is set but empty; unset it to use another source, or give it a value", EscrowPassphraseEnv)
 		}

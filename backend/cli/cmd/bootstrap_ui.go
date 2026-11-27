@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dcctl/internal/installplain"
 	"github.com/devicechain-io/dcctl/internal/installtui"
 	"github.com/devicechain-io/dcctl/internal/installtui/terminal"
+	"github.com/devicechain-io/dcctl/internal/secretenv"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -171,7 +172,7 @@ func escrowPassphraseSource() installtui.PassphraseSource {
 	if bootstrapEscrowPassFile != "" {
 		return installtui.PassphraseFromFile
 	}
-	if _, ok := os.LookupEnv(bootstrap.EscrowPassphraseEnv); ok {
+	if secretenv.EscrowPassphraseGiven() {
 		return installtui.PassphraseFromEnv
 	}
 	return installtui.PassphraseFromPerson
