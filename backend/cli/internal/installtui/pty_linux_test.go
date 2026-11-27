@@ -357,7 +357,7 @@ func TestPTYChild(t *testing.T) {
 	}
 	if scenario == "nofds" {
 		// Leave no descriptor free, so the program's input reader cannot create its
-		// epoll instance and Run returns early. The runtime's own poller is started first
+		// epoll instance and the program is not run. The runtime's own poller is started first
 		// (a deadline on a pipe needs it), so only the program's reader goes short.
 		pr, pw, err := os.Pipe()
 		if err != nil || pr.SetReadDeadline(time.Now()) != nil {

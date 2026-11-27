@@ -23,6 +23,7 @@ require (
 	github.com/hashicorp/terraform-json v0.29.0
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/klauspost/compress v1.20.5
+	github.com/muesli/cancelreader v0.2.2
 	github.com/nats-io/nats-server/v2 v2.15.3
 	github.com/nats-io/nats.go v1.56.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
@@ -149,7 +150,6 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/monochromegane/go-gitignore v0.0.0-20200626010858-205db1a8cc00 // indirect
-	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/jwt/v2 v2.8.3 // indirect
 	github.com/nats-io/nkeys v0.4.17 // indirect
