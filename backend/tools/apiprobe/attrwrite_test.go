@@ -18,7 +18,7 @@ import (
 
 // attrWriteFixture runs the REAL attrWriteTo, through the real userclient session, against a fake
 // device-management whose answer to each write is decided by answer(n) for the n-th write request.
-func attrWriteFixture(t *testing.T, answer func(n int32, w http.ResponseWriter), count string) (out string, writes int32, err error) {
+func attrWriteFixture(t *testing.T, answer func(n int32, w http.ResponseWriter), count string, extra ...string) (out string, writes int32, err error) {
 	t.Helper()
 	// Keep the real bound, shrink the wait.
 	oldMin, oldMax := attrBusyBackoffMin, attrBusyBackoffMax
@@ -46,10 +46,10 @@ func attrWriteFixture(t *testing.T, answer func(n int32, w http.ResponseWriter),
 		t.Fatal(werr)
 	}
 	var buf bytes.Buffer
-	err = attrWriteTo(context.Background(), []string{
+	err = attrWriteTo(context.Background(), append([]string{
 		"--receipt", path, "--server", strings.TrimPrefix(srv.URL, "http://"), "--scheme", "http",
 		"--url", srv.URL + "/dm/graphql", "--count", count,
-	}, &buf)
+	}, extra...), &buf)
 	return buf.String(), n.Load(), err
 }
 
@@ -104,5 +104,38 @@ func TestAttrWriteCleanRunReportsNoRetries(t *testing.T) {
 	out, writes, err := attrWriteFixture(t, func(_ int32, w http.ResponseWriter) { writeOK(w) }, "3")
 	if err != nil || writes != 3 || !strings.Contains(out, "(0 ATTRIBUTE_WRITE_BUSY retries)") {
 		t.Fatalf("err=%v writes=%d out=%q", err, writes, out)
+	}
+}
+
+// --delete passes when the platform answers that it deleted the row.
+func TestAttrWriteDeletePassesWhenTheRowWasThere(t *testing.T) {
+	out, writes, err := attrWriteFixture(t, func(_ int32, w http.ResponseWriter) {
+		_, _ = fmt.Fprint(w, `{"data":{"deleteEntityAttribute":true}}`)
+	}, "1", "--key", "drill-old-delete", "--delete")
+	if err != nil || writes != 1 || !strings.Contains(out, `1 delete(s) of "drill-old-delete"`) {
+		t.Fatalf("err=%v writes=%d out=%q", err, writes, out)
+	}
+}
+
+// THE CONTROL for the one above: a delete that found nothing is MISSING, never a pass, and so is a
+// delete answered as though it were a write.
+func TestAttrWriteDeleteOfNothingFails(t *testing.T) {
+	_, _, err := attrWriteFixture(t, func(_ int32, w http.ResponseWriter) {
+		_, _ = fmt.Fprint(w, `{"data":{"deleteEntityAttribute":false}}`)
+	}, "1", "--key", "drill-old-delete", "--delete")
+	assertCode(t, err, exitMissing)
+	_, _, err = attrWriteFixture(t, func(_ int32, w http.ResponseWriter) { writeOK(w) }, "1", "--key", "drill-old-delete", "--delete")
+	assertCode(t, err, exitShape)
+}
+
+// --key writes that key, and an answer naming another key is a SHAPE failure.
+func TestAttrWriteKeyIsTheKeyAnswered(t *testing.T) {
+	_, _, err := attrWriteFixture(t, func(_ int32, w http.ResponseWriter) { writeOK(w) }, "1", "--key", "another-key")
+	assertCode(t, err, exitShape)
+	_, _, err = attrWriteFixture(t, func(_ int32, w http.ResponseWriter) {
+		_, _ = fmt.Fprint(w, `{"data":{"setEntityAttribute":{"attrKey":"another-key"}}}`)
+	}, "1", "--key", "another-key")
+	if err != nil {
+		t.Fatalf("a write of --key answered with that key must pass: %v", err)
 	}
 }

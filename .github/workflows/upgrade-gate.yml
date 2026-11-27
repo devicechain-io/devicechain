@@ -663,10 +663,19 @@ jobs:
       # it. The step reads the guard ENFORCED through the API, has a baseline pod write 40 attributes
       # under it, and shows the negative control: an unmarked write is refused, the same write marked
       # is accepted, and the unmarked write is accepted with the trigger off (rolled back), so the
-      # refusal is the trigger's. The pure halves are covered by the rig's self-test.
+      # refusal is the trigger's. It then has the baseline pod delete an attribute, and a baseline
+      # user-management (the only one running) purge a throwaway tenant, each beside an unmarked
+      # control the trigger refuses. The pure halves are covered by the rig's self-test.
       - name: The attribute guard must pass a baseline pod's writes and refuse an unmarked one
         if: env.DC_UPGRADE_MODE == 'data'
         run: hack/upgrade-rig.sh attrguard
+
+      # A STRING metric: declared, a text reading posted over the HTTP ingress and read back through
+      # latestMeasurements and measurementEvents, and an aggregate over it refused. Its control is a
+      # probe that reads the wrong field, which must fail with MISMATCH.
+      - name: A text reading must be declared, stored and read back on the upgraded instance
+        if: env.DC_UPGRADE_MODE == 'data'
+        run: hack/upgrade-rig.sh stringmetric
 
       # A 2,000-device bulk change runs through an upgraded pod while a baseline device-management
       # pod writes the same devices, deletes two of them and restarts. Every baseline write must be
