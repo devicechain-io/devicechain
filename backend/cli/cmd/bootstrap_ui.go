@@ -227,7 +227,7 @@ func (r *instanceFactsRecorder) observe(st *bootstrap.State, runErr error) {
 		return
 	}
 	f := installtui.InstanceFacts{KubeContext: st.KubeContext, Account: auth.DefaultSuperuserEmail,
-		EscrowPath: st.Escrow.Path, EscrowWritten: runErr == nil && st.Escrow.Path != ""}
+		EscrowPath: st.Escrow.Path, EscrowOutcome: receiptEscrowOutcome(st, runErr)}
 	if host := st.Values["ingressHost"]; host != "" {
 		f.ConsoleURL = bootstrap.ConsoleURL(st.KubeContext, st.Values["scheme"], host)
 	}

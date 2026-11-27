@@ -4,6 +4,7 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -961,7 +962,12 @@ func parseDeployedConfig(raw []byte, instanceId, secretName string) (*config.Ins
 //
 // Three cases, and each says something different:
 //   - an artifact that matches the running key: nothing to do, and saying so is the
-//     "is my escrow current?" check happening for free on every re-run.
+//     "is my escrow current?" check happening on every re-run. 🔴 The header's
+//     fingerprint is only a CLAIM: it is cleartext, outside what the passphrase
+//     protects, so a truncated or altered ciphertext keeps it intact. "verified" is
+//     said only of an artifact OPENED with this run's passphrase that gave back the
+//     running key; one that does not open is refused, and with no passphrase in hand
+//     it is "present, not opened", never verified.
 //   - an artifact that does NOT match: refuse. It is an ORPHAN — it protects a key
 //     this instance no longer uses — and quietly leaving it would mean the operator
 //     holds a file they believe is their recovery path and is not.
@@ -977,7 +983,7 @@ func ReconcileEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.T
 			if err := WriteEscrow(plan, rootKeyBase64, instance, now); err != nil {
 				return "", err
 			}
-			return "written", nil
+			return string(escrowWritten), nil
 		}
 		return "", fmt.Errorf("reading the existing escrow artifact: %w", err)
 	}
@@ -998,7 +1004,33 @@ func ReconcileEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.T
 			"  `dcctl secrets escrow show %s` that it is not the only copy of a key you still need",
 			plan.Path, instance, plan.Path)
 	}
-	return "verified", nil
+	if plan.Passphrase == "" {
+		return string(escrowPresentNotOpened), nil
+	}
+	if err := openMatchesKey(art, plan.Passphrase, key); err != nil {
+		return "", fmt.Errorf("the escrow artifact at %s names the root key instance %q is running, but %w.\n"+
+			"  Its header matches; what it protects could not be confirmed, so as it stands it may recover\n"+
+			"  nothing. Re-run with the passphrase it was written with, or check it with\n"+
+			"  `dcctl secrets escrow verify %s --instance %s`; if it is damaged, move it aside to have a\n"+
+			"  correct one written",
+			plan.Path, instance, err, plan.Path, instance)
+	}
+	return string(escrowVerified), nil
+}
+
+// openMatchesKey opens art with passphrase and reports whether it gives back key. The
+// header's fingerprint (Artifact.Matches) needs no passphrase and is never proof on its
+// own: it is cleartext, so damage to the ciphertext leaves it intact.
+func openMatchesKey(art *escrow.Artifact, passphrase string, key []byte) error {
+	opened, err := escrow.Open(art, passphrase)
+	if err != nil {
+		return fmt.Errorf("it does not open with the passphrase given (%v)", err)
+	}
+	defer zeroBytes(opened)
+	if !bytes.Equal(opened, key) {
+		return errors.New("it does not open to that key")
+	}
+	return nil
 }
 
 // DeployedRootKey reads the instance root key out of the config Secret the pods

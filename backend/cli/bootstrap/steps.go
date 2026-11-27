@@ -480,16 +480,19 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		case escrowedKey != "":
 			// Already on disk and already proven to open this key; writing would only
 			// collide with it.
+			st.EscrowOutcome = string(escrowVerified)
 		case reused:
 			outcome, recErr := ReconcileEscrow(st.Escrow, secretsRootKey, st.Instance, time.Now().UTC())
 			if recErr != nil {
 				return out(ctx).fail("reconciling the root-key escrow", recErr)
 			}
+			st.EscrowOutcome = outcome
 			notes = append(notes, "root-key escrow "+outcome)
 		default:
 			if err := WriteEscrow(st.Escrow, secretsRootKey, st.Instance, time.Now().UTC()); err != nil {
 				return out(ctx).fail("escrowing the secret-store root key", err)
 			}
+			st.EscrowOutcome = string(escrowWritten)
 		}
 	}
 

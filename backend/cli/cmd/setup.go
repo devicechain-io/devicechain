@@ -275,6 +275,22 @@ func shellWord(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
+// receiptEscrowOutcome is what the escrow receipt may say of the artifact a run settled.
+// Only a run that succeeded and wrote the artifact, or opened the one already there, says
+// it opens: an artifact the run found and could not open is never presented as checked.
+func receiptEscrowOutcome(st *bootstrap.State, runErr error) installtui.EscrowOutcome {
+	if runErr != nil {
+		return installtui.EscrowFoundNotOpened
+	}
+	switch st.EscrowOutcome {
+	case "written":
+		return installtui.EscrowWrittenAndChecked
+	case "verified":
+		return installtui.EscrowOpened
+	}
+	return installtui.EscrowFoundNotOpened
+}
+
 // setupInstanceScreens is the instance stage on the cluster t: the hand-over, the
 // instance and escrow choices, and the run each set of choices describes.
 func setupInstanceScreens(t setupTarget) *installtui.BootstrapScreens {

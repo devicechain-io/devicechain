@@ -531,7 +531,7 @@ func paramOf(q installflow.Question, name string) string {
 // person (Space), and never changes the run's outcome or exit status.
 type receiptModel struct {
 	path     string
-	written  bool
+	outcome  EscrowOutcome
 	instance string
 	context  string
 	acked    bool
@@ -564,10 +564,13 @@ func (m *receiptModel) verifyCommand() string {
 func (m *receiptModel) screen(t bsTheme) bsScreen {
 	w := t.contentWidth()
 	var body []string
-	if m.written {
+	switch m.outcome {
+	case EscrowWrittenAndChecked:
 		body = append(body, t.para(roleGood, "", "Root-key escrow written and checked:", w)...)
-	} else {
-		body = append(body, t.para(rolePlain, "", "Root-key escrow already in place (this run did not write it):", w)...)
+	case EscrowOpened:
+		body = append(body, t.para(roleGood, "", "Root-key escrow already in place, and opened with this run's passphrase:", w)...)
+	default:
+		body = append(body, t.para(roleWarn, "", "Root-key escrow already in place, NOT opened by this run:", w)...)
 	}
 	body = append(body, t.para(roleLabel, "  ", m.path, w)...)
 	body = append(body, "")
