@@ -513,6 +513,35 @@ func TestWriteEscrowConcurrentWritersNeverReplaceEachOther(t *testing.T) {
 	}
 }
 
+// On a filesystem without hard links the publish is serialised by a lock file. A lock
+// another writer holds is waited for and, when it outlives the wait, reported by name:
+// the artifact is not published past it.
+func TestWriteEscrowWithoutHardLinksHonoursAHeldLock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prod.escrow")
+	lock := path + ".publishing"
+	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	origLink, origWait := linkFile, escrowLockWait
+	linkFile = func(oldname, newname string) error {
+		return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: errors.New("operation not supported")}
+	}
+	escrowLockWait = 100 * time.Millisecond
+	t.Cleanup(func() { linkFile, escrowLockWait = origLink, origWait })
+
+	err := WriteEscrow(EscrowPlan{Path: path, Passphrase: "pw"}, testRootKey, "prod", time.Now().UTC())
+	if err == nil || !strings.Contains(err.Error(), lock) {
+		t.Fatalf("a held publish lock was not reported: %v", err)
+	}
+	if _, serr := os.Stat(path); !os.IsNotExist(serr) {
+		t.Errorf("the artifact was published past a held lock (%v)", serr)
+	}
+	if _, serr := os.Stat(lock); serr != nil {
+		t.Errorf("another writer's lock was removed: %v", serr)
+	}
+}
+
 func TestWriteEscrowCreatesTheDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "deep", "nested", "prod.escrow")
 	if err := WriteEscrow(EscrowPlan{Path: path, Passphrase: "pw"}, testRootKey, "prod", time.Now().UTC()); err != nil {

@@ -613,7 +613,7 @@ func WriteEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.Time)
 	if escrowBeforePublish != nil {
 		escrowBeforePublish()
 	}
-	if err := publishEscrowArtifact(tmpName, plan.Path, encoded); err != nil {
+	if err := publishEscrowArtifact(tmpName, plan.Path); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			// Another run published first, after the check above.
 			existing, rerr := os.ReadFile(plan.Path)
@@ -649,33 +649,49 @@ var linkFile = os.Link
 // or MoveFileEx without MOVEFILE_REPLACE_EXISTING (Windows only).
 //
 // A filesystem without hard links (FAT and exFAT, some network and FUSE mounts)
-// refuses the link with some other error. Then dst is claimed with O_CREATE|O_EXCL,
-// which is just as exclusive, and data written into it and flushed. That path cannot
-// make the file appear whole: a crash during the write leaves a short file, which
-// describeBlockingArtifact names as an interrupted write. A failed write removes the
-// file this call created, and nothing else.
-func publishEscrowArtifact(tmp, dst string, data []byte) error {
+// refuses the link with some other error. Then the publish is serialised by a lock
+// file beside the artifact, created with O_CREATE|O_EXCL: holding it, a writer checks
+// that dst is still absent and renames tmp onto it. The artifact still appears only
+// whole, and a writer that comes second waits for the lock and then finds the first
+// writer's complete artifact, never a half-written one (claiming dst itself with
+// O_EXCL and writing into it would show the loser a short file, which the refusal
+// then calls a leftover to move aside). A lock that outlives escrowLockWait is
+// reported, by name, rather than taken: it is another run publishing, or one that
+// was killed in the middle of a rename.
+func publishEscrowArtifact(tmp, dst string) error {
 	err := linkFile(tmp, dst)
 	if err == nil || errors.Is(err, fs.ErrExist) {
 		return err
 	}
-	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, escrowFileMode)
-	if err != nil {
+	lock := dst + ".publishing"
+	deadline := time.Now().Add(escrowLockWait)
+	for {
+		l, err := os.OpenFile(lock, os.O_WRONLY|os.O_CREATE|os.O_EXCL, escrowFileMode)
+		if err == nil {
+			l.Close()
+			break
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s exists: another dcctl run is publishing this escrow artifact, or one was "+
+				"interrupted while doing so. If no dcctl run is writing it, remove %s and re-run", lock, lock)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	defer os.Remove(lock)
+	if _, err := os.Lstat(dst); err == nil {
+		return &fs.PathError{Op: "publish", Path: dst, Err: fs.ErrExist}
+	} else if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	_, werr := f.Write(data)
-	if werr == nil {
-		werr = f.Sync()
-	}
-	if cerr := f.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		_ = os.Remove(dst)
-		return werr
-	}
-	return nil
+	return os.Rename(tmp, dst)
 }
+
+// escrowLockWait bounds how long publishEscrowArtifact waits for another writer's
+// lock. Holding it covers one stat and one rename. A test shortens it.
+var escrowLockWait = 10 * time.Second
 
 // keyFromHalfBuiltEscrow finds the root key a killed bootstrap already escrowed, so the
 // re-run deploys THAT key instead of minting a second one and then refusing to write it.
