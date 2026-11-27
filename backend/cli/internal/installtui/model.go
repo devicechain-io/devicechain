@@ -98,6 +98,9 @@ type model struct {
 	continues bool
 	// help is the help over the progress screen. It never pauses the run.
 	help helpState
+	// next, when set, is the command an install's success names for creating an instance
+	// on the cluster, in the terminal UI (dcctl bootstrap ... --ui=tui).
+	next func() string
 }
 
 // modelOptions are the parts of the screen that exist only for some runs.
@@ -113,6 +116,9 @@ type modelOptions struct {
 	op        installflow.Operation
 	inst      *instancePhase
 	continues bool
+	// next, when set, is the command that creates an instance on the cluster an
+	// install's success leaves; see model.
+	next func() string
 }
 
 func newModel(caps terminal.Capabilities, intr *interrupter, start func(), logs logSource, redact func(string) string,
@@ -129,7 +135,7 @@ func newModel(caps terminal.Capabilities, intr *interrupter, start func(), logs 
 		width: caps.Width, height: caps.Height,
 		now: time.Now, loc: time.Local, every: tickEvery,
 		pre: o.pre, prePhase: o.pre != nil, choose: o.choose,
-		op: o.op, inst: o.inst, continues: o.continues}
+		op: o.op, inst: o.inst, continues: o.continues, next: o.next}
 	if o.inst != nil {
 		m.progress.table = displayGroupsFor(installflow.OperationBootstrap)
 		m.prePhase = !caps.ProgressOnly
@@ -161,8 +167,9 @@ func (m model) Init() tea.Cmd {
 	return m.beat()
 }
 
-// gated reports whether this run starts only on an approval given on screen.
-func (m model) gated() bool { return m.pre != nil || m.inst != nil }
+// gated reports whether this run starts only on an approval given on screen. A
+// progress-only instance run has no review: the command line approved it.
+func (m model) gated() bool { return m.pre != nil || (m.inst != nil && !m.caps.ProgressOnly) }
 
 // abandon ends the screens before the run without confirming it. The run they
 // would have started is never started (see Presenter.Run); the program ends once

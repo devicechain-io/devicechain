@@ -56,9 +56,10 @@ type EscrowSeed struct {
 	Passphrase PassphraseSource
 	// DefaultPath is the engine's default artifact path for an instance name.
 	DefaultPath func(instance string) string
-	// ValidatePath is the engine's path rule (outside the instance's state
-	// directory, never an existing file). Nil accepts anything.
-	ValidatePath func(string) error
+	// ValidatePath is the engine's path rule for the instance named on the
+	// instance screen (outside that instance's state directory, which destroy
+	// deletes). Nil accepts anything.
+	ValidatePath func(instance, path string) error
 }
 
 // EscrowChoice is the escrow the person settled on.
@@ -236,7 +237,7 @@ func (m *escrowModel) submit() tea.Cmd {
 		case c.Path == "":
 			m.err = "an escrow file path is required"
 		case m.seed.ValidatePath != nil:
-			if err := m.seed.ValidatePath(c.Path); err != nil {
+			if err := m.seed.ValidatePath(m.instance, c.Path); err != nil {
 				m.err = err.Error()
 			}
 		}

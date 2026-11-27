@@ -1,5 +1,5 @@
 command: dcctl bootstrap
-flags: 44
+flags: 45
 
 --allow-legacy-db-removal
   type: bool
@@ -211,6 +211,11 @@ flags: 44
   default: "[]"
   repeatable: true
   usage: CIDR ranges of the proxies whose X-Forwarded-For the services believe (infrastructure.http.trustedProxies); repeat or comma-separate. Default: the cluster's pod range, read from its nodes, which is where the ingress controller runs; add a fronting load balancer's ranges when there is one. It is recorded on the instance and kept by every upgrade; "auto" returns to deriving it from the cluster
+
+--ui
+  type: string
+  default: "plain"
+  usage: how the bootstrap presents itself: plain (the text output dcctl has always printed), tui (a full-screen terminal UI, when stdin, stdout and stderr are all an interactive terminal; otherwise plain, unchanged), or auto (the terminal UI on an interactive terminal, and plain everywhere else, including with --yes or --dev). --dry-run is always plain
 
 --values
   type: stringArray

@@ -274,6 +274,11 @@ func (in Input) inspect() string {
 	return in.quote([]string{"kubectl", "--context", in.commandContext(), "get", "pods", "--all-namespaces"})
 }
 
+// NextSteps are the commands a successful install names next, quoted for the
+// shell: the summary's own, or creating an instance on the cluster (with --ui=tui
+// when BootstrapUI is set).
+func (in Input) NextSteps() []string { return in.nextSteps() }
+
 // nextStep is the success screen's next command: what the summary names, or
 // building an instance on the cluster.
 func (in Input) nextSteps() []string {

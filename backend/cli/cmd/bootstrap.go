@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -16,7 +15,7 @@ import (
 	"github.com/devicechain-io/dc-k8s/functionalarea"
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/devicechain-io/dcctl/internal/installflow"
-	"github.com/devicechain-io/dcctl/internal/installplain"
+	"github.com/devicechain-io/dcctl/internal/installtui"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -291,11 +290,20 @@ var bootstrapCmd = &cobra.Command{
   dcctl bootstrap local scratch --dev`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		e, preflight, err := bootstrapRun(cmd, args, nil)
+		// --ui is settled first: a value that is not one of the three is refused before
+		// anything is printed or touched.
+		ui, err := parseInstallUI(bootstrapUI)
 		if err != nil {
 			return err
 		}
-		return runBootstrapEngine(cmd.Context(), e, preflight)
+		facts := &instanceFactsRecorder{}
+		e, preflight, err := bootstrapRunFor(cmd, args, facts.observe)
+		if err != nil {
+			return err
+		}
+		return runBootstrapEngine(cmd.Context(), ui, e, preflight, func(progressOnly bool) *installtui.BootstrapScreens {
+			return bootstrapScreensFor(cmd, args, facts, progressOnly)
+		})
 	},
 	SilenceUsage: true,
 }
@@ -694,23 +702,6 @@ func bootstrapRun(cmd *cobra.Command, args []string, observe func(*bootstrap.Sta
 // variable so a test can run the command's stages with stand-ins for the cluster work.
 // Production never reassigns it.
 var bootstrapPipeline = bootstrap.NewDefaultPipeline
-
-// runBootstrapEngine runs a bootstrap through the plain presenter: today's output, on the
-// process's own streams, with the escrow passphrase read from the terminal when no file
-// or environment variable supplies it, and the generated superuser seed shown once, where
-// the access report always showed it.
-//
-// 🔴 THE SEAM FOR --ui. When the terminal UI lands on main it selects its presenter here,
-// as runInstallEngine will; the engine, its stages and its two secret paths (the prompt
-// broker and the reveal sink) are already the presenter-neutral contract it renders.
-func runBootstrapEngine(ctx context.Context, e *bootstrap.BootstrapEngine, preflight installflow.PreflightRunner) error {
-	if ctx == nil { // RunE called directly, as tests do, rather than through Execute
-		ctx = context.Background()
-	}
-	return installplain.Presenter{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin}.Run(ctx, e,
-		installflow.Request{Operation: installflow.OperationBootstrap, DryRun: e.DryRun, AssumeYes: e.AssumeYes},
-		preflight)
-}
 
 // objectStoreFlags are every flag that chooses the object store. A run that gave none of them
 // and finds the instance already declared keeps the declared store.

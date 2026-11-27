@@ -13,8 +13,12 @@ import (
 // The welcome screen's words. They state the scope of the command and nothing it does
 // not do: install prepares a cluster, and an instance is a separate command.
 const (
-	welcomeTitle     = "Welcome"
-	welcomeScope     = "This installs shared cluster prerequisites. Create an instance later with dcctl bootstrap."
+	welcomeTitle = "Welcome"
+	welcomeScope = "This installs shared cluster prerequisites. Create an instance later with dcctl bootstrap."
+	// welcomeScopeSetup is the scope inside dcctl setup local, which goes on to the
+	// instance itself.
+	welcomeScopeSetup = "This first installs shared cluster prerequisites. Once they are installed, setup " +
+		"goes on to create an instance on the cluster, with its own choices, review and approval."
 	welcomeNoChanges = "No changes have been made."
 )
 
@@ -111,7 +115,11 @@ func (p *prerun) welcomeFacts() [][2]string {
 func (p *prerun) welcomeLines(w, rows int) []string {
 	t := p.theme
 	head := []string{t.Bold.Render(welcomeTitle)}
-	head = append(head, wrap(welcomeScope, w)...)
+	scope := welcomeScope
+	if p.continues {
+		scope = welcomeScopeSetup
+	}
+	head = append(head, wrap(scope, w)...)
 	head = append(head, "")
 	var facts []string
 	for _, r := range p.welcomeFacts() {

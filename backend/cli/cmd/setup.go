@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/devicechain-io/dcctl/internal/installchoice"
 	"github.com/devicechain-io/dcctl/internal/installflow"
@@ -254,8 +253,9 @@ func (t setupTarget) shape() string {
 	return s + ", Single"
 }
 
-// setupContinueCommand is the command that builds the instance later, by hand: the
-// chosen instance when the choices were settled, otherwise a template to fill in.
+// setupContinueCommand is the command that builds the instance later, by hand, in the
+// terminal UI: the chosen instance when the choices were settled, otherwise a template
+// to fill in.
 func setupContinueCommand(t setupTarget, planned *installtui.BootstrapPlanned) string {
 	if planned != nil {
 		return installtui.BootstrapContinueCommand(planned.Instance, planned.Escrow, t.args())
@@ -264,7 +264,7 @@ func setupContinueCommand(t setupTarget, planned *installtui.BootstrapPlanned) s
 	for i, w := range words[4:] {
 		words[4+i] = shellWord(w)
 	}
-	return strings.Join(words, " ")
+	return strings.Join(append(words, "--ui=tui"), " ")
 }
 
 // shellWord quotes a word for a POSIX shell when it needs it.
@@ -278,87 +278,47 @@ func shellWord(s string) string {
 // setupInstanceScreens is the instance stage on the cluster t: the hand-over, the
 // instance and escrow choices, and the run each set of choices describes.
 func setupInstanceScreens(t setupTarget) *installtui.BootstrapScreens {
-	passphrase := installtui.PassphraseFromPerson
-	if _, ok := os.LookupEnv(bootstrap.EscrowPassphraseEnv); ok {
-		passphrase = installtui.PassphraseFromEnv
-	}
-	// What the finished run settled, for the success screens. Only what those screens
-	// state is copied out; the passphrase and the root key never are.
-	var mu sync.Mutex
-	var facts installtui.InstanceFacts
-	observe := func(st *bootstrap.State, runErr error) {
-		if st == nil {
-			return
-		}
-		f := installtui.InstanceFacts{KubeContext: st.KubeContext, Account: auth.DefaultSuperuserEmail,
-			EscrowPath: st.Escrow.Path, EscrowWritten: runErr == nil && st.Escrow.Path != ""}
-		if host := st.Values["ingressHost"]; host != "" {
-			f.ConsoleURL = bootstrap.ConsoleURL(st.KubeContext, st.Values["scheme"], host)
-		}
-		mu.Lock()
-		facts = f
-		mu.Unlock()
-	}
+	facts := &instanceFactsRecorder{}
 	return &installtui.BootstrapScreens{
 		Setup: installtui.BootstrapSetup{
 			Version: Version, Target: t.label(), TargetArgs: t.args(),
 			Instance: installtui.InstanceSeed{
 				FromFlag: map[string]bool{}, ClusterShape: t.shape(),
-				ValidateName: bootstrap.ValidateInstanceName,
-				ValidateAreas: func(areas []string) error {
-					_, err := bootstrap.ResolveEnabledAreas("default", areas)
-					return err
-				},
+				ValidateName:  bootstrap.ValidateInstanceName,
+				ValidateAreas: validateInstanceAreas,
 			},
 			Escrow: installtui.EscrowSeed{
-				Mode: installtui.EscrowWrite, Passphrase: passphrase,
-				DefaultPath: func(instance string) string {
-					p, err := bootstrap.DefaultEscrowPath(instance)
-					if err != nil {
-						return ""
-					}
-					return p
-				},
-				ValidatePath: func(path string) error {
-					// The engine refuses to overwrite an escrow artifact; said here first.
-					if _, err := os.Stat(path); err == nil {
-						return fmt.Errorf("%s already exists; an escrow file is never overwritten", path)
-					}
-					return nil
-				},
+				Mode: installtui.EscrowWrite, Passphrase: escrowPassphraseSource(),
+				DefaultPath: defaultEscrowPathFor,
+				// The engine's own path rule, and its refusal to overwrite an artifact,
+				// said here first: a path the run would refuse is never approved.
+				ValidatePath: escrowPathRule(true),
 			},
 		},
 		Handover: &installtui.Handover{Target: t.label() + " (" + t.shape() + ")", Continue: setupContinueCommand(t, nil)},
 		Plan: func(p installtui.BootstrapPlanned) (installtui.BootstrapPlan, error) {
-			e, preflight, err := setupBootstrapRun(installtui.BootstrapArgs(p.Instance, p.Escrow, t.args()), observe)
-			if err != nil {
-				return installtui.BootstrapPlan{}, err
-			}
-			// The terminal UI holds the terminal and puts the null device on stdin while
-			// the run is live; the person it asks for the escrow passphrase is at the
-			// terminal this command was refused without.
-			e.PersonAtTerminal = func() bool { return true }
-			return installtui.BootstrapPlan{Engine: e, Preflight: preflight,
-				Review:  setupInstanceReview(t, p),
-				Command: installtui.BootstrapCommand(p.Instance, p.Escrow, t.args())}, nil
+			return instancePlan(bootstrapCmd, p, t.args(), t.args(), setupInstanceReview(t, p), nil, facts.observe)
 		},
-		Facts: func(installflow.Summary) installtui.InstanceFacts {
-			mu.Lock()
-			defer mu.Unlock()
-			return facts
-		},
+		Facts: facts.read,
 	}
 }
 
 // setupBootstrapRun builds the run a bootstrap command line describes, through the
 // bootstrap command's own flags and bootstrapRun: words are what follows "dcctl" on
+// that line. See bootstrapRunFromWords.
+func setupBootstrapRun(words []string, observe func(*bootstrap.State, error)) (*bootstrap.BootstrapEngine, installflow.PreflightRunner, error) {
+	return bootstrapRunFromWords(bootstrapCmd, words, observe)
+}
+
+// bootstrapRunFromWords builds the run a bootstrap command line describes, through c's
+// flags (the bootstrap command's) and bootstrapRun: words are what follows "dcctl" on
 // that line. Every bootstrap flag is put back to its default first, so nothing a
 // previous set of choices parsed is carried into this one.
-func setupBootstrapRun(words []string, observe func(*bootstrap.State, error)) (*bootstrap.BootstrapEngine, installflow.PreflightRunner, error) {
+func bootstrapRunFromWords(c *cobra.Command, words []string, observe func(*bootstrap.State, error)) (*bootstrap.BootstrapEngine, installflow.PreflightRunner, error) {
 	if len(words) < 2 || words[0] != "dcctl" || words[1] != "bootstrap" {
 		return nil, nil, fmt.Errorf("not a bootstrap command line: %q", words)
 	}
-	fs := bootstrapCmd.Flags()
+	fs := c.Flags()
 	var reset error
 	fs.VisitAll(func(f *pflag.Flag) {
 		if sv, ok := f.Value.(pflag.SliceValue); ok {
@@ -374,48 +334,15 @@ func setupBootstrapRun(words []string, observe func(*bootstrap.State, error)) (*
 	if err := fs.Parse(words[2:]); err != nil {
 		return nil, nil, err
 	}
-	if err := cobra.ExactArgs(2)(bootstrapCmd, fs.Args()); err != nil {
+	if err := cobra.ExactArgs(2)(c, fs.Args()); err != nil {
 		return nil, nil, err
 	}
-	return bootstrapRun(bootstrapCmd, fs.Args(), observe)
+	return bootstrapRunFor(c, fs.Args(), observe)
 }
 
 // setupInstanceReview is the instance's plan as its review states it.
 func setupInstanceReview(t setupTarget, p installtui.BootstrapPlanned) installtui.Review {
-	in, esc := p.Instance, p.Escrow
-	var rows []installtui.ReviewRow
-	add := func(label, value string) { rows = append(rows, installtui.ReviewRow{Label: label, Value: value}) }
-	add("Instance", in.Name)
-	add("Cluster", t.label()+" ("+t.shape()+"), installed by the first stage")
-	profile := in.Profile
-	if len(in.Areas) > 0 {
-		profile += " + " + strings.Join(in.Areas, ", ")
-	}
-	add("Profile", profile)
-	host := in.Host
-	if host == "" {
-		host = "the bootstrap's default (" + bootstrap.DefaultIngressHost + ")"
-	}
-	add("Host", host)
-	add("TLS", onOff(!in.NoTLS))
-	add("Object store", in.ObjectStore)
-	var warnings []string
-	switch esc.Mode {
-	case installtui.EscrowNone:
-		add("Escrow", "none (--no-escrow)")
-		warnings = append(warnings, installtui.WordsNoEscrowWarning)
-	default:
-		path := esc.Path
-		if path == "" {
-			path = "the default location"
-		}
-		how := "asked for when the run reaches its escrow step, twice, and never shown"
-		if esc.Passphrase == installtui.PassphraseFromEnv {
-			how = "read from the environment; nothing is asked"
-		}
-		add("Escrow", path+"; passphrase "+how)
-	}
-	return installtui.Review{Rows: rows, Warnings: warnings}
+	return instanceReview(t.label()+" ("+t.shape()+"), installed by the first stage", p, nil)
 }
 
 func init() {
