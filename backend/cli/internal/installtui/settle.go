@@ -37,7 +37,13 @@ type settleMsg struct{ gen, token int }
 // therefore push the quiet period forward, wherever they later land in the message queue.
 type inputClock struct {
 	base time.Time
-	// last is the time of the last input read, as nanoseconds since base; 0 is none.
+	// last is the time of the last input read, as nanoseconds since base PLUS ONE, so
+	// that 0 can mean "none" while a read at the base itself is still exactly 0.
+	//
+	// 🔴 THE OFFSET IS STORED, NEVER ADDED TO THE TIME. A coarse monotonic clock (a
+	// Windows runner's) reads 0 since the base for a while; a stamp recorded as
+	// max(t, 1) put that read 1ns after "now", so no quiet period ever passed since it
+	// and the screen never settled.
 	last atomic.Int64
 	// readerStamps says the reader stamps input. Where it cannot (a Windows console,
 	// whose records Bubble Tea reads past the gate), the screen stamps each key as it
@@ -61,14 +67,17 @@ func (c *inputClock) since() time.Duration {
 // stamp records input read now.
 func (c *inputClock) stamp() {
 	if c != nil {
-		c.last.Store(max(int64(c.since()), 1))
+		c.last.Store(int64(c.since()) + 1)
 	}
 }
 
 // lastInput is when input was last read, and whether any has been.
 func (c *inputClock) lastInput() (time.Duration, bool) {
 	l := c.last.Load()
-	return time.Duration(l), l != 0
+	if l == 0 {
+		return 0, false
+	}
+	return time.Duration(l - 1), true
 }
 
 // settleGate is the arming of one screen whose Enter leads on: the install review
