@@ -171,7 +171,8 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	// The one reader of stdin: the program reads through it, and so does the plain
 	// prompt after a fallback, never both at once.
 	gate := newStdinGate(p.Stdin)
-	b.plainResponder = installplain.Responder{Out: con.Stdout, In: gate.handOverLater()}
+	gate.notice = con.Stdout
+	b.plainResponder = installplain.Responder{Out: con.Stdout, In: gate.handOverLater(), ReadHidden: gate.plainReadHidden}
 	broker := installflow.NewBroker(hub, b, req.AssumeYes)
 	// The instance journey: its screens, its passphrase form, and the inbox its one-time
 	// disclosures wait in for the first-login screen. Whatever they still hold is cleared
@@ -185,6 +186,7 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	gate.input = keyClock
 	var inst *instancePhase
 	var reveals installflow.RevealSink
+	var plainReveals *fallbackReveals
 	if p.Bootstrap != nil {
 		inbox := &RevealInbox{}
 		setup := p.Bootstrap.Setup
@@ -192,7 +194,10 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 		inst = newInstancePhase(p.Bootstrap, setup)
 		inst.gate.clock = keyClock
 		defer inst.flow.Close()
-		reveals = inbox
+		// The screen takes them from the inbox; after a fallback, plain output shows them.
+		plainReveals = &fallbackReveals{inbox: inbox, w: p.Stdout}
+		reveals = plainReveals
+		b.reveals = plainReveals
 		b.secrets = true
 	}
 
@@ -429,6 +434,11 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 				fmt.Fprintf(p.Stdout, "equivalent command: %s\n", c)
 			}
 		}
+	}
+	// A one-time disclosure that could not be shown, even in plain output, is never a
+	// silent success, whoever runs this presenter.
+	if programFailure == nil && plainReveals != nil && plainReveals.wasLost() {
+		programFailure = errRevealLost
 	}
 	// The command prints this error after the screen has closed, and a tool's
 	// diagnostics are often appended to it: it is redacted, as an event is.
