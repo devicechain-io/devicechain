@@ -4,12 +4,9 @@
 package installtui
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"sync"
-
-	"github.com/muesli/cancelreader"
 )
 
 // stdinGate is the one reader of stdin for the life of a run.
@@ -30,11 +27,16 @@ import (
 // screen), for the life of the process; it never reads stdin again, so it cannot take
 // the plain prompt's answer. No release up to the pins fixes it.
 //
-// On Unix the program reads through the gate, and the gate, not Bubble Tea, owns the
-// cancelable reader under that read (see programFile). On a Windows console Bubble Tea
-// reads console input records from the console handle directly, which no reader can stand
-// in for without losing resize and key events, so there the gate serialises the plain
-// prompt's reads only.
+// Bubble Tea owns the cancelable reader under the program's reads (it is given a file with
+// a descriptor and a Name; see programInput). From v2.2.0 it closes that reader only once
+// its input loop has returned, on every shutdown path, killed and panicking included, so
+// the reader is never torn down under a read. Its shutdown may also read the replies to
+// terminal queries still in flight (a reader of its own over the same input, bounded to
+// half a second): that read goes through the gate too, and ends before Run returns.
+// stopProgram, called once Run has returned, makes every later program read end at EOF
+// without touching stdin. On a Windows console Bubble Tea reads console input records
+// from the console handle directly, which no reader can stand in for without losing
+// resize and key events, so there the gate serialises the plain prompt's reads only.
 type stdinGate struct {
 	r      io.Reader
 	readMu sync.Mutex // one read of r at a time
@@ -43,11 +45,7 @@ type stdinGate struct {
 	handedOver bool
 	stash      []byte // read by the program after the handover; the plain prompt's
 	refused    error  // set: the plain prompt may not read at all
-
-	// cr, when set, is what the program's reads wait on r through: the gate's own, created
-	// with the program's input and closed once no read of it can be under way.
-	cr      cancelreader.CancelReader
-	stopped bool // the program reads nothing more
+	stopped    bool   // the program reads nothing more
 
 	// input, when set, is stamped with every read that brings the program input: the
 	// settling screens' measure of when the keyboard was last used (see settleGate). It
@@ -71,11 +69,10 @@ func (g *stdinGate) programRead(p []byte) (int, error) {
 	}
 	g.readMu.Lock()
 	defer g.readMu.Unlock()
-	src, err := g.programSource()
-	if src == nil || err != nil {
-		return 0, err
+	if g.over() {
+		return 0, io.EOF
 	}
-	n, err := src.Read(p)
+	n, err := g.r.Read(p)
 	if n > 0 {
 		g.input.stamp()
 	}
@@ -89,43 +86,13 @@ func (g *stdinGate) programRead(p []byte) (int, error) {
 	return n, err
 }
 
-// programSource is what the program's next read reads, nil (with io.EOF) once it may read
-// nothing. It is called under readMu.
-func (g *stdinGate) programSource() (io.Reader, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.handedOver || g.stopped {
-		return nil, io.EOF
-	}
-	if g.cr != nil {
-		return g.cr, nil
-	}
-	return g.r, nil
-}
-
-// stopProgram ends the program's reading, once its Run has returned: a read under way is
-// cancelled without taking any input, and every later one reads nothing.
-//
-// 🔴 THE READER IS CLOSED ONLY AFTER ITS READ HAS RETURNED. Bubble Tea v2.1.1, killed or
-// recovering a panic, cancels its cancelable reader and closes it at once, while its input
-// loop may still be inside the reader's wait, reading the very descriptors the close tears
-// down (a data race inside cancelreader, between its Close and its wait's Fd calls). So the
-// program is never given a reader Bubble Tea can close: here the cancel comes first, then
-// the read lock, which a read under way holds until it has returned, and only then the
-// close. A reader that cannot cancel (a platform without one) is left as it is: a read it
-// has under way takes nothing from the plain prompt, to which it passes what it reads.
+// stopProgram ends the program's reading, once its Run has returned: every later program
+// read ends at EOF without reading stdin. A read already under way (a Bubble Tea reader
+// that could not cancel it) passes what it takes to the plain prompt, as after handOver.
 func (g *stdinGate) stopProgram() {
 	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.stopped = true
-	cr := g.cr
-	g.cr = nil
-	g.mu.Unlock()
-	if cr == nil || !cr.Cancel() {
-		return
-	}
-	g.readMu.Lock()
-	defer g.readMu.Unlock()
-	_ = cr.Close()
 }
 
 func (g *stdinGate) refusal() error {
@@ -173,27 +140,15 @@ func (g *stdinGate) handOver() io.Reader {
 // program's.
 func (g *stdinGate) handOverLater() io.Reader { return readerFunc(g.plainRead) }
 
-// programInput is what the program is given to read, made once, before the program runs.
-// Over a terminal file it is still a file to Bubble Tea (it has the descriptor, so the
-// program can put it in raw mode and learn the terminal's size), but its reads go through
-// the gate. It fails when the reader under it cannot start: the program is then not run.
-func (g *stdinGate) programInput() (io.Reader, error) {
+// programInput is what the program is given to read. Over a terminal file it is still a
+// file to Bubble Tea (it has the descriptor, so the program can put it in raw mode and
+// learn the terminal's size, and a Name, so Bubble Tea builds its cancelable reader over
+// it, or on Windows its console reader), but its reads go through the gate.
+func (g *stdinGate) programInput() io.Reader {
 	if f, ok := g.r.(*os.File); ok {
-		return programFile(g, f)
+		return gatedFile{g: g, f: f}
 	}
-	return readerFunc(g.programRead), nil
-}
-
-// startCancelable gives the program's reads the gate's own cancelable reader over f.
-func (g *stdinGate) startCancelable(f *os.File) error {
-	cr, err := cancelreader.NewReader(f)
-	if err != nil {
-		return fmt.Errorf("starting the terminal input reader: %w", err)
-	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.cr = cr
-	return nil
+	return readerFunc(g.programRead)
 }
 
 type readerFunc func([]byte) (int, error)
@@ -211,3 +166,4 @@ func (f gatedFile) Read(p []byte) (int, error)  { return f.g.programRead(p) }
 func (f gatedFile) Write(p []byte) (int, error) { return f.f.Write(p) }
 func (f gatedFile) Close() error                { return nil }
 func (f gatedFile) Fd() uintptr                 { return f.f.Fd() }
+func (f gatedFile) Name() string                { return f.f.Name() }

@@ -7,7 +7,7 @@ The inventory covers 41 module paths, 43 selected versions and 56 license/notice
 files. Standalone and workspace builds select different versions of x/exp and
 x/tools/go/expect; all selected versions are retained below.
 
-Audited on 2026-11-26 against standalone CLI and workspace selected versions, using
+Audited on 2026-11-27 against standalone CLI and workspace selected versions, using
 module-cache sources (fetched and verified against go.sum when a fresh cache lacks
 them). The six roots are the Charm v2 family (Bubble Tea, Lip Gloss, Bubbles and
 test-only teatest), colorprofile and x/term, at the specification's exact pins.
@@ -44,7 +44,7 @@ executes an in-memory Tea/teatest loop and checks the adopted Bubbles APIs.
 | Module | Selected version | Reviewed terms |
 | --- | --- | --- |
 | `charm.land/bubbles/v2` | `v2.2.1` | MIT |
-| `charm.land/bubbletea/v2` | `v2.1.1` | MIT |
+| `charm.land/bubbletea/v2` | `v2.2.0` | MIT |
 | `charm.land/lipgloss/v2` | `v2.1.0` | MIT |
 | `github.com/MakeNowJust/heredoc` | `v1.0.0` | MIT |
 | `github.com/atotto/clipboard` | `v0.1.4` | BSD-3-Clause |
@@ -53,7 +53,7 @@ executes an in-memory Tea/teatest loop and checks the adopted Bubbles APIs.
 | `github.com/charmbracelet/colorprofile` | `v0.4.3` | MIT |
 | `github.com/charmbracelet/harmonica` | `v0.2.0` | MIT |
 | `github.com/charmbracelet/ultraviolet` | `v0.0.0-20261008173134-6b8d4baf91b4` | MIT |
-| `github.com/charmbracelet/x/ansi` | `v0.11.9` | MIT |
+| `github.com/charmbracelet/x/ansi` | `v0.12.0` | MIT |
 | `github.com/charmbracelet/x/exp/golden` | `v0.0.0-20251109135125-8916d276318f` | MIT |
 | `github.com/charmbracelet/x/exp/teatest/v2` | `v2.0.0-20260311145557-c83711a11ffa` | MIT |
 | `github.com/charmbracelet/x/term` | `v0.2.2` | MIT |
