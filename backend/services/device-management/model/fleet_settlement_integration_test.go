@@ -318,7 +318,8 @@ func TestSettlementConcurrentTenThousandOnPostgres(t *testing.T) {
 }
 
 func TestSettlementSustainsFiveHundredPerSecondOnPostgres(t *testing.T) {
-	api := NewApi(newPostgresRdbManager(t))
+	// Its own instance database: the run ends on the reconciler lag, an instance-wide reading.
+	api := NewApi(driverPGManager(t))
 	base, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	contexts := make([]context.Context, 10)
@@ -394,5 +395,5 @@ func TestSettlementSustainsFiveHundredPerSecondOnPostgres(t *testing.T) {
 		require.GreaterOrEqual(t, float64(tail)/time.Since(drainStart).Seconds(), 500.0, "reconciler must sustain the instance post ceiling")
 	}
 	require.EqualValues(t, 10000, decided.Load()+tail)
-	assertReconcilerLagBound(t, api, fmt.Sprintf("settlerate%d-", stamp))
+	assertReconcilerLagBound(t, api)
 }

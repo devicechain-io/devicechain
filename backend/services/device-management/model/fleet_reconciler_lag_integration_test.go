@@ -8,37 +8,21 @@ package model
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"testing"
 	"time"
 
-	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ledger"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
-var errLagIsolationRollback = errors.New("rolled back")
-
-// withOnlyTheseAwaiting runs fn with an Api over one transaction in which the only lines awaiting
-// evidence are those of tenants named with prefix, and rolls it back. The reconciler lag is an
-// instance-wide reading and the integration database is shared by every test, so a bound asserted
-// on it must not depend on what the tests before it left behind.
-func withOnlyTheseAwaiting(t *testing.T, api *Api, prefix string, fn func(iso *Api, tx *gorm.DB)) {
-	t.Helper()
-	err := api.RDB.DB(core.WithSystemContext(context.Background())).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec(`UPDATE "device-management".fleet_operation_lines SET evidence_revision = -1
- WHERE tenant_id NOT LIKE ? AND posting = 'POSTED' AND evidence_revision IS NULL AND redacted_at IS NULL`, prefix+"%").Error; err != nil {
-			return err
-		}
-		fn(NewApi(&rdb.RdbManager{Database: tx}), tx)
-		return errLagIsolationRollback
-	})
-	require.ErrorIs(t, err, errLagIsolationRollback)
-}
+// The reconciler lag is an instance-wide reading, so every test here that asserts on its value or
+// its plan runs on an instance database of its own (driverPGManager), which holds nothing but its
+// own fixture. On the shared integration database another test's leftovers would move the answer,
+// and its statistics would move the plan.
 
 // fleetReconcilerLagBeforeForTest is the per-tenant measurement this change replaced, kept as the
 // oracle the instance-wide one is compared with: the instance's lag is the largest tenant's.
@@ -76,15 +60,67 @@ func reportScans(n planNode) reportScan {
 	return out
 }
 
-// The reconciler lag is one statement per replica every 15 s, so what it reads matters: it must
-// read the lines awaiting evidence and, for each, the first report at or after its posted revision,
-// and nothing that grows with the report log's retained history, decided or not. Measured with EXPLAIN (ANALYZE,
-// BUFFERS) on the statement the measurement issues, at two sizes of retained (decided) history,
-// beside an AMBIGUOUS backlog with no reports and one tenant whose reports are waiting, and then for
-// lines whose devices hold a long history of undecided reports. Its answer
-// is compared with the per-tenant measurement it replaced, taken over every tenant.
+// lagReading is one measurement and what its statement's plan did.
+type lagReading struct {
+	lines   int64
+	reports reportScan
+	buffers int64
+	ms      float64
+	lag     time.Duration
+	since   time.Duration // since the fixture's waiting reports were written, when the lag was read
+}
+
+// readLag measures the lag on api's own database, EXPLAINs the very statement the measurement
+// issued, compares the answer with the replaced per-tenant read over every tenant of the fixture,
+// and checks that the gauge publishes it.
+func readLag(t *testing.T, api *Api, f *costFixture, inserted time.Time) lagReading {
+	t.Helper()
+	var out lagReading
+	db := api.RDB.Database
+	session, capture := capturing(db)
+	var err error
+	out.since = time.Since(inserted)
+	out.lag, err = NewApi(&rdb.RdbManager{Database: session}).FleetReconcilerLag(context.Background())
+	require.NoError(t, err)
+	require.Len(t, capture.statements, 1, "one statement")
+	cost := measure(t, db, capture.statements[0])
+	var text string
+	require.NoError(t, db.Raw("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+capture.statements[0]).Row().Scan(&text))
+	var plan []struct {
+		Plan planNode `json:"Plan"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(text), &plan))
+	out.lines, out.reports, out.buffers, out.ms = cost.LineRows, reportScans(plan[0].Plan), cost.Buffers, cost.Ms
+
+	var tenants []string
+	require.NoError(t, f.db.Raw(`SELECT DISTINCT tenant_id FROM "device-management".fleet_operation_lines`).Scan(&tenants).Error)
+	require.Equal(t, tenants, onlyPrefixed(tenants, f.prefix), "the instance database holds only this fixture")
+	var want time.Duration
+	for _, tenant := range tenants {
+		age, err := fleetReconcilerLagBeforeForTest(f.db, tenant)
+		require.NoError(t, err)
+		want = max(want, age)
+	}
+	require.InDelta(t, want.Seconds(), out.lag.Seconds(), 1, "the instance-wide lag is the largest tenant's")
+
+	require.NoError(t, api.MeasureFleetReconcilerLag(context.Background()))
+	require.InDelta(t, out.lag.Seconds(), reconcilerLag(), 1, "the gauge publishes the measurement")
+	return out
+}
+
+func analyzeReports(t *testing.T, f *costFixture) {
+	t.Helper()
+	f.analyze(t)
+	require.NoError(t, f.db.Exec(`ANALYZE "device-management".device_configuration_reports`).Error)
+}
+
+// The reconciler lag is one statement per replica every 15 s, so what it reads matters: the lines
+// awaiting evidence and, for each, the first report at or after its posted revision, and nothing
+// that grows with the report log's retained, decided history. Measured with EXPLAIN (ANALYZE,
+// BUFFERS) on the statement the measurement issues, at two sizes of decided history, beside an
+// AMBIGUOUS backlog with no reports and one tenant whose reports are waiting.
 func TestReconcilerLagReadsTheAwaitingLinesNotTheReportHistoryOnPostgres(t *testing.T) {
-	api := NewApi(newPostgresRdbManager(t))
+	api := NewApi(driverPGManager(t))
 	f := newCostFixture(t, api)
 	t.Cleanup(func() {
 		require.NoError(t, f.db.Exec(`DELETE FROM "device-management".device_configuration_reports WHERE tenant_id LIKE ?`, f.prefix+"%").Error)
@@ -118,54 +154,7 @@ func TestReconcilerLagReadsTheAwaitingLinesNotTheReportHistoryOnPostgres(t *test
  SELECT now() - interval '2 days', l.tenant_id, l.target_id, g, 'x', 'APPLIED', 'REPORT'
  FROM "device-management".fleet_operation_lines l CROSS JOIN generate_series(1, ?) g WHERE l.tenant_id = ?`, revisions, tenant).Error)
 		}
-		f.analyze(t)
-		require.NoError(t, f.db.Exec(`ANALYZE "device-management".device_configuration_reports`).Error)
-	}
-
-	type reading struct {
-		lines   int64
-		reports reportScan
-		buffers int64
-		ms      float64
-		lag     time.Duration
-		since   time.Duration // since the waiting reports were written, when the lag was read
-	}
-	read := func(scope string, inserted time.Time) reading {
-		t.Helper()
-		var out reading
-		withOnlyTheseAwaiting(t, api, scope, func(iso *Api, tx *gorm.DB) {
-			session, capture := capturing(tx)
-			lagApi := NewApi(&rdb.RdbManager{Database: session})
-			var err error
-			out.since = time.Since(inserted)
-			out.lag, err = lagApi.FleetReconcilerLag(context.Background())
-			require.NoError(t, err)
-			require.Len(t, capture.statements, 1, "one statement")
-			cost := measure(t, tx, capture.statements[0])
-			var text string
-			require.NoError(t, tx.Raw("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+capture.statements[0]).Row().Scan(&text))
-			var plan []struct {
-				Plan planNode `json:"Plan"`
-			}
-			require.NoError(t, json.Unmarshal([]byte(text), &plan))
-			out.lines, out.reports, out.buffers, out.ms = cost.LineRows, reportScans(plan[0].Plan), cost.Buffers, cost.Ms
-
-			// The oracle: the per-tenant read it replaced, over every tenant there is.
-			var tenants []string
-			require.NoError(t, tx.Raw(`SELECT DISTINCT tenant_id FROM "device-management".fleet_operation_lines WHERE tenant_id LIKE ?`, scope+"%").Scan(&tenants).Error)
-			var want time.Duration
-			for _, tenant := range tenants {
-				age, err := fleetReconcilerLagBeforeForTest(tx, tenant)
-				require.NoError(t, err)
-				want = max(want, age)
-			}
-			require.InDelta(t, want.Seconds(), out.lag.Seconds(), 1, "the instance-wide lag is the largest tenant's")
-
-			// And the gauge publishes it.
-			require.NoError(t, iso.MeasureFleetReconcilerLag(context.Background()))
-			require.InDelta(t, out.lag.Seconds(), reconcilerLag(), 1)
-		})
-		return out
+		analyzeReports(t, f)
 	}
 
 	// History and the waiting tenant's change are drivable; the newer release's lines await too, but
@@ -173,9 +162,9 @@ func TestReconcilerLagReadsTheAwaitingLinesNotTheReportHistoryOnPostgres(t *test
 	drivable := int64(6*costPostedPerOp + costPostedPerOp/2)
 	awaiting := drivable + costPostedPerOp/2
 	addHistory(4, 5)
-	small := read(f.prefix, inserted)
+	small := readLag(t, api, f, inserted)
 	addHistory(16, 5)
-	large := read(f.prefix, inserted)
+	large := readLag(t, api, f, inserted)
 	t.Logf("reconciler lag: %d awaiting lines (%d of drivable changes); history 4 -> 20 noise tenants: line rows %d -> %d, "+
 		"report probes %d -> %d (%d -> %d buffers), statement buffers %d -> %d, %.1f -> %.1f ms",
 		awaiting, drivable, small.lines, large.lines, small.reports.loops, large.reports.loops, small.reports.buffers, large.reports.buffers,
@@ -185,52 +174,57 @@ func TestReconcilerLagReadsTheAwaitingLinesNotTheReportHistoryOnPostgres(t *test
 	// hour-old one is not counted.
 	require.InDelta(t, 130+small.since.Seconds(), small.lag.Seconds(), 3)
 	require.InDelta(t, 130+large.since.Seconds(), large.lag.Seconds(), 3)
-	for _, r := range []reading{small, large} {
+	for _, r := range []lagReading{small, large} {
 		// The lines read are the awaiting lines: the partial index's entries, once each.
 		require.Equal(t, awaiting, r.lines, "line rows read are the awaiting lines")
 		// One probe of the report log per awaiting line of a drivable change, reading only that
-		// device's reports at or after its posted revision: nothing filtered away, a few buffers each.
+		// device's first report at or after its posted revision: nothing filtered away, a few buffers each.
 		require.Equal(t, drivable, r.reports.loops, "one report probe per awaiting drivable line")
 		require.Zero(t, r.reports.filtered, "a probe reads no report it then discards")
 		require.LessOrEqual(t, r.reports.buffers, 5*drivable, "a probe is an index descent")
 	}
 	// Five times the decided history, the same probes.
 	require.Equal(t, small.reports.loops, large.reports.loops, "report probes must not grow with decided history")
+}
 
-	// UNDECIDED history: a change whose lines stay awaiting while every device keeps reporting newer
-	// revisions (settlement failing, say). Each line's range at or after its posted revision is then
-	// deepHistory reports long, and grows with every report; the probe must still read about one.
-	// Read on its own, so EXPLAIN's per-loop average is this tenant's probes alone.
+// UNDECIDED history: a change whose lines stay awaiting while every device keeps reporting newer
+// revisions (settlement failing, say). Each line's range at or after its posted revision is then
+// deepHistory reports long and grows with every report; the probe must still read about one, its
+// decider. Measured alone, so EXPLAIN's per-loop average is these probes and nothing else.
+func TestReconcilerLagProbeIsBoundedByUndecidedHistoryOnPostgres(t *testing.T) {
+	api := NewApi(driverPGManager(t))
+	f := newCostFixture(t, api)
+	t.Cleanup(func() {
+		require.NoError(t, f.db.Exec(`DELETE FROM "device-management".device_configuration_reports WHERE tenant_id LIKE ?`, f.prefix+"%").Error)
+	})
 	const deepHistory = 100
 	deep := f.prefix + "deep"
-	deepInserted := time.Now()
+	inserted := time.Now()
 	f.addOperations(t, deep, "running", 1, 1)
 	require.NoError(t, f.db.Exec(`INSERT INTO "device-management".device_configuration_reports (created_at, tenant_id, device_id, revision, digest, status, source)
  SELECT CASE WHEN g = 5 THEN now() - interval '200 seconds' ELSE now() - interval '50 seconds' END, l.tenant_id, l.target_id, g, 'x', 'APPLIED', 'REPORT'
  FROM "device-management".fleet_operation_lines l CROSS JOIN generate_series(5, ?) g WHERE l.tenant_id = ? AND l.posting = 'POSTED'`, 4+deepHistory, deep).Error)
-	f.analyze(t)
-	require.NoError(t, f.db.Exec(`ANALYZE "device-management".device_configuration_reports`).Error)
-	undecided := read(deep, deepInserted)
-	deepLines := int64(costPostedPerOp / 2)
+	analyzeReports(t, f)
+	undecided := readLag(t, api, f, inserted)
+	lines := int64(costPostedPerOp / 2)
 	t.Logf("reconciler lag, %d awaiting lines each with %d undecided reports at or after its posted revision: report probes %d, "+
-		"%.1f report rows per probe, %d buffers, %.1f ms", deepLines, deepHistory, undecided.reports.loops, undecided.reports.perLoop,
+		"%.1f report rows per probe, %d buffers, %.1f ms", lines, deepHistory, undecided.reports.loops, undecided.reports.perLoop,
 		undecided.reports.buffers, undecided.ms)
 	// Each line's decider (revision 5) was 200 s old when written; the newer revisions are younger.
 	require.InDelta(t, 200+undecided.since.Seconds(), undecided.lag.Seconds(), 3)
-	require.Equal(t, deepLines, undecided.lines)
-	require.Equal(t, deepLines, undecided.reports.loops, "one report probe per awaiting line")
+	require.Equal(t, lines, undecided.lines)
+	require.Equal(t, lines, undecided.reports.loops, "one report probe per awaiting line")
 	require.LessOrEqual(t, undecided.reports.perLoop, 3.0, "a probe reads its decider, not the device's whole range of undecided reports")
 }
 
-// The throughput run's lag bound, on the instance-wide measurement the gauge publishes.
-func assertReconcilerLagBound(t *testing.T, api *Api, prefix string) {
+// The throughput run's lag bound, on the instance-wide measurement the gauge publishes. The run
+// has its own instance database, so the measurement covers its tenants and nothing else.
+func assertReconcilerLagBound(t *testing.T, api *Api) {
 	t.Helper()
-	withOnlyTheseAwaiting(t, api, prefix, func(iso *Api, _ *gorm.DB) {
-		lag, err := iso.FleetReconcilerLag(context.Background())
-		require.NoError(t, err)
-		require.Less(t, lag, 15*time.Second, "reconciler lag at the end of the 10-tenant run")
-		require.NoError(t, iso.MeasureFleetReconcilerLag(context.Background()))
-		require.False(t, math.IsNaN(reconcilerLag()))
-		require.Less(t, reconcilerLag(), 15.0)
-	})
+	lag, err := api.FleetReconcilerLag(context.Background())
+	require.NoError(t, err)
+	require.Less(t, lag, 15*time.Second, "reconciler lag at the end of the 10-tenant run")
+	require.NoError(t, api.MeasureFleetReconcilerLag(context.Background()))
+	require.False(t, math.IsNaN(reconcilerLag()))
+	require.Less(t, reconcilerLag(), 15.0)
 }
