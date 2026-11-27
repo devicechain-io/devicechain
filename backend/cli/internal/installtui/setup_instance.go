@@ -100,6 +100,9 @@ type instancePhase struct {
 	// plan is the run the review shows; planErr is why there is none.
 	plan    *BootstrapPlan
 	planErr string
+	// help is the instance journey's help (BootstrapFlow.helpScreen) open over the
+	// hand-over or the review.
+	help bool
 }
 
 func newInstancePhase(scr *BootstrapScreens, setup BootstrapSetup) *instancePhase {
@@ -187,6 +190,9 @@ func (p *instancePhase) review(planned BootstrapPlanned) tea.Cmd {
 }
 
 func (p *instancePhase) handoverKey(k tea.KeyPressMsg) (tea.Cmd, prerunOutcome) {
+	if cmd, ok := p.helpKey(k); ok {
+		return cmd, stay
+	}
 	if !p.shown() {
 		return nil, stay // a screen the terminal cannot show whole takes no key
 	}
@@ -209,6 +215,9 @@ func (p *instancePhase) handoverKey(k tea.KeyPressMsg) (tea.Cmd, prerunOutcome) 
 }
 
 func (p *instancePhase) reviewKey(k tea.KeyPressMsg) (tea.Cmd, prerunOutcome) {
+	if cmd, ok := p.helpKey(k); ok {
+		return cmd, stay
+	}
 	if !p.shown() {
 		return nil, stay // a screen the terminal cannot show whole takes no key
 	}
@@ -248,6 +257,24 @@ func (p *instancePhase) back() {
 	p.flow.phase = phaseEscrow
 }
 
+// helpKey takes every key while help is open over the hand-over or the review, and the
+// key that opens it (? or F1), whether or not the screen has settled or fits. Each is
+// input to the settle gate, so the screen settles again after help closes; none of them
+// moves the focus or acts on the screen.
+func (p *instancePhase) helpKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
+	s := k.String()
+	switch {
+	case p.help && (s == "esc" || s == "?" || s == "f1"):
+		p.help = false
+	case p.help:
+	case s == "?" || s == "f1":
+		p.help = true
+	default:
+		return nil, false
+	}
+	return p.gate.interrupt(), true
+}
+
 // shown reports whether the screen on the terminal is there whole: only then may a key
 // act on it, as everywhere in the instance journey.
 func (p *instancePhase) shown() bool { return p.theme.fits(p.flow.header(), p.screen()) }
@@ -272,6 +299,9 @@ func (p *instancePhase) screen() bsScreen {
 func (p *instancePhase) render() string {
 	if p.stage == instChoices {
 		return p.flow.Render()
+	}
+	if p.help {
+		return p.theme.frame(p.flow.header(), p.flow.helpScreen(p.screen()))
 	}
 	return p.theme.frame(p.flow.header(), p.screen())
 }
@@ -304,7 +334,7 @@ func (p *instancePhase) handoverScreen(pending bool) bsScreen {
 	if pending {
 		body = append(body, "", t.paint(roleDim, "This screen takes keys once it has settled."))
 	}
-	return bsScreen{title: handoverTitle, body: body, keys: []key.Binding{bsKeyNext, bsKeyEnter}}
+	return bsScreen{title: handoverTitle, body: body, keys: []key.Binding{bsKeyNext, bsKeyEnter, bsKeyHelp}}
 }
 
 func (p *instancePhase) reviewScreen(pending bool) bsScreen {
@@ -339,5 +369,5 @@ func (p *instancePhase) reviewScreen(pending bool) bsScreen {
 		body = append(body, "", t.paint(roleDim, instReviewPending))
 	}
 	return bsScreen{title: instReviewTitle, body: body, before: true,
-		keys: []key.Binding{bsKeyNext, bsKeyEnter, bsKeyBack}}
+		keys: []key.Binding{bsKeyNext, bsKeyEnter, bsKeyBack, bsKeyHelp}}
 }

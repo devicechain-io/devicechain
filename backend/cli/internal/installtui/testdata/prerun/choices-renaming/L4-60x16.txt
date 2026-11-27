@@ -11,6 +11,6 @@ Preflight: all checks passed.
 
 Name the local kind cluster
 
-
 ────────────────────────────────────────────────────────────
-Enter use · Backspace erase · Esc close · Ctrl+C exit
+Enter use · Backspace erase · Esc close · F1 help
+Ctrl+C exit

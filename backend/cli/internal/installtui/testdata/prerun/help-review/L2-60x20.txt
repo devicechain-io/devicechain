@@ -1,0 +1,20 @@
+DeviceChain - dcctl install - kind devicechain dcctl v1.12.0
+------------------------------------------------------------
+Help - Review
+
+Tab         action
+Enter       select
+up/down     scroll
+Esc         back
+q           exit
+?/F1        help
+Ctrl+C      exit
+
+Approve starts the install of the plan shown, and only once
+this screen has settled: a key pressed before then does
+nothing. Opening, scrolling and closing help are keys too,
+so the screen settles again after help closes. Back returns
+to the choices. Nothing has been changed yet: nothing on
+... 2 lines below
+------------------------------------------------------------
+Esc close help - up/down scroll - Ctrl+C exit

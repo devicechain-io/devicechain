@@ -15,6 +15,6 @@ target and runs the checks against it.
 
 
 
-
 ------------------------------------------------------------
-up/down context - Enter use - Esc close - Ctrl+C exit
+up/down context - Enter use - Esc close - ?/F1 help
+Ctrl+C exit

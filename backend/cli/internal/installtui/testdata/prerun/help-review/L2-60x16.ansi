@@ -1,0 +1,16 @@
+\x1b[1mDeviceChain - dcctl install - kind devicechain\x1b[m dcctl v1.12.0
+------------------------------------------------------------
+\x1b[1mHelp\x1b[m - Review
+
+Tab         action
+Enter       select
+up/down     scroll
+Esc         back
+q           exit
+?/F1        help
+Ctrl+C      exit
+
+Approve starts the install of the plan shown, and only once
+... 6 lines below
+------------------------------------------------------------
+Esc close help - up/down scroll - Ctrl+C exit

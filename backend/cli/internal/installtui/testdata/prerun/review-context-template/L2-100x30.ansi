@@ -26,5 +26,5 @@
 |                                                                                                  |
 |   Back  > \x1b[7mApprove and install\x1b[m    Exit                                                            |
 +--------------------------------------------------------------------------------------------------+
-| Tab action - Enter select - up/down scroll - Esc back - q exit - Ctrl+C exit                     |
+| Tab action - Enter select - up/down scroll - Esc back - q exit - ?/F1 help - Ctrl+C exit         |
 +--------------------------------------------------------------------------------------------------+

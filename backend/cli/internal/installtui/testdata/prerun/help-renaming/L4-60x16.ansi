@@ -1,0 +1,16 @@
+\x1b[1mDeviceChain · dcctl install · kind devicechain\x1b[m \x1b[38;2;138;166;182mdcctl v1.12.0\x1b[m
+────────────────────────────────────────────────────────────
+\x1b[1mHelp\x1b[m · Name the local kind cluster
+
+\x1b[38;2;36;163;214mEnter       \x1b[muse
+\x1b[38;2;36;163;214mBackspace   \x1b[merase
+\x1b[38;2;36;163;214mEsc         \x1b[mclose
+\x1b[38;2;36;163;214mF1          \x1b[mhelp
+\x1b[38;2;36;163;214mCtrl+C      \x1b[mexit
+
+Type the local kind cluster's name: Enter uses it and runs
+the checks again, Esc keeps the name it had. ? is part of a
+name here, so F1 opens help. Nothing has been changed yet:
+… 2 lines below
+────────────────────────────────────────────────────────────
+\x1b[38;2;138;166;182mEsc close help · ↑/↓ scroll · Ctrl+C exit\x1b[m

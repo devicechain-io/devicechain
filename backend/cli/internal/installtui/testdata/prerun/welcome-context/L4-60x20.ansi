@@ -17,4 +17,4 @@ No changes have been made.
 
   Continue  › \x1b[7mExit\x1b[m
 ────────────────────────────────────────────────────────────
-\x1b[38;2;138;166;182mEnter select · Tab action · q exit · Ctrl+C exit\x1b[m
+\x1b[38;2;138;166;182mEnter select · Tab action · q exit · ?/F1 help · Ctrl+C exit\x1b[m

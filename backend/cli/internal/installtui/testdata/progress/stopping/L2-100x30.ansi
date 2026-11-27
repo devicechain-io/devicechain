@@ -26,5 +26,5 @@
 | 10:05:12 tofu    line 0311 helm_release.cert_manager: creating, a line long enough to be cut ... |
 | ... 300 earlier lines kept - 0 aged out                                                          |
 +--------------------------------------------------------------------------------------------------+
-| l logs  PgUp/PgDn scroll  Ctrl+C again force exit                                                |
+| l logs  PgUp/PgDn scroll  Ctrl+C again force exit  ?/F1 help                                     |
 +--------------------------------------------------------------------------------------------------+

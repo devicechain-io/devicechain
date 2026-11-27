@@ -16,4 +16,4 @@ created yet. Approve starts it; Back returns to the choices.
   [ Exit ]
 
 \x1b[2m────────────────────────────────────────────────────────────\x1b[m
-\x1b[2mTab next · Enter activate · Esc back\x1b[m
+\x1b[2mTab next · Enter activate · Esc back · ?/F1 help\x1b[m

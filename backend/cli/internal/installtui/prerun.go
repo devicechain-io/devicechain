@@ -98,6 +98,8 @@ type prerun struct {
 	pf      preflightState
 	ch      choicesState
 	rv      reviewState
+	// help is the help over whichever screen is up. It changes nothing under it.
+	help helpState
 }
 
 func newPrerun(ctx context.Context, caps terminal.Capabilities, w *Wizard, runner installflow.PreflightRunner,
@@ -146,6 +148,10 @@ func (p *prerun) update(msg tea.Msg) (tea.Cmd, prerunOutcome) {
 		if p.tooSmall() {
 			return nil, stay
 		}
+		if p.help.open || p.opensHelp(msg) {
+			// 🔴 HELP TAKES THE KEY WHOLE: nothing under it moves, changes or answers.
+			return p.helpKey(msg), stay
+		}
 		if p.ch.picker != nil {
 			return p.pickerKey(msg)
 		}
@@ -174,6 +180,9 @@ type prerunKeys struct {
 	nextField, choose, toggle, setting, pick, closeOverlay, apply, erase key.Binding
 	// The review.
 	scroll key.Binding
+	// Help: ? or F1 opens it (F1 alone where ? is typed into a name), and it scrolls and
+	// closes with its own keys.
+	help, helpF1, closeHelp, helpScroll key.Binding
 }
 
 func newPrerunKeys(g result.Glyphs) prerunKeys {
@@ -203,15 +212,49 @@ func newPrerunKeys(g result.Glyphs) prerunKeys {
 		erase:        key.NewBinding(key.WithKeys("backspace"), key.WithHelp("Backspace", "erase")),
 
 		scroll: key.NewBinding(key.WithKeys("up", "down"), key.WithHelp(updown, "scroll")),
+
+		help:       key.NewBinding(key.WithKeys("?", "f1"), key.WithHelp("?/F1", "help")),
+		helpF1:     key.NewBinding(key.WithKeys("f1"), key.WithHelp("F1", "help")),
+		closeHelp:  key.NewBinding(key.WithKeys("esc", "?", "f1"), key.WithHelp("Esc", "close help")),
+		helpScroll: key.NewBinding(key.WithKeys(helpScrollKeys...), key.WithHelp(updown, "scroll")),
 	}
 }
 
-// active is the bindings to advertise now, in footer order.
+// active is the bindings to advertise now, in footer order: the screen's, or help's
+// while help is open over it.
 func (p *prerun) active() []key.Binding {
 	k := p.keys
 	switch {
 	case p.tooSmall():
 		return []key.Binding{k.cancel}
+	case p.help.open:
+		out := []key.Binding{k.closeHelp}
+		if _, list, room := p.helpParts(); len(list) > room {
+			out = append(out, k.helpScroll)
+		}
+		return append(out, k.cancel)
+	}
+	return p.footerKeys()
+}
+
+// footerKeys is the screen's footer with help closed: its own bindings, and help's key
+// just before the way out. The screen's help lists exactly these.
+func (p *prerun) footerKeys() []key.Binding {
+	k := p.keys
+	keys := p.screenKeys()
+	// Help is offered on every screen, just before the way out.
+	h := k.help
+	if p.typingName() {
+		h = k.helpF1
+	}
+	n := len(keys)
+	return append(append(keys[:n-1:n-1], h), keys[n-1])
+}
+
+// screenKeys is the screen's own bindings, before help's, ending with Ctrl+C.
+func (p *prerun) screenKeys() []key.Binding {
+	k := p.keys
+	switch {
 	case p.screen == screenWelcome:
 		return []key.Binding{k.enter, k.next, k.exit, k.cancel}
 	case p.ch.picker != nil:
@@ -305,6 +348,8 @@ func (p *prerun) render() string {
 	f.rows -= len(footer) - 1
 	var body []string
 	switch {
+	case p.help.open:
+		body = p.helpLines(f.inner, f.rows)
 	case p.ch.picker != nil:
 		body = p.pickerLines(f.inner, f.rows)
 	case p.screen == screenWelcome:
@@ -351,12 +396,20 @@ func (p *prerun) render() string {
 // a registered value that neither part is. A line the hub's redaction would change is
 // withheld whole, as the progress and result screens withhold theirs; and the marker
 // itself is checked, so nothing leaves unchecked.
-func (p *prerun) checked(lines []string) []string {
+func (p *prerun) checked(lines []string) []string { return checkLines(p.redact, lines) }
+
+// checkLines is lines as they may be drawn: each one, as composed and with its styling
+// removed, is withheld whole when redact would change it (see prerun.checked). A nil
+// redact changes nothing.
+func checkLines(redact func(string) string, lines []string) []string {
+	if redact == nil {
+		redact = func(s string) string { return s }
+	}
 	for i, l := range lines {
 		l = strings.TrimRight(l, " ")
-		if plain := installflow.Text(l).String(); p.redact(plain) != plain {
+		if plain := installflow.Text(l).String(); redact(plain) != plain {
 			l = withheld
-			if p.redact(l) != l {
+			if redact(l) != l {
 				l = ""
 			}
 		}

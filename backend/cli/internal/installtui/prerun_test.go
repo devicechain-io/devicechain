@@ -133,6 +133,12 @@ func keyOf(name string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
 	case "backspace":
 		return tea.KeyPressMsg{Code: tea.KeyBackspace}
+	case "f1":
+		return tea.KeyPressMsg{Code: tea.KeyF1}
+	case "pgup":
+		return tea.KeyPressMsg{Code: tea.KeyPgUp}
+	case "pgdown":
+		return tea.KeyPressMsg{Code: tea.KeyPgDown}
 	}
 	r := []rune(name)[0]
 	return tea.KeyPressMsg{Code: r, Text: name}

@@ -193,26 +193,31 @@ func (p *prerun) reviewLines(w, rows int) []string {
 	return append(append(head, p.reviewWindow(list, room)...), tail...)
 }
 
-// reviewWindow is room lines of the plan from the scroll offset, the lines cut off
-// above or below counted in words, never silently dropped.
+// reviewWindow is room lines of the plan from the scroll offset (see window).
 func (p *prerun) reviewWindow(list []string, room int) []string {
+	out, offset := window(list, room, p.rv.offset, p.theme.Glyphs.Ellipsis)
+	p.rv.offset = offset
+	return out
+}
+
+// window is room lines of list from offset, the lines cut off above or below counted
+// in words, never silently dropped, and the offset as it was clamped to the list.
+func window(list []string, room, offset int, ellipsis string) ([]string, int) {
 	if room <= 0 {
-		return nil
+		return nil, offset
 	}
 	if len(list) <= room {
-		p.rv.offset = 0
-		return list
+		return list, 0
 	}
-	p.rv.offset = min(max(p.rv.offset, 0), len(list)-room)
-	out := append([]string(nil), list[p.rv.offset:p.rv.offset+room]...)
-	e := p.theme.Glyphs.Ellipsis
-	if p.rv.offset > 0 {
-		out[0] = e + " " + plural(p.rv.offset+1, "line", "lines") + " above"
+	offset = min(max(offset, 0), len(list)-room)
+	out := append([]string(nil), list[offset:offset+room]...)
+	if offset > 0 {
+		out[0] = ellipsis + " " + plural(offset+1, "line", "lines") + " above"
 	}
-	if below := len(list) - (p.rv.offset + room); below > 0 {
-		out[len(out)-1] = e + " " + plural(below+1, "line", "lines") + " below"
+	if below := len(list) - (offset + room); below > 0 {
+		out[len(out)-1] = ellipsis + " " + plural(below+1, "line", "lines") + " below"
 	}
-	return out
+	return out, offset
 }
 
 // planShort is the plan in a few words, for the review's title line.

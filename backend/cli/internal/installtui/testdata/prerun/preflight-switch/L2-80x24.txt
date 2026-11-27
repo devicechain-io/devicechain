@@ -20,5 +20,5 @@
 | The plan changes to this footprint and every check runs again for it.        |
 | Switch to Compact?                                                           |
 +------------------------------------------------------------------------------+
-| Enter switch - Esc keep - Ctrl+C exit                                        |
+| Enter switch - Esc keep - ?/F1 help - Ctrl+C exit                            |
 +------------------------------------------------------------------------------+

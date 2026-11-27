@@ -36,5 +36,5 @@
 │ 10:04:50 tofu    line 0289 helm_release.cert_manager: creating, a line long enough to be cut at narrow widths        │
 │ … 268 earlier lines kept · 0 aged out · 22 newer                                                                     │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ l logs  PgUp/PgDn scroll  f follow  Ctrl+C stop                                                                      │
+│ l logs  PgUp/PgDn scroll  f follow  Ctrl+C stop  ?/F1 help                                                           │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -1,0 +1,16 @@
+ DeviceChain · Installing · kind-devicechain
+ Help · Install progress
+ 
+ l           logs
+ Enter       exit
+ ?/F1        help
+ 
+ The run is over, and nothing is running while this screen
+ is open. Leaving it never changes dcctl's exit status, and
+ dcctl prints a short summary when it exits. l opens the
+ log pane; while it is open PgUp and PgDn scroll it, and f
+ follows it again.
+ 
+ 
+ 
+ Esc close help

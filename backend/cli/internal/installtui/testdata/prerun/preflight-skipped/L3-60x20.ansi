@@ -15,6 +15,6 @@
 
 
 
-
 ────────────────────────────────────────────────────────────
-\x1b[38;5;109mTab action · Enter select · Esc back · q exit · Ctrl+C exit\x1b[m
+\x1b[38;5;109mTab action · Enter select · Esc back · q exit · ?/F1 help\x1b[m
+\x1b[38;5;109mCtrl+C exit\x1b[m

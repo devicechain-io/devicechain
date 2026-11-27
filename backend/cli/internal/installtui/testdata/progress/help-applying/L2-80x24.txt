@@ -1,0 +1,24 @@
++- DeviceChain - Installing - kind-devicechain --------------------------------+
+| Help - Install progress                                                      |
+|                                                                              |
+| l           logs                                                             |
+| Ctrl+C      stop                                                             |
+| ?/F1        help                                                             |
+|                                                                              |
+| The run goes on while help is open: help never pauses or stops it. Ctrl+C    |
+| stops the run safely and waits for it to settle; a second Ctrl+C exits at    |
+| once. Esc never stops it. Nothing is rolled back. The overall bar counts     |
+| finished stages, never a percentage, and a stage's bar is full only once the |
+| stage has finished. Work with no known total shows that it is working, never |
+| a number. l opens the log pane; while it is open PgUp and PgDn scroll it,    |
+| and f follows it again.                                                      |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
++------------------------------------------------------------------------------+
+| Esc close help  Ctrl+C stop                                                  |
++------------------------------------------------------------------------------+

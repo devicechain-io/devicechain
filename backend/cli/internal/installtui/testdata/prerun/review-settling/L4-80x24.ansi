@@ -13,12 +13,12 @@
 │   \x1b[38;2;138;166;182mTLS         \x1b[m on (cert-manager)                                             │
 │   \x1b[38;2;138;166;182mBackups     \x1b[m on, to a store the cluster provisions for itself (no off-site │
 │                archive)                                                      │
-│   \x1b[38;2;138;166;182mState       \x1b[m /home/op/.devicechain/clusters/<assigned after                │
-│ … 9 lines below                                                              │
+│ … 10 lines below                                                             │
 │                                                                              │
 │ \x1b[38;2;138;166;182mApprove becomes available once this screen has settled; a key pressed before\x1b[m │
 │ \x1b[38;2;138;166;182mthen does nothing.\x1b[m                                                           │
 │ › \x1b[7mBack\x1b[m    \x1b[38;2;138;166;182mApprove and install (unavailable)\x1b[m    Exit                          │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ \x1b[38;2;138;166;182mTab action · Enter select · ↑/↓ scroll · Esc back · q exit · Ctrl+C exit\x1b[m     │
+│ \x1b[38;2;138;166;182mTab action · Enter select · ↑/↓ scroll · Esc back · q exit · ?/F1 help\x1b[m       │
+│ \x1b[38;2;138;166;182mCtrl+C exit\x1b[m                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯

@@ -20,4 +20,4 @@ run:
 \x1b[2mThis screen takes keys once it has settled.\x1b[m
 
 \x1b[2m────────────────────────────────────────────────────────────────────────────\x1b[m
-\x1b[2mTab next · Enter activate\x1b[m
+\x1b[2mTab next · Enter activate · ?/F1 help\x1b[m

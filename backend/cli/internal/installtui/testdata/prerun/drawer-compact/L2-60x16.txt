@@ -8,9 +8,9 @@ other flag from the command line is carried as given.
   Database backups: on (follows the bundled CloudNativePG
   operator and, on Compact, TLS)
 
-Relational recovery
-... 7 lines below
+... 8 lines below
 
 Preflight: all checks passed.
 ------------------------------------------------------------
-up/down setting - Space toggle - Esc close - Ctrl+C exit
+up/down setting - Space toggle - Esc close - ?/F1 help
+Ctrl+C exit

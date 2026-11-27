@@ -1,0 +1,30 @@
++- DeviceChain - dcctl install - kind devicechain --------------------------------- dcctl v1.12.0 -+
+| Help - Preflight                                                                                 |
+|                                                                                                  |
+| Enter       switch                                                                               |
+| Esc         keep                                                                                 |
+| ?/F1        help                                                                                 |
+| Ctrl+C      exit                                                                                 |
+|                                                                                                  |
+| Switch changes the pending plan to the other footprint and runs every check again for it; Keep   |
+| leaves the plan as it is. Nothing has been changed yet: nothing on these screens changes         |
+| anything until you approve the plan on the review. Ctrl+C exits.                                 |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
++--------------------------------------------------------------------------------------------------+
+| Esc close help - Ctrl+C exit                                                                     |
++--------------------------------------------------------------------------------------------------+

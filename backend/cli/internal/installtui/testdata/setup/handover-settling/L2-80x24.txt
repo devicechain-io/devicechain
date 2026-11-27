@@ -20,4 +20,4 @@ run:
 This screen takes keys once it has settled.
 
 ----------------------------------------------------------------------------
-Tab next - Enter activate
+Tab next - Enter activate - ?/F1 help

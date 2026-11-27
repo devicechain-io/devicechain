@@ -1,0 +1,16 @@
+DeviceChain - dcctl install - kind devicechain dcctl v1.12.0
+------------------------------------------------------------
+Help - Name the local kind cluster
+
+Enter       use
+Backspace   erase
+Esc         close
+F1          help
+Ctrl+C      exit
+
+Type the local kind cluster's name: Enter uses it and runs
+the checks again, Esc keeps the name it had. ? is part of a
+name here, so F1 opens help. Nothing has been changed yet:
+... 2 lines below
+------------------------------------------------------------
+Esc close help - up/down scroll - Ctrl+C exit

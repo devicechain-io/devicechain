@@ -17,4 +17,4 @@ needs its own checks and its own review.
 > \x1b[7mBack\x1b[m    Approve and install    Exit
 ------------------------------------------------------------
 Tab action - Enter select - up/down scroll - Esc back
-q exit - Ctrl+C exit
+q exit - ?/F1 help - Ctrl+C exit

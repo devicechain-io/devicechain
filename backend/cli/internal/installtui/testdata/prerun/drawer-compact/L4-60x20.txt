@@ -12,9 +12,9 @@ Relational recovery
   nothing set; the defaults apply
 
 Gateway, MQTT and legacy ingress
-  nothing set; the defaults apply
-… 3 lines below
+… 4 lines below
 
 Preflight: all checks passed.
 ────────────────────────────────────────────────────────────
-↑/↓ setting · Space toggle · Esc close · Ctrl+C exit
+↑/↓ setting · Space toggle · Esc close · ?/F1 help
+Ctrl+C exit

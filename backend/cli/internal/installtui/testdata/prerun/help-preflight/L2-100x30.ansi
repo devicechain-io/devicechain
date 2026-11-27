@@ -1,0 +1,30 @@
++-\x1b[1m DeviceChain - dcctl install - kind devicechain \x1b[m--------------------------------- dcctl v1.12.0 -+
+| \x1b[1mHelp\x1b[m - Preflight                                                                                 |
+|                                                                                                  |
+| up/down     check                                                                                |
+| Tab         action                                                                               |
+| Enter       select                                                                               |
+| Esc         back                                                                                 |
+| q           exit                                                                                 |
+| ?/F1        help                                                                                 |
+| Ctrl+C      exit                                                                                 |
+|                                                                                                  |
+| The checks are read-only: they never install software or change Docker, the kernel or a cluster. |
+| A fix is advice, or a change to the pending plan that runs the checks again; Recheck runs them   |
+| again as they are. Continue is unavailable while any check fails. Nothing has been changed yet:  |
+| nothing on these screens changes anything until you approve the plan on the review. Ctrl+C       |
+| exits.                                                                                           |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
++--------------------------------------------------------------------------------------------------+
+| Esc close help - Ctrl+C exit                                                                     |
++--------------------------------------------------------------------------------------------------+

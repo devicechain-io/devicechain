@@ -12,9 +12,9 @@ other flag from the command line is carried as given.
   \x1b[38;2;138;166;182mnothing set; the defaults apply\x1b[m
 
 \x1b[1mGateway, MQTT and legacy ingress\x1b[m
-  \x1b[38;2;138;166;182mnothing set; the defaults apply\x1b[m
-… 3 lines below
+… 4 lines below
 
 \x1b[38;2;95;211;154mPreflight: all checks passed.\x1b[m
 ────────────────────────────────────────────────────────────
-\x1b[38;2;138;166;182m↑/↓ setting · Space toggle · Esc close · Ctrl+C exit\x1b[m
+\x1b[38;2;138;166;182m↑/↓ setting · Space toggle · Esc close · ?/F1 help\x1b[m
+\x1b[38;2;138;166;182mCtrl+C exit\x1b[m

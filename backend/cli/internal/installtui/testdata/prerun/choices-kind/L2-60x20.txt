@@ -17,4 +17,4 @@ Preflight: all checks passed.
 
 ------------------------------------------------------------
 up/down/Space choose - Tab next - Esc back - q exit
-Ctrl+C exit
+?/F1 help - Ctrl+C exit

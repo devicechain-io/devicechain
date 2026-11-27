@@ -26,5 +26,5 @@
 │                                                                                                  │
 │   Back  › Approve and install    Exit                                                            │
 ├──────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ Tab action · Enter select · ↑/↓ scroll · Esc back · q exit · Ctrl+C exit                         │
+│ Tab action · Enter select · ↑/↓ scroll · Esc back · q exit · ?/F1 help · Ctrl+C exit             │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

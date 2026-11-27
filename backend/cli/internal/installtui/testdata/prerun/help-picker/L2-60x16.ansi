@@ -1,0 +1,16 @@
+\x1b[1mDeviceChain - dcctl install - kind devicechain\x1b[m dcctl v1.12.0
+------------------------------------------------------------
+\x1b[1mHelp\x1b[m - Choose a context
+
+up/down     context
+Enter       use
+Esc         close
+?/F1        help
+Ctrl+C      exit
+
+Choosing a context makes it the target and runs the checks
+against it. dcctl never creates or deletes a context's
+cluster. Esc keeps the target it had. Nothing has been
+... 2 lines below
+------------------------------------------------------------
+Esc close help - up/down scroll - Ctrl+C exit
