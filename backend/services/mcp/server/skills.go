@@ -179,6 +179,16 @@ func loadSkill(fsys fs.FS, dir string) (Skill, []string) {
 		if p == dir {
 			return nil
 		}
+		// A name starting with "." or "_" is refused outright. go:embed leaves such files
+		// out of a DIRECTORY pattern but a glob such as references/*.md matches them, and
+		// they are what an editor, a merge tool or an OS leaves behind: never skill content.
+		if base := path.Base(rel); strings.HasPrefix(base, ".") || strings.HasPrefix(base, "_") {
+			add("%s is not allowed: a name starting with . or _ is never skill content", rel)
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
 		if d.IsDir() {
 			switch {
 			case rel == skillReferencesDir:

@@ -23,7 +23,7 @@ When a budget runs out, stop and report what is left as counts. Do not keep pagi
 
 ## 1. Scope the storm
 
-Call `list_alarms(state: ACTIVE, acknowledged: false, pageSize: 100)`, then the following pages with `pageNumber`, until a page comes back short or the budget is reached. Record `totalRecords` from the first page so you can say how much of the storm you saw.
+Call `list_alarms(state: ACTIVE, acknowledged: false, pageSize: 100)`, then the following pages with `pageNumber`, until a page comes back short or the budget is reached. Record `totalRecords` from the first page so you can say how much of the storm you saw. The list is live: alarms are raised and cleared while you page, so an alarm can appear on two pages or be skipped. Keep each alarm once, by its `token`.
 
 Note `suppressionUnavailable` on every page. If it is ever true, suppression is unknown for that page's alarms.
 

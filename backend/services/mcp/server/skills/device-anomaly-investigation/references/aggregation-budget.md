@@ -7,7 +7,7 @@ An aggregation returns one row per bucket per metric. Do the arithmetic before t
 - Buckets: the window divided by `intervalSeconds`. At most 10,000.
 - Rows: buckets multiplied by the number of metrics that match. At most 50,000. Naming one metric with `name` makes this the bucket count.
 - The response: at most 1,000 rows and 256 KiB. This is the limit you will meet first.
-- `startTime` and `intervalSeconds` are required. `endTime` defaults to now. Always give both ends: an open window covers everything the platform still keeps.
+- `startTime` and `intervalSeconds` are required. `endTime` may be left out and then means now. Give it anyway, so that two windows you compare have the same length.
 
 So, with one metric named, keep the window divided by the interval at or below 1,000.
 
@@ -26,6 +26,7 @@ Start coarse. Narrow the window around the change once you have found it, and on
 
 ## Reading a bucket
 
+- `name` is the metric's key, the same string a reading shows as its `name`. A result with no buckets at all usually means the key is wrong, not that the device was silent: check the key before reading it as a reporting problem.
 - `count` is how many readings arrived in the bucket. A falling count means the device reported less often, whatever the values did.
 - An empty bucket is a period with no readings, not a reading of zero.
 - Compare like with like: the same bucket width, and the same time of day for a metric with a daily rhythm.

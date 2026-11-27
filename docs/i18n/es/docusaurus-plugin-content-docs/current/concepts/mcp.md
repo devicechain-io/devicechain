@@ -221,7 +221,7 @@ El servidor también ofrece **skills**: procedimientos escritos que indican a un
 
 Cada skill es un directorio en el formato [Agent Skills](https://agentskills.io/specification): un `SKILL.md` con el procedimiento y archivos de referencia que el procedimiento lee cuando llega a ellos. El servidor ofrece los mismos archivos de tres formas:
 
-- **Como prompts.** Un prompt por skill, con el nombre de la skill. En Claude Code, un servidor añadido como `devicechain` muestra `/devicechain:alarm-storm-triage (MCP)`, que también puedes ejecutar como `/mcp__devicechain__alarm-storm-triage`.
+- **Como prompts.** Un prompt por skill, con el nombre de la skill. En Claude Code, para un servidor añadido como `devicechain`, ejecuta uno con `/mcp__devicechain__alarm-storm-triage`. Un cliente muestra los prompts como prompts, no como skills.
 - **Como recursos**, en `skill://<skill>/SKILL.md` y `skill://<skill>/references/<file>.md`. En Claude Code, adjunta uno con `@devicechain:skill://alarm-storm-triage/SKILL.md`. Cada recurso aparece con su tamaño y su resumen SHA-256.
 - **Desde las instrucciones del servidor**, que nombran las tres skills para que un asistente pueda encontrarlas por sí mismo.
 

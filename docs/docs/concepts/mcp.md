@@ -214,7 +214,7 @@ The server also offers **skills**: written procedures that tell an assistant how
 
 Each skill is a directory in the [Agent Skills](https://agentskills.io/specification) format: a `SKILL.md` with the procedure, and reference files the procedure reads when it reaches them. The server offers the same files in three ways:
 
-- **As prompts.** One prompt per skill, with the skill's name. In Claude Code, a server added as `devicechain` lists `/devicechain:alarm-storm-triage (MCP)`, which you can also run as `/mcp__devicechain__alarm-storm-triage`.
+- **As prompts.** One prompt per skill, with the skill's name. In Claude Code, for a server added as `devicechain`, run one as `/mcp__devicechain__alarm-storm-triage`. A client shows prompts as prompts, not as skills.
 - **As resources**, at `skill://<skill>/SKILL.md` and `skill://<skill>/references/<file>.md`. In Claude Code, attach one with `@devicechain:skill://alarm-storm-triage/SKILL.md`. Each resource is listed with its size and its SHA-256 digest.
 - **From the server's instructions**, which name the three skills so that an assistant can find them on its own.
 

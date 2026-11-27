@@ -203,7 +203,7 @@ DeviceChain 正在让助手不仅能读取，还能操作：确认告警、发�
 
 每个技能都是一个 [Agent Skills](https://agentskills.io/specification) 格式的目录：一个包含流程的 `SKILL.md`，以及流程执行到相应步骤时才读取的参考文件。服务器以三种方式提供同一组文件：
 
-- **作为提示（prompt）。** 每个技能一个提示，名称与技能相同。在 Claude Code 中，以 `devicechain` 名称添加的服务器会列出 `/devicechain:alarm-storm-triage (MCP)`，也可以用 `/mcp__devicechain__alarm-storm-triage` 运行。
+- **作为提示（prompt）。** 每个技能一个提示，名称与技能相同。在 Claude Code 中，对于以 `devicechain` 名称添加的服务器，可用 `/mcp__devicechain__alarm-storm-triage` 运行。客户端会把它们显示为提示，而不是技能。
 - **作为资源**，地址为 `skill://<skill>/SKILL.md` 和 `skill://<skill>/references/<file>.md`。在 Claude Code 中，可用 `@devicechain:skill://alarm-storm-triage/SKILL.md` 附加。每个资源都列出其大小和 SHA-256 摘要。
 - **通过服务器说明（instructions）**，其中列出这三个技能，助手无需提示即可找到它们。
 
