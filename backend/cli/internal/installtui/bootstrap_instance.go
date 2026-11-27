@@ -297,16 +297,20 @@ func (m *instanceModel) screen(t bsTheme) bsScreen {
 		"No changes have been made.", w)...)
 	body = append(body, "")
 	row := func(f instanceField, label, value, flag string) {
-		mark := "  "
+		mark, role := "  ", rolePlain
 		if m.focus == f {
-			mark = t.focusMark() + " "
-			value = t.paint(roleFocus, value)
+			mark, role = t.focusMark()+" ", roleFocus
 		}
-		line := mark + t.paint(roleLabel, padRight(label, 14)) + value
 		if from[flag] {
-			line += "  " + t.paint(roleDim, "from --"+flag)
+			value += "  (from --" + flag + ")"
 		}
-		body = append(body, line)
+		for i, v := range wrap(value, w-16) {
+			lead := strings.Repeat(" ", 16)
+			if i == 0 {
+				lead = mark + t.paint(roleLabel, padRight(label, 14))
+			}
+			body = append(body, lead+t.paint(role, v))
+		}
 		if e, ok := m.errs[f]; ok {
 			body = append(body, t.para(roleBad, strings.Repeat(" ", 16), "ERROR: "+e, w)...)
 		}
@@ -346,8 +350,7 @@ func (m *instanceModel) screen(t bsTheme) bsScreen {
 			"Areas deployed on top of the profile, separated by commas (--enable-area).", w)...)
 	}
 	body = append(body, "")
-	body = append(body, "  "+t.paint(roleLabel, padRight("Cluster", 14))+orDefault(m.seed.ClusterShape, "as installed")+
-		"  "+t.paint(roleDim, "(inherited, read-only)"))
+	body = append(body, t.field("Cluster", orDefault(m.seed.ClusterShape, "as installed")+"  (inherited, read-only)", 12, w)...)
 	body = append(body, "", "  "+button(t, "Back", m.focus == fieldBack)+"   "+button(t, "Continue", m.focus == fieldContinue))
 	return bsScreen{title: "Instance", body: body, keys: m.keys(), before: true}
 }

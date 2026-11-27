@@ -262,7 +262,7 @@ func (t bsTheme) contentWidth() int {
 }
 
 // compose lays a screen out inside the terminal, trying a tighter layout each
-// time one does not fit: the full chrome; no outer border; no blank lines in the
+// time one does not fit, in height or in width: the full chrome; no outer border; no blank lines in the
 // body; then no rules, no spacing and a one-line header. ok is false when even
 // the tightest does not fit, and always in the minimal layout.
 //
@@ -300,11 +300,43 @@ func (t bsTheme) compose(header string, s bsScreen) ([]string, bool) {
 		if tight == 0 && bordered {
 			lines = t.border(lines, w)
 		}
-		if t.height <= 0 || len(lines) <= t.height {
+		if (t.height <= 0 || len(lines) <= t.height) && t.narrowEnough(lines) {
 			return lines, true
 		}
 	}
 	return nil, false
+}
+
+// marked is one choice line: the focus mark (or its width in spaces), then text
+// wrapped under itself, every line painted as focused when it is.
+func (t bsTheme) marked(focused bool, text string, width int) []string {
+	mark, role := "  ", rolePlain
+	if focused {
+		mark, role = t.focusMark()+" ", roleFocus
+	}
+	lines := wrap(text, width-2)
+	for i, l := range lines {
+		lead := "  "
+		if i == 0 {
+			lead = mark
+		}
+		lines[i] = lead + t.paint(role, l)
+	}
+	return lines
+}
+
+// narrowEnough reports whether every line fits the terminal's width, measured in
+// cells: a terminal wraps or cuts a wider line, and either hides part of it.
+func (t bsTheme) narrowEnough(lines []string) bool {
+	if t.width <= 0 {
+		return true
+	}
+	for _, l := range lines {
+		if lipgloss.Width(l) > t.width {
+			return false
+		}
+	}
+	return true
 }
 
 // fits reports whether the screen is shown whole: whether it may take input.

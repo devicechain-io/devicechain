@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
@@ -134,6 +135,11 @@ func TestBootstrapScreenGoldens(t *testing.T) {
 				view := d.render() + "\n"
 				if n := strings.Count(view, "\n"); n > size[1] {
 					t.Errorf("%s at %dx%d: %d lines; part of the screen would not be seen", sc.name, size[0], size[1], n)
+				}
+				for i, l := range strings.Split(view, "\n") {
+					if w := lipgloss.Width(l); w > size[0] {
+						t.Errorf("L%d %s at %dx%d: line %d is %d cells wide: %q", level, sc.name, size[0], size[1], i+1, w, bsStrip(l))
+					}
 				}
 				name := fmt.Sprintf("bootstrap/%s/L%d-%dx%d", sc.name, level, size[0], size[1])
 				testkit.AssertNoCanary(t, name, []byte(view))

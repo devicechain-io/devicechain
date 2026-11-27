@@ -260,12 +260,7 @@ func (m *escrowModel) screen(t bsTheme) bsScreen {
 			"step, before anything is changed, unless a file or the environment supplies it.", w)...)
 	} else {
 		opt := func(f escrowField, on bool, label string) {
-			mark := "  "
-			text := t.radio(on) + " " + label
-			if m.focus == f {
-				mark, text = t.focusMark()+" ", t.paint(roleFocus, text)
-			}
-			body = append(body, mark+text)
+			body = append(body, t.marked(m.focus == f, t.radio(on)+" "+label, w)...)
 		}
 		opt(escrowFieldWrite, m.mode == EscrowWrite, "Write an encrypted escrow file (recommended)")
 		opt(escrowFieldNone, m.mode == EscrowNone, "Do not escrow the root key (--no-escrow)")
@@ -273,18 +268,20 @@ func (m *escrowModel) screen(t bsTheme) bsScreen {
 		if m.mode == EscrowNone {
 			body = append(body, t.para(roleWarn, "  ", WordsNoEscrowWarning, w)...)
 		} else {
-			v := m.path.Value()
+			v, role := m.path.Value(), rolePlain
+			mark := "  "
 			if m.focus == escrowFieldPath {
 				r := []rune(v)
 				pos := min(m.path.Position(), len(r))
-				v = t.paint(roleFocus, string(r[:pos])+t.caret()+string(r[pos:]))
+				v, role, mark = string(r[:pos])+t.caret()+string(r[pos:]), roleFocus, t.focusMark()+" "
 			}
-			mark := "  "
-			if m.focus == escrowFieldPath {
-				mark = t.focusMark() + " "
+			for i, part := range wrap(v, w-12) {
+				lead := strings.Repeat(" ", 12)
+				if i == 0 {
+					lead = mark + t.paint(roleLabel, padRight("Location", 10))
+				}
+				body = append(body, lead+t.paint(role, part))
 			}
-			label := "Location"
-			body = append(body, mark+t.paint(roleLabel, padRight(label, 10))+v)
 			note := "default for this instance, on this machine, outside what 'dcctl destroy' removes"
 			if m.custom {
 				note = "passed as --escrow-file; an existing file is refused, never overwritten"
@@ -402,7 +399,10 @@ func newPassphraseModel(q SecretQuestion, notes io.Writer) *passphraseModel {
 // the slice, leaving the passphrase in the abandoned array. Every array this
 // field outgrows is zeroed as it is replaced, and wipe zeroes the current one.
 // The strings a terminal delivers keys and pastes in are Go strings, which no
-// one can clear; nothing here claims otherwise.
+// one can clear; nothing here claims otherwise. Nor can this field reach the
+// copy the run keeps once the answer is submitted: the broker registers the
+// value with the hub's redactor, which must hold it to redact it for the rest
+// of the run.
 type secretField struct{ buf []byte }
 
 // insert appends text, dropping control characters.
@@ -573,8 +573,7 @@ func (m *receiptModel) screen(t bsTheme) bsScreen {
 	body = append(body, t.para(rolePlain, "", "Copy this file off this machine now, and keep its passphrase "+
 		"somewhere else. Without both, a lost cluster cannot be recovered.", w)...)
 	body = append(body, "")
-	body = append(body, t.focusMark()+" "+t.paint(roleFocus, t.check(m.acked)+
-		" I have stored the escrow file off this machine and its passphrase separately"))
+	body = append(body, t.marked(true, t.check(m.acked)+" I have stored the escrow file off this machine and its passphrase separately", w)...)
 	if !m.acked {
 		body = append(body, t.para(roleWarn, "  ", "Off-site custody not confirmed.", w)...)
 	}

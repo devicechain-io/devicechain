@@ -762,3 +762,22 @@ func TestATooSmallTerminalTakesNoPaste(t *testing.T) {
 		t.Fatal("an unseen form took input")
 	}
 }
+
+// 🔴 WIDER IS AS UNSEEN AS TALLER. A line wider than the terminal is wrapped or
+// cut by it, so a screen holding one is not shown and takes no input, exactly as
+// one with too many lines.
+func TestAScreenWiderThanTheTerminalIsNotShown(t *testing.T) {
+	th := newBSTheme(bsCaps(terminal.L1, 60, 20))
+	wide := "› [ ] I have stored the escrow file off this machine and its passphrase separately"
+	s := bsScreen{title: "Escrow receipt", body: []string{wide}}
+	if th.fits("DeviceChain", s) {
+		t.Fatal("a screen with an 82-cell line fits a 60-column terminal")
+	}
+	if v := th.frame("DeviceChain", s); !strings.Contains(v, "too small") || strings.Contains(v, "I have stored") {
+		t.Fatalf("drawn anyway:\n%s", v)
+	}
+	s.body = []string{"I have stored the escrow file"}
+	if !th.fits("DeviceChain", s) {
+		t.Fatal("a narrow screen does not fit")
+	}
+}

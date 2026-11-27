@@ -8,12 +8,12 @@
 │ › \x1b[1mName          \x1b[m\x1b[7mAcme▏\x1b[m                                                                            │
 │                 \x1b[1;38;2;229;72;77mERROR: instance names are lower-case letters, digits and hyphens\x1b[m                 │
 │   \x1b[1mHost          \x1b[mdevicechain.local (default)                                                      │
-│   \x1b[1mProfile       \x1b[m< default >  (1 of 4)                                                            │
+│   \x1b[1mProfile       \x1b[m< default > (1 of 4)                                                             │
 │   \x1b[1mExtra areas   \x1b[mnone                                                                             │
 │   \x1b[1mTLS           \x1b[m[x] serve HTTPS with a self-signed certificate                                   │
-│   \x1b[1mObject store  \x1b[m< auto >  (1 of 3)                                                               │
+│   \x1b[1mObject store  \x1b[m< auto > (1 of 3)                                                                │
 │                                                                                                  │
-│   \x1b[1mCluster       \x1b[mStandard, single node  \x1b[2m(inherited, read-only)\x1b[m                                    │
+│   \x1b[1mCluster\x1b[m       Standard, single node (inherited, read-only)                                     │
 │                                                                                                  │
 │    [Back]    [Continue]                                                                          │
 │                                                                                                  │

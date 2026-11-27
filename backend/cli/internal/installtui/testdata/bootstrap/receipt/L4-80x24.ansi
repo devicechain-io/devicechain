@@ -9,7 +9,8 @@
 │ Copy this file off this machine now, and keep its passphrase somewhere else. │
 │ Without both, a lost cluster cannot be recovered.                            │
 │                                                                              │
-│ › \x1b[7m[ ] I have stored the escrow file off this machine and its passphrase separately\x1b[m │
+│ › \x1b[7m[ ] I have stored the escrow file off this machine and its passphrase\x1b[m      │
+│   \x1b[7mseparately\x1b[m                                                                 │
 │   \x1b[1;38;2;224;160;48mOff-site custody not confirmed.\x1b[m                                            │
 │                                                                              │
 │ \x1b[2mThis is a reminder, not a backup test. To check the file opens with its\x1b[m      │

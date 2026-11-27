@@ -7,12 +7,12 @@
 │                                                                              │
 │ › Name          acme▏                                                        │
 │   Host          devicechain.local (default)                                  │
-│   Profile       < default >  (1 of 4)                                        │
+│   Profile       < default > (1 of 4)                                         │
 │   Extra areas   none                                                         │
 │   TLS           [x] serve HTTPS with a self-signed certificate               │
-│   Object store  < auto >  (1 of 3)                                           │
+│   Object store  < auto > (1 of 3)                                            │
 │                                                                              │
-│   Cluster       Standard, single node  (inherited, read-only)                │
+│   Cluster       Standard, single node (inherited, read-only)                 │
 │                                                                              │
 │    [Back]    [Continue]                                                      │
 │                                                                              │

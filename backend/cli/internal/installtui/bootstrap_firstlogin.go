@@ -160,7 +160,7 @@ func (m *firstLoginModel) screen(t bsTheme) bsScreen {
 		body = append(body, t.para(roleWarn, "", "Store it now: this is the only time it is shown. Sign in to the "+
 			"admin console to create your first tenant, and change it there.", w)...)
 		body = append(body, "")
-		body = append(body, t.focusMark()+" "+t.paint(roleFocus, t.check(m.stored)+" I have stored this password"))
+		body = append(body, t.marked(true, t.check(m.stored)+" I have stored this password", w)...)
 		if m.nudge {
 			body = append(body, t.para(roleBad, "  ", "Tick \"I have stored this password\" (Space) before leaving: "+
 				"once this screen is left the password is not shown again.", w)...)
