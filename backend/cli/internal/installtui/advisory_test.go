@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/internal/installplain"
@@ -132,6 +133,8 @@ func TestTheRunsPreflightIsNotTheAdvisory(t *testing.T) {
 	h.press("\r")
 	waitFor(t, "the tally", h.out, screenShows(h.out, preflightAllPass))
 	h.press("\x1b[Z\r") // Shift+Tab from Recheck back to Continue
+	waitFor(t, "the cluster choices", h.out, screenShows(h.out, choicesTitle))
+	h.press("\r") // no Replan: the choices screen offers its actions only, Continue first
 	waitFor(t, "the verdict", h.out, screenShows(h.out, "Install succeeded."))
 	h.press("\r")
 	if err := h.result(done); err != nil {
@@ -140,5 +143,66 @@ func TestTheRunsPreflightIsNotTheAdvisory(t *testing.T) {
 	if advisory.Load() != 1 || doctor.calls.Load() != 2 {
 		t.Fatalf("advisory ran %d times (want the screen's 1), the doctor %d (want the screen's and the run's)",
 			advisory.Load(), doctor.calls.Load())
+	}
+}
+
+// A replan cancels the replaced plan's advisory probes and the screen's join waits for
+// them: a change of target on screen never leaves the old cluster's checks running, and
+// the new plan's checks are its own.
+func TestAReplanCancelsTheAdvisoryProbes(t *testing.T) {
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	old := installflow.PreflightFunc(func(ctx context.Context, _ func(installflow.PreflightObservation)) (installflow.PreflightResult, error) {
+		close(started)
+		select {
+		case <-ctx.Done():
+			close(cancelled)
+		case <-time.After(10 * time.Second):
+		}
+		return installflow.PreflightResult{}, nil
+	})
+	var replanned atomic.Int32
+	next := installflow.PreflightFunc(func(context.Context, func(installflow.PreflightObservation)) (installflow.PreflightResult, error) {
+		replanned.Add(1)
+		return installflow.PreflightResult{}, nil
+	})
+	w := &Wizard{Facts: prodFacts(), Advisory: old, Replan: func(Edits) (Replanned, error) {
+		return Replanned{Preflight: healthyPreflight(), Advisory: next, Facts: prodFacts()}, nil
+	}}
+	p := newTestPrerun(w, healthyPreflight())
+	first := p.startChecks()
+	go func() { // drain the first run, as the program would
+		for cmd := first; cmd != nil; {
+			msg := cmd()
+			if msg == nil {
+				return
+			}
+			m, ok := msg.(checkMsg)
+			if !ok || m.next == nil {
+				return
+			}
+			cmd = waitCheck(m.next)
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first plan's advisory checks never started")
+	}
+	second := p.applyEdit(func(e *Edits) { v := true; e.Compact = &v })
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("a replan left the replaced plan's advisory checks running")
+	}
+	pump(p, second)
+	joined := make(chan struct{})
+	go func() { p.wait(); close(joined) }()
+	select {
+	case <-joined:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the screen's join did not see the replaced advisory checks end")
+	}
+	if replanned.Load() != 1 {
+		t.Fatalf("the new plan's advisory checks ran %d times", replanned.Load())
 	}
 }
