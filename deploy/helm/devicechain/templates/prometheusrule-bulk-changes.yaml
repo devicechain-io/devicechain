@@ -14,6 +14,13 @@ when a line became due: a paced operation applying lines steadily stays young ho
 lines it has left. A line that keeps failing retryably, rate sharing and a busy device are
 not holds, so they age; the blocking holds (authority, activation, a pending control) are
 excluded here and have their own alerts.
+
+The reconciler lag reads NaN on a pod that has not measured it, or whose last measurement
+failed, because 0 is its healthy reading. max() takes any measured pod's value over a NaN one,
+so a single pod that cannot measure changes nothing. When NO pod can, max() is NaN, and
+"X unless X <= 900" keeps it: the comparison is false for NaN, so nothing is subtracted. An
+instance that cannot measure its reconciler lag therefore alerts as lagging rather than reading
+healthy. A plain "X > 900" would drop the NaN and stay silent.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -69,7 +76,7 @@ spec:
             summary: "Bulk change authority checks are unavailable"
             description: "A running bulk change has been held for five minutes because device-management cannot get a fresh answer from user-management on whether the person it runs for still holds the authority to apply it. Nothing is applied while it is held, and it is not paused. Check that user-management is running and reachable from device-management, and read its logs. Posting resumes on the first fresh answer; there is no way around the check."
         - alert: BulkChangesSettlementLagging
-          expr: (max(devicechain_devicemanagement_bulk_change_deadline_lag_seconds{namespace="{{ $ns }}"}) > 900) or (max(devicechain_devicemanagement_bulk_change_reconciler_lag_seconds{namespace="{{ $ns }}"}) > 900)
+          expr: (max(devicechain_devicemanagement_bulk_change_deadline_lag_seconds{namespace="{{ $ns }}"}) > 900) or (max(devicechain_devicemanagement_bulk_change_reconciler_lag_seconds{namespace="{{ $ns }}"}) unless max(devicechain_devicemanagement_bulk_change_reconciler_lag_seconds{namespace="{{ $ns }}"}) <= 900)
           for: 1m
           labels:
             severity: warning
@@ -77,7 +84,7 @@ spec:
           annotations:
             runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#bulkchangessettlementlagging"
             summary: "Bulk change settlement is lagging"
-            description: "An applied bulk change line is more than fifteen minutes past its settlement deadline, or a device report that could settle one has waited more than fifteen minutes. Check the device-management logs for settlement task errors and the database for load. Applied lines are not lost while this lags; they settle once the tasks catch up. An applied line is not proof that the device took the change, so read its evidence before resolving it by hand."
+            description: "An applied bulk change line is more than fifteen minutes past its settlement deadline, or a device report that could settle one has waited more than fifteen minutes, or no device-management pod can measure how long such reports have waited. Check the device-management logs for settlement task errors and failed reconciler lag measurements, and the database for load. Applied lines are not lost while this lags; they settle once the tasks catch up. An applied line is not proof that the device took the change, so read its evidence before resolving it by hand."
         - alert: BulkChangesFencePending
           expr: sum(rate(devicechain_devicemanagement_bulk_change_fence_pending_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 10m

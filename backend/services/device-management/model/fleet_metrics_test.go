@@ -6,6 +6,7 @@ package model
 import (
 	"database/sql"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -73,6 +74,9 @@ func TestBulkChangeMetricsStartAtZeroWithClosedLabels(t *testing.T) {
 			switch {
 			case s.Counter != nil:
 				require.Zero(t, s.Counter.GetValue(), name)
+			case s.Gauge != nil && name == "devicechain_devicemanagement_bulk_change_reconciler_lag_seconds":
+				// Born not-measured: 0 is its healthy reading (fleet_reconciler_lag.go).
+				require.True(t, math.IsNaN(s.Gauge.GetValue()), name)
 			case s.Gauge != nil:
 				require.Zero(t, s.Gauge.GetValue(), name)
 			case s.Histogram != nil:

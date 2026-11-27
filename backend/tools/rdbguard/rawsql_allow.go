@@ -242,10 +242,12 @@ var rawSQLAllowList = []siteEntry{
 			"table names are formatted in.",
 	},
 	{
-		Path: "backend/services/device-management/model/api_fleet_settlement.go", Func: "Api.FleetReconcilerLag", Count: 1,
-		Why: "the settlement lag gauge's oldest undecided report: binds r.tenant_id from the context and joins lines " +
-			"and operations on tenant_id equal to the report's. It returns one timestamp; only the models' quoted " +
-			"table names and the protocol predicate constant are formatted in.",
+		Path: "backend/services/device-management/model/fleet_reconciler_lag.go", Func: "Api.FleetReconcilerLag", Count: 1,
+		Why: "the reconciler lag gauge's oldest undecided report, across the instance, under the system context " +
+			"it declares: the gauge is an instance-wide aggregate with no tenant label. Each line joins its operation " +
+			"on o.tenant_id = l.tenant_id and its reports on r.tenant_id = l.tenant_id; it returns one number (an age), " +
+			"never row content. Only the models' quoted table names, the protocol predicate constant and a " +
+			"dialect's age expression are formatted in.",
 	},
 	{
 		Path: "backend/services/device-management/model/api_fleet_operation_readiness.go", Func: "fleetOperationEnforcementStates", Count: 1,

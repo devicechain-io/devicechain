@@ -103,7 +103,7 @@ Bulk changes are not advancing
 
 Bulk change settlement is lagging
 
-**含义与处理方式.** An applied bulk change line is more than fifteen minutes past its settlement deadline, or a device report that could settle one has waited more than fifteen minutes. Check the device-management logs for settlement task errors and the database for load. Applied lines are not lost while this lags; they settle once the tasks catch up. An applied line is not proof that the device took the change, so read its evidence before resolving it by hand.
+**含义与处理方式.** An applied bulk change line is more than fifteen minutes past its settlement deadline, or a device report that could settle one has waited more than fifteen minutes, or no device-management pod can measure how long such reports have waited. Check the device-management logs for settlement task errors and failed reconciler lag measurements, and the database for load. Applied lines are not lost while this lags; they settle once the tasks catch up. An applied line is not proof that the device took the change, so read its evidence before resolving it by hand.
 
 ### BulkChangesStalled {#bulkchangesstalled}
 

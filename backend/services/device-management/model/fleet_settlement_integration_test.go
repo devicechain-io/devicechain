@@ -18,7 +18,6 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -395,15 +394,5 @@ func TestSettlementSustainsFiveHundredPerSecondOnPostgres(t *testing.T) {
 		require.GreaterOrEqual(t, float64(tail)/time.Since(drainStart).Seconds(), 500.0, "reconciler must sustain the instance post ceiling")
 	}
 	require.EqualValues(t, 10000, decided.Load()+tail)
-	var lag time.Duration
-	for _, ctx := range contexts {
-		age, err := api.FleetReconcilerLag(ctx)
-		require.NoError(t, err)
-		if age > lag {
-			lag = age
-		}
-	}
-	require.Less(t, lag, 15*time.Second, "reconciler lag gauge at the end of the 10-tenant run")
-	require.NoError(t, api.RunFleetSettlement(base, true, false))
-	require.Less(t, testutil.ToFloat64(bulkMetrics.reconcilerLag), 15.0)
+	assertReconcilerLagBound(t, api, fmt.Sprintf("settlerate%d-", stamp))
 }

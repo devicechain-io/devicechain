@@ -568,57 +568,13 @@ func (api *Api) RunFleetSettlement(ctx context.Context, fast, due bool) error {
 	}
 	failed := 0
 	var last error
-	var lag time.Duration
 	for _, tenant := range tenants {
-		tenantCtx := core.WithTenant(ctx, tenant)
-		_, err := api.settleFleetLines(tenantCtx, fast, due)
-		if err == nil && !due {
-			var age time.Duration
-			age, err = api.FleetReconcilerLag(tenantCtx)
-			if age > lag {
-				lag = age
-			}
-		}
-		if err != nil {
+		if _, err := api.settleFleetLines(core.WithTenant(ctx, tenant), fast, due); err != nil {
 			failed++
 			last = err
 		}
 	}
-	if !due && failed == 0 {
-		bulkMetrics.reconcilerLag.Set(lag.Seconds())
-	}
 	return core.PassResult(len(tenants), failed, last)
-}
-
-// FleetReconcilerLag measures outstanding report age within the caller's tenant.
-func (api *Api) FleetReconcilerLag(ctx context.Context) (time.Duration, error) {
-	tenant, ok := core.TenantFromContext(ctx)
-	if !ok || tenant == "" {
-		return 0, core.ErrNoTenant
-	}
-	db := api.RDB.DB(ctx)
-	r, l, o := fleetSettlementTable(db, "DeviceConfigurationReport"), fleetSettlementTable(db, "FleetOperationLine"), fleetSettlementTable(db, "FleetOperation")
-	var oldest sql.NullTime
-	err := db.Raw(`SELECT min(r.created_at) FROM `+r+` r JOIN `+l+` l ON l.target_id=r.device_id AND l.tenant_id=r.tenant_id AND l.posted_revision<=r.revision
- JOIN `+o+` o ON o.id=l.operation_id AND o.tenant_id=l.tenant_id
- WHERE r.tenant_id=? AND l.posting='POSTED' AND l.evidence_revision IS NULL AND l.redacted_at IS NULL
- AND (`+fleetSettlementProtocol+`)`, tenant, ledger.SupportedDriverProtocol).Scan(&oldest).Error
-	if err != nil || !oldest.Valid {
-		return 0, err
-	}
-	var now time.Time
-	if db.Dialector.Name() == "postgres" {
-		if err := db.Raw("SELECT clock_timestamp()").Scan(&now).Error; err != nil {
-			return 0, err
-		}
-	} else {
-		now = time.Now()
-	}
-	age := now.Sub(oldest.Time)
-	if age < 0 {
-		age = 0
-	}
-	return age, nil
 }
 
 // SweepFleetSettlement runs at startup and every five minutes. It scans every
