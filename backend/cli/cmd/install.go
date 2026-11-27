@@ -143,6 +143,7 @@ func installRunFor(provider bootstrap.Provider, providerName string, prepared in
 	return &bootstrap.InstallEngine{
 		Provider:      provider,
 		Options:       bootstrap.InstallOptions{Options: prepared.BootstrapOptions()},
+		Warnings:      prepared.Warnings,
 		SkipPreflight: effective.SkipPreflight,
 		Cluster:       installEngine,
 		ResolveOptions: func() (bootstrap.InstallOptions, error) {

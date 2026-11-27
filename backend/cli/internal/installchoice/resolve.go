@@ -80,6 +80,9 @@ type Prepared struct {
 	restore     bootstrap.RestorePlan
 	image       bootstrap.ImageSource
 	version     string
+
+	// Warnings contains display-safe deprecations from early input validation.
+	Warnings []string
 }
 
 // Resolve resolves a screen's choices using exactly the CLI's validation path.
@@ -155,7 +158,10 @@ func (c Choices) Prepare(version string, notice func(string)) (Prepared, error) 
 	// Validated before any cluster exists: a bad object-store credential crashes
 	// nothing. WAL archiving simply stops, and the first symptom is an archive-lag
 	// alert — or a restore that finds no base backup.
-	backupDestination, err := bootstrap.ParseBackupDestination(c.BackupCredentials)
+	var warnings []string
+	backupDestination, err := bootstrap.ParseBackupDestination(c.BackupCredentials, func(w string) {
+		warnings = append(warnings, w)
+	})
 	if err != nil {
 		return Prepared{}, fmt.Errorf("--backup-credentials-file: %w", err)
 	}
@@ -218,7 +224,7 @@ func (c Choices) Prepare(version string, notice func(string)) (Prepared, error) 
 			return Prepared{}, err
 		}
 	}
-	return Prepared{Effective: c, choices: original, destination: backupDestination, restore: restorePlan, image: imageSource, version: version}, nil
+	return Prepared{Effective: c, choices: original, Warnings: warnings, destination: backupDestination, restore: restorePlan, image: imageSource, version: version}, nil
 }
 
 // BootstrapOptions supplies the run's target and request before preflight.

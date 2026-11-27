@@ -261,7 +261,7 @@ func wizardReview(prepared installchoice.Prepared) installtui.Review {
 	}
 	add("State", state)
 
-	var warnings []string
+	warnings := append([]string(nil), prepared.Warnings...)
 	if eff.SkipPreflight {
 		warnings = append(warnings, "--skip-preflight: the read-only checks are not run, here or by the install")
 	}

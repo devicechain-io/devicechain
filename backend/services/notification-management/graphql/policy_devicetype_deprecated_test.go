@@ -54,10 +54,13 @@ func TestPolicyDeviceTypeCoordinatesAreDeprecated(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, phrase := range []string{"v1.10", "never applied", "future major", "anchor or group", "planned"} {
+			for _, phrase := range []string{"v1.10", "never applied", "future major", "no replacement"} {
 				if !strings.Contains(reason, phrase) {
 					t.Errorf("deprecation reason %q must explain %q", reason, phrase)
 				}
+			}
+			if strings.Contains(reason, "planned") {
+				t.Errorf("deprecation reason %q promises a replacement; there is none", reason)
 			}
 		})
 	}

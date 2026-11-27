@@ -71,6 +71,31 @@ func TestSetupLocalRefusesWithoutAnInteractiveTerminal(t *testing.T) {
 	}
 }
 
+// The probe leaves a console mode changed only on a terminal it judged ineligible (the
+// VT flag took and the original mode could not be put back), and that terminal is the
+// refusal: the probe's restore must still run on it, as it does for dcctl install.
+func TestSetupLocalRestoresTheProbedConsoleWhenItRefuses(t *testing.T) {
+	var restored int
+	save := restoreProbedConsole
+	t.Cleanup(func() { restoreProbedConsole = save })
+	restoreProbedConsole = func() { restored++ }
+	withSetup(t, func() terminal.Inputs {
+		in := eligibleTerminal()
+		in.GOOS, in.WindowsVT = "windows", false // the probe's failed put-back
+		return in
+	}, func(context.Context, installtui.Setup) installtui.SetupResult {
+		t.Fatal("a stage ran on an ineligible console")
+		return installtui.SetupResult{}
+	})
+	err := setupLocalCmd.RunE(setupLocalCmd, nil)
+	if !errors.Is(err, errSetupNeedsTerminal) {
+		t.Fatalf("an ineligible console was not refused: %v", err)
+	}
+	if restored != 1 {
+		t.Fatalf("the probed console was restored %d times on the refusal, want 1", restored)
+	}
+}
+
 // There is no flag that approves anything, and a bad flag or an argument is refused with
 // the nothing-changed status.
 func TestSetupLocalHasNoApprovalFlagAndRefusesBadInput(t *testing.T) {

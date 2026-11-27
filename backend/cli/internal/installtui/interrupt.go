@@ -44,6 +44,19 @@ func (i *interrupter) interrupt() (first bool) {
 	return false
 }
 
+// interruptOnce records an interrupt only if none has been received: a run already
+// interrupted is not interrupted again, and so never forced by this.
+func (i *interrupter) interruptOnce() {
+	i.mu.Lock()
+	if i.n > 0 {
+		i.mu.Unlock()
+		return
+	}
+	i.n = 1
+	i.mu.Unlock()
+	i.cancel()
+}
+
 // count is how many interrupts have been received.
 func (i *interrupter) count() int {
 	i.mu.Lock()

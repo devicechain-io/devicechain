@@ -161,6 +161,8 @@ every tenant authority, including ones added in later releases.
 
 `fleet:operate` authorizes [bulk changes](../guides/bulk-changes.md) and their readiness check (Preview); a bulk change also needs `device:write`. It is not seeded into any built-in role, though `*` already satisfies it. Grant it to custom roles only after the upgrade has finished rolling out: an older user-management pod rejects any role edit containing an unknown authority, even an unrelated edit to a role that already holds it.
 
+`intent:read` and `intent:write` are reserved for an upcoming feature, declared intents; nothing uses them in this release, so granting them gives a role no access yet. Neither is seeded into any built-in role or given to every member, though `*` already satisfies both. As with `fleet:operate`, grant them to custom roles only after the upgrade has finished rolling out.
+
 Authorities you do not hold yourself are greyed out: nobody can grant more than they have. A role
 can only carry tenant authorities, so instance-level permissions are never offered.
 
