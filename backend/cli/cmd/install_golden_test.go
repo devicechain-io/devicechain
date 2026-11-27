@@ -222,6 +222,14 @@ var installScenarios = []installScenario{
 // they print holds a path in a temporary directory, or a goroutine stack. The tests
 // that run them hold them to properties instead.
 var installCheckScenarios = []installScenario{
+	{name: "backup-endpoint-deprecated", args: []string{"install", "local", "--skip-preflight", "--backup-credentials-file", "backup.json"},
+		engine: engineFakeOK, files: map[string]string{"backup.json": deprecatedBackupEndpointFile}},
+	{name: "json-backup-endpoint-deprecated", args: []string{"install", "local", "--skip-preflight", "--backup-credentials-file", "backup.json", "-o", "json"},
+		engine: engineFakeOK, files: map[string]string{"backup.json": deprecatedBackupEndpointFile}},
+	{name: "backup-endpoint-clean", args: []string{"install", "local", "--skip-preflight", "--backup-credentials-file", "backup.json"},
+		engine: engineFakeOK, files: map[string]string{"backup.json": cleanBackupEndpointFile}},
+	{name: "json-backup-endpoint-clean", args: []string{"install", "local", "--skip-preflight", "--backup-credentials-file", "backup.json", "-o", "json"},
+		engine: engineFakeOK, files: map[string]string{"backup.json": cleanBackupEndpointFile}},
 	// A kubeconfig client-go refuses, with credentials client-go's reason would quote.
 	{name: "kubeconfig-duplicate-users", args: []string{"install", "local", "--kube-context", "prod"},
 		kubeconfig: canaryKubeconfig},
