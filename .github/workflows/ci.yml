@@ -3978,7 +3978,7 @@ jobs:
         working-directory: backend/cli
         run: |
           set -o pipefail
-          go test -count=1 -p 2 -timeout 20m ./internal/installtui/... ./internal/installflow/... ./internal/installplain ./internal/installchoice ./cmd
+          go test -count=1 -p 2 -timeout 20m ./internal/installtui/... ./internal/installflow/... ./internal/installplain ./internal/installchoice ./internal/proctree ./cmd
 
       - name: ConPTY smoke test ran and passed
         working-directory: backend/cli
