@@ -5,6 +5,7 @@ package installflow
 
 import (
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -47,4 +48,41 @@ func URLCredentials(s string) []string {
 		}
 	}
 	return out
+}
+
+// urlToken is a whitespace-free run of text: where a URL in free text can be.
+var urlToken = regexp.MustCompile(`\S+`)
+
+// RedactURLsInText is s with every URL in it reduced to its scheme, host and path: the
+// parts a URL carries a credential in (its userinfo, query and fragment, URLCredentials)
+// are removed. A word that looks like a URL ("://") but does not parse is replaced whole
+// with "[redacted]", since what it carries cannot be told. Punctuation around a URL
+// (quotes, brackets, a trailing comma) is kept. It is for free text dcctl did not write,
+// such as a tool's stderr, before any of it is shown.
+func RedactURLsInText(s string) string {
+	return urlToken.ReplaceAllStringFunc(s, func(word string) string {
+		i := strings.Index(word, "://")
+		if i < 0 {
+			return word
+		}
+		start := i
+		for start > 0 && isSchemeByte(word[start-1]) {
+			start--
+		}
+		end := len(word)
+		for end > i+3 && strings.IndexByte(`"'<>()[]{},;`, word[end-1]) >= 0 {
+			end--
+		}
+		prefix, middle, suffix := word[:start], word[start:end], word[end:]
+		u, err := url.Parse(middle)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return prefix + "[redacted]" + suffix
+		}
+		u.User, u.RawQuery, u.ForceQuery, u.Fragment, u.RawFragment = nil, "", false, "", ""
+		return prefix + u.String() + suffix
+	})
+}
+
+func isSchemeByte(b byte) bool {
+	return 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z' || '0' <= b && b <= '9' || b == '+' || b == '-' || b == '.'
 }

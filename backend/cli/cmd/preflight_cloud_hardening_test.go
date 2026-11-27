@@ -11,9 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,7 +23,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
-	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
 // recorder is an API server that notes every request it is sent, with whether it carried
@@ -175,62 +171,6 @@ func TestKubeRequestPermitted(t *testing.T) {
 		if got := kubeRequestPermitted(c.server, c.method, u); got != c.ok {
 			t.Errorf("server %s: %s %s permitted %v, want %v", c.server, c.method, c.raw, got, c.ok)
 		}
-	}
-}
-
-// 🔴 FINDING 3: a credential plugin is never run. client-go runs an exec plugin with no
-// way to cancel it, so a hung one would outlive every bound and Exit. The context's
-// authentication and permissions read NOT CHECKED, and the API server is asked only
-// what it answers without credentials.
-func TestACredentialPluginIsNeverRun(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the plugin is a shell script")
-	}
-	oldAPI := cloudAPITimeout
-	t.Cleanup(func() { cloudAPITimeout = oldAPI })
-	cloudAPITimeout = 300 * time.Millisecond
-
-	var api recorder
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		api.note(r)
-		_, _ = io.WriteString(w, versionJSON)
-	}))
-	defer srv.Close()
-	marker := filepath.Join(t.TempDir(), "plugin-ran")
-	cfg := &rest.Config{Host: srv.URL, ExecProvider: &clientcmdapi.ExecConfig{
-		Command: "sh", Args: []string{"-c", "touch " + marker + "; sleep 30"},
-		APIVersion: "client.authentication.k8s.io/v1", InteractiveMode: clientcmdapi.NeverExecInteractiveMode,
-	}}
-	p, err := cloudProbesFrom(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.http = cloudHTTPClient(newCloudFakes(t))
-	var rows []installflow.PreflightObservation
-	start := time.Now()
-	d := &doctor{observe: func(o installflow.PreflightObservation) {
-		if o.Observation == installflow.ObserveCheck {
-			rows = append(rows, o)
-		}
-	}}
-	d.checkCloud(context.Background(), prodTarget, p)
-	if took := time.Since(start); took > 2*time.Second {
-		t.Errorf("the run took %v", took)
-	}
-	time.Sleep(200 * time.Millisecond)
-	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the credential plugin ran (%v)", err)
-	}
-	if r := row(t, rows, "authentication"); r.Verdict != installflow.CheckNotChecked || !strings.Contains(r.Text.String(), "plugin") {
-		t.Errorf("authentication reads %s %q", r.Verdict, r.Text)
-	}
-	for _, o := range rows {
-		if strings.HasPrefix(o.Text.String(), "may ") && o.Verdict != installflow.CheckNotChecked {
-			t.Errorf("%q reads %s", o.Text, o.Verdict)
-		}
-	}
-	if _, auth := api.snapshot(); len(auth) != 0 {
-		t.Errorf("the API server was sent credentials %v", auth)
 	}
 }
 

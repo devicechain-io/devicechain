@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/devicechain-io/dcctl/bootstrap"
@@ -47,8 +46,9 @@ import (
 //     asks the API server a question and stores nothing. They can never create a Pod or
 //     a Secret.
 //   - 🔴 THEY ARE BOUNDED: a connection gets cloudConnectTimeout, an API or registry
-//     answer cloudAPITimeout, and each probe runs under within(), so a hung server or a
-//     credential plugin that never returns costs a bounded wait and reads UNKNOWN.
+//     answer cloudAPITimeout, a credential plugin execPluginTimeout, and each probe runs
+//     under within(), so a hung server or a credential plugin that never returns costs a
+//     bounded wait and reads UNKNOWN (and the plugin is killed with all it started).
 //   - 🔴 THEY NEVER QUOTE AN ERROR. A client-go or net/http error can carry a URL with
 //     userinfo or a token; a probe's row is dcctl's own sentence for the CLASS of
 //     error (classifyProbeErr), and the hosts it names are the kubeconfig's server
@@ -69,6 +69,10 @@ type cloudTarget struct {
 	// --build push registry); Build says this machine pushes to it.
 	ImageRegistry string
 	Build         bool
+	// The cluster root's optional components THIS plan installs, so the registries asked
+	// are the ones it downloads from (cloudTargetFor): a component the plan leaves out is
+	// not asked, and cannot WARN.
+	CertManager, CNPG, Monitoring bool
 }
 
 // cloudProbes are the diagnostics' only windows onto the network and the cluster, so a
@@ -82,6 +86,10 @@ type cloudProbes struct {
 	proxied  bool
 	// creds is what kind of credentials the context carries.
 	creds credKind
+	// authenticate, for a context whose credentials come from an exec plugin (credExec),
+	// runs the plugin and returns a client carrying what it gave (execAuthenticator).
+	// nil: there is no plugin to run, and authentication reads NOT CHECKED.
+	authenticate func(context.Context) (kubernetes.Interface, execResult)
 
 	lookupHost func(ctx context.Context, host string) ([]string, error)
 	kube       kubernetes.Interface
@@ -218,8 +226,9 @@ func (d *doctor) checkAPIAnswers(ctx context.Context, p cloudProbes, host, kubeC
 		default:
 			d.pass(what + " answered over verified TLS")
 		}
-		// (With a credential plugin the request went without credentials, since the
-		// plugin is never run; checkAccess reads nothing into the refusal then.)
+		// (With a credential plugin the request went without credentials: the plugin
+		// runs only once the API server has answered, and checkAccess reads nothing
+		// into a refusal of a request that carried none.)
 		if unauthorized {
 			return apiUnauthorized
 		}
@@ -292,9 +301,13 @@ func anonymous(r *authenticationv1.SelfSubjectReview) bool {
 	return false
 }
 
-const pluginNotRun = "not checked: this context gets its credentials from a plugin, which the advisory checks never run"
+const pluginNotRun = "not checked: this context gets its credentials from an auth-provider plugin, which the advisory checks never run"
+
+// whoamiFix is the fix of an authentication the checks could not judge.
+const whoamiFix = "check them yourself with kubectl auth whoami and kubectl auth can-i --list"
 
 func (d *doctor) checkAccess(ctx context.Context, p cloudProbes, answered apiAnswer) {
+	plugin := false // the credentials are the ones an exec plugin just gave
 	notAsked := func(why string) {
 		for _, a := range cloudAccessNeeds {
 			d.notChecked("may "+a.String()+": "+why, "")
@@ -310,12 +323,46 @@ func (d *doctor) checkAccess(ctx context.Context, p cloudProbes, answered apiAns
 		notAsked(proxyNotUsed)
 		return
 	case p.creds == credPlugin:
-		// 🔴 The plugin is never run (cloudKubeConfig), so there are no credentials to
-		// judge, and a review asked without them would answer for nobody.
-		d.notChecked("authentication: "+pluginNotRun,
-			"check them yourself with kubectl auth whoami and kubectl auth can-i --list")
+		// 🔴 An auth-provider is never run (cloudKubeConfig), so there are no credentials
+		// to judge, and a review asked without them would answer for nobody.
+		d.notChecked("authentication: "+pluginNotRun, whoamiFix)
 		notAsked(pluginNotRun)
 		return
+	case p.creds == credExec:
+		// 🔴 The exec plugin is run now, bounded and killed with all it starts
+		// (execAuthenticator), and only its credential is judged from here on. Whatever
+		// stops it reads NOT CHECKED, WARN or UNKNOWN, and the reviews are not asked:
+		// asked without credentials they would answer for nobody.
+		res := execResult{outcome: execNotRun, why: "this context's credential plugin is not run"}
+		var kube kubernetes.Interface
+		if p.authenticate != nil {
+			kube, res = p.authenticate(ctx)
+		}
+		const noCredential = "not asked, the credential plugin gave no credentials"
+		switch res.outcome {
+		case execOK:
+			p.kube, plugin = kube, true
+			// The version request went without the plugin's credential; a refusal of it
+			// says nothing about the credential.
+			answered = apiAnswered
+		case execNotRun:
+			d.notChecked("authentication: not checked: "+res.why, whoamiFix)
+			notAsked(noCredential)
+			return
+		case execMissing:
+			d.warn("authentication: "+res.why,
+				"install it (the context's installHint, or your provider's documentation, says how), then Recheck")
+			notAsked(noCredential)
+			return
+		default:
+			fix := "check with kubectl auth whoami against this context, then Recheck"
+			if res.said != "" {
+				fix = "the plugin said: " + res.said + "; " + fix
+			}
+			d.unknown("authentication: "+res.why, fix)
+			notAsked(noCredential)
+			return
+		}
 	}
 	// One budget for every review: they are cheap, and a server that stalls on the first
 	// would otherwise cost the budget once per review.
@@ -375,6 +422,8 @@ func (d *doctor) checkAccess(ctx context.Context, p cloudProbes, answered apiAns
 	case whoErr == nil && anonymous(who):
 		d.warn("authentication: the API server treats this context as anonymous",
 			"its credentials are not being accepted; refresh the context's login, then Recheck")
+	case whoErr == nil && plugin:
+		d.pass("authentication: the API server accepts the credentials this context's plugin gave")
 	case whoErr == nil:
 		d.pass("authentication: the API server accepts this context's credentials")
 	default:
@@ -412,18 +461,30 @@ type cloudRegistry struct {
 	fromNodes bool
 }
 
-// cloudChartRegistries are the Helm chart repositories the cluster root installs from,
-// with the components that use them.
-var cloudChartRegistries = []cloudRegistry{
-	{what: "cert-manager chart repository", url: "https://charts.jetstack.io/index.yaml"},
-	{what: "CloudNativePG chart registry", url: "https://ghcr.io/v2/"},
-	{what: "ingress-nginx chart repository", url: "https://kubernetes.github.io/ingress-nginx/index.yaml"},
-	{what: "monitoring chart repository", url: "https://prometheus-community.github.io/helm-charts/index.yaml"},
-}
+// The Helm chart repositories the cluster root installs from, each with the component
+// that uses it. Traefik is installed on every cluster; ingress-nginx only stays on one
+// that already runs it, so a new install never downloads it and it is not asked.
+var (
+	certManagerCharts = cloudRegistry{what: "cert-manager chart repository", url: "https://charts.jetstack.io/index.yaml"}
+	cnpgCharts        = cloudRegistry{what: "CloudNativePG chart registry", url: "https://ghcr.io/v2/"}
+	traefikCharts     = cloudRegistry{what: "Traefik chart repository", url: "https://traefik.github.io/charts/index.yaml"}
+	monitoringCharts  = cloudRegistry{what: "monitoring chart repository", url: "https://prometheus-community.github.io/helm-charts/index.yaml"}
+)
 
+// registries are the places THIS plan downloads from: the provider registry, the chart
+// repositories of the components it installs, and the image registry.
 func (t cloudTarget) registries(p cloudProbes) []cloudRegistry {
 	regs := []cloudRegistry{{what: "OpenTofu provider registry", url: "https://" + p.tofuRegistry + "/.well-known/terraform.json"}}
-	regs = append(regs, cloudChartRegistries...)
+	if t.CertManager {
+		regs = append(regs, certManagerCharts)
+	}
+	if t.CNPG {
+		regs = append(regs, cnpgCharts)
+	}
+	regs = append(regs, traefikCharts)
+	if t.Monitoring {
+		regs = append(regs, monitoringCharts)
+	}
 	if host := registryHost(t.ImageRegistry); host != "" {
 		regs = append(regs, cloudRegistry{what: "image registry", url: "https://" + host + "/v2/", fromNodes: !t.Build})
 	}
@@ -589,12 +650,23 @@ func classifyProbeErr(err error) probeClass {
 	case errors.Is(err, context.DeadlineExceeded), apierrors.IsTimeout(err), apierrors.IsServerTimeout(err),
 		errors.As(err, &netErr) && netErr.Timeout():
 		return probeTimeout
-	case errors.Is(err, syscall.ECONNREFUSED):
+	case refused(err):
 		return probeRefused
 	case errors.As(err, &unknownAuthority), errors.As(err, &hostname), errors.As(err, &invalid), errors.As(err, &verify):
 		return probeTLS
 	}
 	return probeOther
+}
+
+// refused reports whether err is a refused connection, in any form this OS reports one
+// (refusedConnection, per OS).
+func refused(err error) bool {
+	for _, r := range refusedConnection {
+		if errors.Is(err, r) {
+			return true
+		}
+	}
+	return false
 }
 
 // errMutationRefused is what the guards answer a request the diagnostics do not send.
@@ -639,17 +711,30 @@ func kubeRequestPermitted(server *url.URL, method string, u *url.URL) bool {
 
 // kubeGuard lets out only what kubeRequestPermitted allows. It sits under client-go's
 // auth wrappers, so it sees every request, with its credentials, before it leaves.
+//
+// 🔴 A CREDENTIAL IS NEVER SENT PAST ITS EXPIRY: with notAfter set (a plugin's credential
+// says when it expires), a request from then on is refused before it leaves.
 type kubeGuard struct {
-	server *url.URL
-	next   http.RoundTripper
+	server   *url.URL
+	next     http.RoundTripper
+	notAfter time.Time
 }
 
 func (g kubeGuard) RoundTrip(r *http.Request) (*http.Response, error) {
 	if !kubeRequestPermitted(g.server, r.Method, r.URL) {
 		return refuse(r)
 	}
+	if !g.notAfter.IsZero() && !time.Now().Before(g.notAfter) {
+		if r.Body != nil {
+			_ = r.Body.Close()
+		}
+		return nil, errCredentialExpired
+	}
 	return g.next.RoundTrip(r)
 }
+
+// errCredentialExpired is the guard's answer to a request whose credential has expired.
+var errCredentialExpired = errors.New("the credential has expired")
 
 // readOnlyRequest reports whether a registry probe may leave: GET and HEAD only.
 func readOnlyRequest(method string) bool {
@@ -705,11 +790,17 @@ func boundedTransport(life context.Context, tlsCfg *tls.Config) *http.Transport 
 //
 //   - 🔴 no credential plugin. client-go runs an exec plugin with no way to cancel it, so
 //     a hung one would outlive every bound, and Exit, and each Recheck would queue
-//     another behind it. The plugin is dropped; the probes that need credentials say
-//     they were not checked (credPlugin).
+//     another behind it. The plugin is dropped here; an exec plugin is run by the checks
+//     themselves (execAuthenticator), and an auth-provider never (credPlugin).
 //   - every request through kubeGuard, on dcctl's own bounded, keep-alive-free
 //     transport carrying the context's TLS settings.
 func cloudKubeConfig(life context.Context, cfg *rest.Config) (*rest.Config, *url.URL, error) {
+	return cloudKubeConfigUntil(life, cfg, time.Time{})
+}
+
+// cloudKubeConfigUntil is cloudKubeConfig for credentials that expire at notAfter (zero:
+// never): the guard refuses to send them from then on.
+func cloudKubeConfigUntil(life context.Context, cfg *rest.Config, notAfter time.Time) (*rest.Config, *url.URL, error) {
 	c := rest.CopyConfig(cfg)
 	c.ExecProvider, c.AuthProvider = nil, nil
 	server, _, err := rest.DefaultServerUrlFor(c)
@@ -724,14 +815,21 @@ func cloudKubeConfig(life context.Context, cfg *rest.Config) (*rest.Config, *url
 	// The TLS settings now live in the transport; client-go refuses both at once.
 	c.TLSClientConfig, c.Proxy, c.Dial = rest.TLSClientConfig{}, nil, nil
 	c.Timeout = cloudAPITimeout
-	c.Wrap(func(rt http.RoundTripper) http.RoundTripper { return kubeGuard{server: server, next: rt} })
+	c.Wrap(func(rt http.RoundTripper) http.RoundTripper {
+		return kubeGuard{server: server, next: rt, notAfter: notAfter}
+	})
 	return c, server, nil
 }
 
 // cloudKubeClient is the cluster client the diagnostics ask through: cloudKubeConfig's,
 // following no redirect.
 func cloudKubeClient(life context.Context, cfg *rest.Config) (kubernetes.Interface, error) {
-	c, _, err := cloudKubeConfig(life, cfg)
+	return cloudKubeClientUntil(life, cfg, time.Time{})
+}
+
+// cloudKubeClientUntil is cloudKubeClient for credentials that expire at notAfter.
+func cloudKubeClientUntil(life context.Context, cfg *rest.Config, notAfter time.Time) (kubernetes.Interface, error) {
+	c, _, err := cloudKubeConfigUntil(life, cfg, notAfter)
 	if err != nil {
 		return nil, err
 	}
@@ -767,8 +865,10 @@ const (
 	credStatic credKind = iota
 	// credNone: nothing; the API server sees the context as anonymous.
 	credNone
-	// credPlugin: an exec or auth-provider plugin that dcctl would have to run.
+	// credPlugin: an auth-provider plugin (the legacy gcp and azure ones), never run.
 	credPlugin
+	// credExec: an exec plugin, which the checks run themselves (execAuthenticator).
+	credExec
 )
 
 // credentialsOf classifies a context's credentials as client-go uses them: static
@@ -779,7 +879,10 @@ func credentialsOf(cfg *rest.Config) credKind {
 	case cfg.BearerToken != "" || cfg.BearerTokenFile != "" || cfg.Username != "" || cfg.Password != "" ||
 		cfg.CertData != nil || cfg.CertFile != "" || cfg.KeyData != nil || cfg.KeyFile != "":
 		return credStatic
+	case cfg.ExecProvider != nil && cfg.AuthProvider == nil:
+		return credExec
 	case cfg.ExecProvider != nil || cfg.AuthProvider != nil:
+		// client-go refuses an exec plugin beside an auth-provider; so do the checks.
 		return credPlugin
 	}
 	return credNone
@@ -890,8 +993,9 @@ func pinToken(cfg *rest.Config) error {
 
 // cloudProbesFrom are the windows onto the cluster one REST config describes.
 //
-// 🔴 A credential plugin in cfg is never run: cloudKubeClient drops it, and creds says
-// so, so the probes that would need it read NOT CHECKED.
+// 🔴 A credential plugin in cfg is never run by client-go: cloudKubeClient drops it. An
+// exec plugin is run by the checks themselves, later, under the probe's context
+// (authenticate); an auth-provider never is, and creds says so.
 func cloudProbesFrom(life context.Context, cfg *rest.Config) (cloudProbes, error) {
 	kube, err := cloudKubeClient(life, cfg)
 	if err != nil {
@@ -900,6 +1004,15 @@ func cloudProbesFrom(life context.Context, cfg *rest.Config) (cloudProbes, error
 	server := withoutUserinfoURL(cfg.Host)
 	p := cloudProbes{server: server, insecure: cfg.Insecure, creds: credentialsOf(cfg), lookupHost: net.DefaultResolver.LookupHost,
 		kube: kube, http: cloudHTTPClientFor(life, nil), tofuRegistry: "registry.opentofu.org"}
+	if p.creds == credExec {
+		// Every file the plugin's client could need is read now, inside the load's bound,
+		// so authenticating later reads none.
+		base := rest.CopyConfig(cfg)
+		if err := rest.LoadTLSFiles(base); err != nil {
+			return cloudProbes{}, err
+		}
+		p.authenticate = execAuthenticator(life, base)
+	}
 	if _, err := lookPath("tofu"); err != nil {
 		if _, err := lookPath("terraform"); err == nil {
 			p.tofuRegistry = "registry.terraform.io"

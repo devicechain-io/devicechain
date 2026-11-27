@@ -504,9 +504,19 @@ func advisoryFor(p installchoice.Prepared) installflow.PreflightRunner {
 	if eff.KubeContext == "" || eff.SkipPreflight {
 		return nil
 	}
+	return cloudDiagnosticsRunner(cloudTargetFor(p), cloudProbesFor)
+}
+
+// cloudTargetFor is what a plan's advisory checks look at: its cluster, its image
+// registry, and the optional components it installs, as the plan resolved them (Compact
+// leaves monitoring out unless --no-monitoring=false, and cert-manager too unless TLS is
+// kept; the drawer's --no-monitoring and --no-cnpg are explicit). cert-manager follows
+// the same reading as the install's own (no cert-manager only for Compact without TLS).
+func cloudTargetFor(p installchoice.Prepared) cloudTarget {
+	eff := p.Effective
 	opts := p.BootstrapOptions()
-	return cloudDiagnosticsRunner(cloudTarget{KubeContext: eff.KubeContext,
-		ImageRegistry: opts.ImageRegistry, Build: opts.BuildImages}, cloudProbesFor)
+	return cloudTarget{KubeContext: eff.KubeContext, ImageRegistry: opts.ImageRegistry, Build: opts.BuildImages,
+		CertManager: !(eff.Compact && eff.NoTLS), CNPG: !eff.NoCNPG, Monitoring: !eff.NoMonitoring}
 }
 
 // cloudProbesFor builds the advisory diagnostics' windows onto a target. Tests replace it

@@ -63,6 +63,14 @@ dcctl install local --ui=tui --kube-context prod
 - **Choose another context** 从 kubeconfig 中的名称里选择一个现有集群。
 - 只要有任何检查失败，**Continue 就不可用**，屏幕上也没有绕过的办法。命令行上的 `--skip-preflight` 仍然是跳过检查的唯一方式。
 
+#### 现有集群检查 {#preflight-advisory}
+
+使用 `--kube-context` 时，检查之后会出现一组 "Existing cluster (advisory)"。它向集群提出只读问题：API 服务器的名称能否解析，它是否以该上下文信任的 TLS 证书应答，该上下文的凭据是否被接受，以及这些凭据能否创建安装所创建的资源。它还会检查本机能否访问此计划下载所用的提供程序、chart 和镜像仓库。这些检查只是建议：发现的问题显示为 `WARN`，无法判断的显示为 `UNKNOWN` 或 `NOT CHECKED`，并且从不阻止 Continue。
+
+- **凭据插件。** 通过 exec 插件获取凭据的上下文（GKE、EKS 和 AKS 的上下文通常如此）会像 kubectl 那样运行该插件来进行身份验证：从不以交互方式运行，没有终端，输入为空，最长 10 秒；时间用完或您离开该屏幕时，插件及其启动的所有进程都会被一并停止。插件输出的凭据只会发送给该上下文的 API 服务器，并且从不显示。必须以交互方式运行的插件（`interactiveMode: Always`）不会运行，显示为 `NOT CHECKED`；未安装的插件显示为 `WARN`；运行失败、挂起或没有输出可用凭据的插件显示为 `UNKNOWN`，并会显示其自身的错误信息，其中 URL 所带的凭据已被移除。旧式的 `auth-provider` 条目从不运行。
+- **仓库。** 只检查此计划所安装组件的 chart 仓库，因此 Compact（不包含监控）以及 Advanced 面板中的监控和 CloudNativePG 选项都会改变检查列表。
+- **代理。** 这些检查从不经过代理。当上下文或环境（`HTTPS_PROXY` 等）中配置了代理时，需要经过该代理的行显示为 `NOT CHECKED`。
+
 ### 集群选项 {#cluster-choices}
 
 目标（可重命名的托管本地 kind 集群，或现有上下文）、规模（Standard 或 Compact）以及拓扑（Single 或 HA）。在命令行上设置的值会标明是由哪个参数设置的。Compact 会省略的内容会在其下方说明。
