@@ -12,6 +12,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -26,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 // The advisory cloud diagnostics: read-only questions about an EXISTING cluster that the
@@ -90,13 +93,32 @@ type cloudProbes struct {
 // cloudDiagnosticsRunner is the advisory diagnostics as a preflight runner, built for
 // one target. probes is called once per run, so a Recheck reads the kubeconfig again.
 // Its result never carries a failure.
-func cloudDiagnosticsRunner(t cloudTarget, probes func(cloudTarget) (cloudProbes, error)) installflow.PreflightRunner {
+func cloudDiagnosticsRunner(t cloudTarget, probes func(context.Context, cloudTarget) (cloudProbes, error)) installflow.PreflightRunner {
 	return installflow.PreflightFunc(func(ctx context.Context, observe func(installflow.PreflightObservation)) (installflow.PreflightResult, error) {
 		// Bound to the screen's context, like the doctor the screen runs.
 		d := &doctor{observe: observe, ctx: ctx}
 		d.section(installplain.SectionCloud)
-		p, err := probes(t)
-		if err != nil {
+		// 🔴 life is the run's: the connections the probes open are tied to it, and it
+		// ends when the run returns, which cancels any dial or TLS handshake still in
+		// progress. Go dials on a context detached from the request, so without this a
+		// stalled handshake would outlive the run. It ends at the run's END, not at the
+		// screen's cancel: a dial is cancelled only once its request has given up, and
+		// on an Exit the requests give up a moment AFTER the cancel, inside the probes'
+		// join. An Exit ends the run promptly, so it ends life promptly too.
+		life, end := context.WithCancel(context.WithoutCancel(ctx))
+		defer end()
+		p, err := probes(life, t)
+		var irregular notRegularFileError
+		switch {
+		case errors.As(err, &irregular):
+			d.notChecked("the advisory cluster checks did not read "+filepath.Base(irregular.path)+": it is not a regular file",
+				"point the context at regular files, then Recheck")
+			return installflow.PreflightResult{Warns: d.warns}, nil
+		case err != nil && errors.Is(err, context.DeadlineExceeded):
+			d.unknown("loading --kube-context "+t.KubeContext+" did not finish within "+cloudAPITimeout.String(),
+				"check that the kubeconfig and the files it names can be read, then Recheck")
+			return installflow.PreflightResult{Warns: d.warns}, nil
+		case err != nil:
 			// The doctor's kube-context check has already said why, in dcctl's words.
 			d.unknown("the advisory cluster checks could not load --kube-context "+t.KubeContext,
 				"see the Kubernetes contexts check above, fix the kubeconfig, then Recheck")
@@ -131,7 +153,7 @@ func (d *doctor) checkAPIName(ctx context.Context, p cloudProbes, host string) {
 		d.check(installflow.CheckNotNeeded, "API server name: the address "+host+" is an IP address", "")
 		return
 	case p.proxied:
-		d.notChecked("API server name "+host+": a proxy resolves it, not this machine", "")
+		d.notChecked("API server name "+host+": "+proxyNotUsed, "")
 		return
 	}
 	_, err := within(ctx, cloudConnectTimeout, func(ctx context.Context) ([]string, error) {
@@ -162,9 +184,19 @@ const (
 	apiSilent       apiAnswer = iota // no answer: nothing further can be asked
 	apiAnswered                      // answered, so the access reviews can be asked
 	apiUnauthorized                  // refused the credentials
+	apiProxied                       // not asked: a proxy is configured
 )
 
+// proxyNotUsed is every row a configured proxy leaves unasked. 🔴 THE CHECKS NEVER GO
+// THROUGH A PROXY: Go makes an https proxy's own TLS handshake with the cluster's TLS
+// settings, so a proxy could ask for, and get, the context's client certificate.
+const proxyNotUsed = "not checked, a proxy is configured; the advisory checks do not go through proxies"
+
 func (d *doctor) checkAPIAnswers(ctx context.Context, p cloudProbes, host, kubeContext string) apiAnswer {
+	if p.proxied {
+		d.notChecked("API server "+host+": "+proxyNotUsed, "")
+		return apiProxied
+	}
 	_, err := within(ctx, cloudAPITimeout, func(ctx context.Context) (struct{}, error) {
 		// Under the probe's context, so an Exit or the deadline cancels the request
 		// itself; ServerVersion() would run it on context.Background().
@@ -273,6 +305,10 @@ func (d *doctor) checkAccess(ctx context.Context, p cloudProbes, answered apiAns
 		d.notChecked("authentication: not asked, the API server did not answer", "")
 		notAsked("not asked, the API server did not answer")
 		return
+	case answered == apiProxied:
+		d.notChecked("authentication: "+proxyNotUsed, "")
+		notAsked(proxyNotUsed)
+		return
 	case p.creds == credPlugin:
 		// 🔴 The plugin is never run (cloudKubeConfig), so there are no credentials to
 		// judge, and a review asked without them would answer for nobody.
@@ -332,6 +368,10 @@ func (d *doctor) checkAccess(ctx context.Context, p cloudProbes, answered apiAns
 			"refresh the context's login (for example your provider's get-credentials command), then Recheck")
 		notAsked("not asked, the credentials were refused")
 		return
+	case whoErr == nil && who.Status.UserInfo.Username == "":
+		// A review that names nobody says nothing about the credentials.
+		d.unknown("authentication: the API server's review named no user",
+			"check with kubectl auth whoami against this context, then Recheck")
 	case whoErr == nil && anonymous(who):
 		d.warn("authentication: the API server treats this context as anonymous",
 			"its credentials are not being accepted; refresh the context's login, then Recheck")
@@ -404,7 +444,14 @@ func (d *doctor) checkRegistries(ctx context.Context, t cloudTarget, p cloudProb
 	codes := make([]int, len(regs))
 	errs := make([]error, len(regs))
 	var wg sync.WaitGroup
+	proxied := make([]bool, len(regs))
 	for i, r := range regs {
+		if u, err := url.Parse(r.url); err == nil {
+			if pu, _ := envProxy(u); pu != nil {
+				proxied[i] = true
+				continue
+			}
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -432,6 +479,8 @@ func (d *doctor) checkRegistries(ctx context.Context, t cloudTarget, p cloudProb
 		}
 		err := errs[i]
 		switch {
+		case proxied[i]:
+			d.notChecked(what+": "+proxyNotUsed, "")
 		case err == nil && codes[i] >= 500:
 			d.warn(fmt.Sprintf("%s answered HTTP %d", what, codes[i]), fix)
 		case err == nil && r.fromNodes:
@@ -631,17 +680,22 @@ func refuse(r *http.Request) (*http.Response, error) {
 func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // boundedTransport is the diagnostics' one transport shape: a bounded connection and
-// answer, and 🔴 NO KEEP-ALIVE, so a run leaves no idle connection (and no goroutine
-// holding one) behind for the next Recheck to pile on.
-func boundedTransport(proxy func(*http.Request) (*url.URL, error), tlsCfg *tls.Config) *http.Transport {
-	return &http.Transport{
-		Proxy:                 proxy,
+// answer, 🔴 NO PROXY (proxyNotUsed), and 🔴 NO KEEP-ALIVE, so a run leaves no idle
+// connection (and no goroutine holding one) behind for the next Recheck to pile on.
+// When life ends, every dial and TLS handshake still in progress is cancelled
+// (CloseIdleConnections cancels the dials whose requests have gone), so connection
+// setup never outlives the run.
+func boundedTransport(life context.Context, tlsCfg *tls.Config) *http.Transport {
+	tr := &http.Transport{
+		Proxy:                 nil,
 		TLSClientConfig:       tlsCfg,
 		DialContext:           (&net.Dialer{Timeout: cloudConnectTimeout}).DialContext,
 		TLSHandshakeTimeout:   cloudConnectTimeout,
 		ResponseHeaderTimeout: cloudAPITimeout,
 		DisableKeepAlives:     true,
 	}
+	context.AfterFunc(life, tr.CloseIdleConnections)
+	return tr
 }
 
 // ---- production probes -------------------------------------------------------------------
@@ -655,7 +709,7 @@ func boundedTransport(proxy func(*http.Request) (*url.URL, error), tlsCfg *tls.C
 //     they were not checked (credPlugin).
 //   - every request through kubeGuard, on dcctl's own bounded, keep-alive-free
 //     transport carrying the context's TLS settings.
-func cloudKubeConfig(cfg *rest.Config) (*rest.Config, *url.URL, error) {
+func cloudKubeConfig(life context.Context, cfg *rest.Config) (*rest.Config, *url.URL, error) {
 	c := rest.CopyConfig(cfg)
 	c.ExecProvider, c.AuthProvider = nil, nil
 	server, _, err := rest.DefaultServerUrlFor(c)
@@ -666,11 +720,7 @@ func cloudKubeConfig(cfg *rest.Config) (*rest.Config, *url.URL, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	proxy := c.Proxy
-	if proxy == nil {
-		proxy = http.ProxyFromEnvironment
-	}
-	c.Transport = boundedTransport(proxy, tlsCfg)
+	c.Transport = boundedTransport(life, tlsCfg)
 	// The TLS settings now live in the transport; client-go refuses both at once.
 	c.TLSClientConfig, c.Proxy, c.Dial = rest.TLSClientConfig{}, nil, nil
 	c.Timeout = cloudAPITimeout
@@ -680,8 +730,8 @@ func cloudKubeConfig(cfg *rest.Config) (*rest.Config, *url.URL, error) {
 
 // cloudKubeClient is the cluster client the diagnostics ask through: cloudKubeConfig's,
 // following no redirect.
-func cloudKubeClient(cfg *rest.Config) (kubernetes.Interface, error) {
-	c, _, err := cloudKubeConfig(cfg)
+func cloudKubeClient(life context.Context, cfg *rest.Config) (kubernetes.Interface, error) {
+	c, _, err := cloudKubeConfig(life, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -698,8 +748,13 @@ func cloudKubeClient(cfg *rest.Config) (kubernetes.Interface, error) {
 // keep-alive-free, and following no redirect (any answer at all says the registry is
 // reachable).
 func cloudHTTPClient(next http.RoundTripper) *http.Client {
+	return cloudHTTPClientFor(context.Background(), next)
+}
+
+// cloudHTTPClientFor is cloudHTTPClient with its connections tied to life.
+func cloudHTTPClientFor(life context.Context, next http.RoundTripper) *http.Client {
 	if next == nil {
-		next = boundedTransport(http.ProxyFromEnvironment, nil)
+		next = boundedTransport(life, nil)
 	}
 	return &http.Client{Timeout: cloudAPITimeout, Transport: readOnlyTransport{next: next}, CheckRedirect: noRedirect}
 }
@@ -716,39 +771,135 @@ const (
 	credPlugin
 )
 
+// credentialsOf classifies a context's credentials as client-go uses them: static
+// credentials take precedence over a plugin beside them (the plugin is then never
+// consulted), so they are looked for first.
 func credentialsOf(cfg *rest.Config) credKind {
 	switch {
-	case cfg.ExecProvider != nil || cfg.AuthProvider != nil:
-		return credPlugin
 	case cfg.BearerToken != "" || cfg.BearerTokenFile != "" || cfg.Username != "" || cfg.Password != "" ||
 		cfg.CertData != nil || cfg.CertFile != "" || cfg.KeyData != nil || cfg.KeyFile != "":
 		return credStatic
+	case cfg.ExecProvider != nil || cfg.AuthProvider != nil:
+		return credPlugin
 	}
 	return credNone
 }
 
 // liveCloudProbes are the real windows: the context's API server, this machine's DNS and
 // network.
-func liveCloudProbes(t cloudTarget) (cloudProbes, error) {
-	cfg, err := bootstrap.RestConfig(t.KubeContext)
-	if err != nil {
-		return cloudProbes{}, err
+//
+// 🔴 LOADING IS BOUNDED AND READS ONLY REGULAR FILES. The kubeconfig, and the token,
+// certificate and key files it names, are read with plain file reads nothing can
+// cancel: a FIFO nobody writes to, or a stalled network file, would hold the run, and
+// the screen's Exit, for ever. So every file is checked to be a regular file before
+// anything opens it (one that is not reads NOT CHECKED), and the whole load runs under
+// within(): past cloudAPITimeout it reads UNKNOWN and the read is given up on. A token
+// file is read once, here; client-go's refreshing reader, which would read it again on
+// a request, is never used.
+func liveCloudProbes(life context.Context, t cloudTarget) (cloudProbes, error) {
+	// Taken before the bound: a load given up on keeps running, and must not read
+	// anything a later run could change.
+	load := loadRestConfig
+	return within(life, cloudAPITimeout, func(context.Context) (cloudProbes, error) {
+		if f := irregularKubeFile(t.KubeContext); f != "" {
+			return cloudProbes{}, notRegularFileError{path: f}
+		}
+		cfg, err := load(t.KubeContext)
+		if err != nil {
+			return cloudProbes{}, err
+		}
+		if err := pinToken(cfg); err != nil {
+			return cloudProbes{}, err
+		}
+		// The connections belong to the run (life), not to this load's deadline.
+		return cloudProbesFrom(life, cfg)
+	})
+}
+
+// notRegularFileError is a file the checks will not read: not a regular file.
+type notRegularFileError struct{ path string }
+
+func (e notRegularFileError) Error() string { return e.path + " is not a regular file" }
+
+// irregularKubeFile is the first file the context's kubeconfig depends on that exists
+// and is not a regular file, or "". It reads only regular files to find out.
+func irregularKubeFile(kubeContext string) string {
+	irregular := func(path string) bool {
+		if path == "" {
+			return false
+		}
+		fi, err := os.Stat(path)
+		return err == nil && !fi.Mode().IsRegular()
 	}
-	return cloudProbesFrom(cfg)
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	for _, path := range rules.GetLoadingPrecedence() {
+		if irregular(path) {
+			return path
+		}
+	}
+	raw, err := rules.Load()
+	if err != nil {
+		return "" // the loader reports it, in its own words
+	}
+	name := kubeContext
+	if name == "" {
+		name = raw.CurrentContext
+	}
+	c, ok := raw.Contexts[name]
+	if !ok || c == nil {
+		return ""
+	}
+	var files []string
+	if a := raw.AuthInfos[c.AuthInfo]; a != nil {
+		files = append(files, a.TokenFile, a.ClientCertificate, a.ClientKey)
+	}
+	if cl := raw.Clusters[c.Cluster]; cl != nil {
+		files = append(files, cl.CertificateAuthority)
+	}
+	for _, f := range files {
+		if irregular(f) {
+			return f
+		}
+	}
+	return ""
+}
+
+// pinToken makes a token file a token read once, now: client-go would otherwise read
+// the file again, unboundedly, on a request.
+func pinToken(cfg *rest.Config) error {
+	if cfg.BearerTokenFile == "" {
+		return nil
+	}
+	if cfg.BearerToken == "" {
+		fi, err := os.Stat(cfg.BearerTokenFile)
+		if err != nil {
+			return err
+		}
+		if !fi.Mode().IsRegular() {
+			return notRegularFileError{path: cfg.BearerTokenFile}
+		}
+		b, err := os.ReadFile(cfg.BearerTokenFile)
+		if err != nil {
+			return err
+		}
+		cfg.BearerToken = strings.TrimSpace(string(b))
+	}
+	cfg.BearerTokenFile = ""
+	return nil
 }
 
 // cloudProbesFrom are the windows onto the cluster one REST config describes.
 //
 // 🔴 A credential plugin in cfg is never run: cloudKubeClient drops it, and creds says
 // so, so the probes that would need it read NOT CHECKED.
-func cloudProbesFrom(cfg *rest.Config) (cloudProbes, error) {
-	kube, err := cloudKubeClient(cfg)
+func cloudProbesFrom(life context.Context, cfg *rest.Config) (cloudProbes, error) {
+	kube, err := cloudKubeClient(life, cfg)
 	if err != nil {
 		return cloudProbes{}, err
 	}
 	server := withoutUserinfoURL(cfg.Host)
 	p := cloudProbes{server: server, insecure: cfg.Insecure, creds: credentialsOf(cfg), lookupHost: net.DefaultResolver.LookupHost,
-		kube: kube, http: cloudHTTPClient(nil), tofuRegistry: "registry.opentofu.org"}
+		kube: kube, http: cloudHTTPClientFor(life, nil), tofuRegistry: "registry.opentofu.org"}
 	if _, err := lookPath("tofu"); err != nil {
 		if _, err := lookPath("terraform"); err == nil {
 			p.tofuRegistry = "registry.terraform.io"
@@ -758,12 +909,21 @@ func cloudProbesFrom(cfg *rest.Config) (cloudProbes, error) {
 		if cfg.Proxy != nil {
 			pu, _ := cfg.Proxy(&http.Request{URL: u})
 			p.proxied = pu != nil
-		} else if pu, _ := http.ProxyFromEnvironment(&http.Request{URL: u}); pu != nil {
+		} else if pu, _ := envProxy(u); pu != nil {
 			p.proxied = true
 		}
 	}
 	return p, nil
 }
+
+// loadRestConfig reads the context's kubeconfig into a REST config, and envProxy is the
+// proxy the environment (HTTPS_PROXY and the rest) names for a URL. Variables so a test
+// can present a kubeconfig that never finishes loading, or a proxy, without the
+// process's own environment; production never reassigns them.
+var (
+	loadRestConfig = bootstrap.RestConfig
+	envProxy       = func(u *url.URL) (*url.URL, error) { return http.ProxyFromEnvironment(&http.Request{URL: u}) }
+)
 
 // withoutUserinfoURL is a server address with any userinfo removed.
 func withoutUserinfoURL(raw string) string {

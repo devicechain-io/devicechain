@@ -68,7 +68,7 @@ func TestAnExitCancelsTheVersionRequest(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	p, err := cloudProbesFrom(&rest.Config{Host: srv.URL, BearerToken: "t"})
+	p, err := cloudProbesFrom(context.Background(), &rest.Config{Host: srv.URL, BearerToken: "t"})
 	if err != nil {
 		t.Fatal(err)
 	}

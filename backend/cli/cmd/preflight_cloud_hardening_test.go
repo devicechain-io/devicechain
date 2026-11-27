@@ -76,7 +76,7 @@ func TestTheClusterClientFollowsNoRedirect(t *testing.T) {
 	defer cluster.Close()
 
 	cfg := &rest.Config{Host: cluster.URL, BearerToken: "tok-canary-5521"}
-	kube, err := cloudKubeClient(cfg)
+	kube, err := cloudKubeClient(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestTheClusterClientFollowsNoRedirect(t *testing.T) {
 	}
 
 	// Through the diagnostics, the redirected answer is advice, never a pass.
-	p, err := cloudProbesFrom(cfg)
+	p, err := cloudProbesFrom(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestARedirectLoopIsNotFollowed(t *testing.T) {
 		http.Redirect(w, r, srv.URL+"/version", http.StatusFound)
 	}))
 	defer srv.Close()
-	kube, err := cloudKubeClient(&rest.Config{Host: srv.URL})
+	kube, err := cloudKubeClient(context.Background(), &rest.Config{Host: srv.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestACredentialPluginIsNeverRun(t *testing.T) {
 		Command: "sh", Args: []string{"-c", "touch " + marker + "; sleep 30"},
 		APIVersion: "client.authentication.k8s.io/v1", InteractiveMode: clientcmdapi.NeverExecInteractiveMode,
 	}}
-	p, err := cloudProbesFrom(cfg)
+	p, err := cloudProbesFrom(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestTheClusterClientLeavesNoConnection(t *testing.T) {
 	}))
 	defer srv.Close()
 	for range 3 { // three Rechecks, three clients
-		kube, err := cloudKubeClient(&rest.Config{Host: srv.URL, BearerToken: "t"})
+		kube, err := cloudKubeClient(context.Background(), &rest.Config{Host: srv.URL, BearerToken: "t"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -358,7 +358,7 @@ func TestAPrefixedServerIsAskedUnderItsPrefix(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	kube, err := cloudKubeClient(&rest.Config{Host: srv.URL + prefix})
+	kube, err := cloudKubeClient(context.Background(), &rest.Config{Host: srv.URL + prefix})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -54,6 +54,8 @@ type cloudFakes struct {
 	ssrUser   string
 	ssrGroups []string
 	ssrErr    error
+	// ssrEmpty makes the SelfSubjectReview answer with no user at all.
+	ssrEmpty bool
 	// allow decides each access review; nil allows everything.
 	allow   func(*authorizationv1.ResourceAttributes) (allowed bool, evalErr string)
 	httpErr map[string]error // by host
@@ -84,7 +86,7 @@ func newCloudFakes(t *testing.T) *cloudFakes {
 		}
 		r := a.(ktesting.CreateAction).GetObject().(*authenticationv1.SelfSubjectReview).DeepCopy()
 		r.Status.UserInfo.Username, r.Status.UserInfo.Groups = f.ssrUser, f.ssrGroups
-		if r.Status.UserInfo.Username == "" {
+		if r.Status.UserInfo.Username == "" && !f.ssrEmpty {
 			r.Status.UserInfo.Username = "alice"
 		}
 		return true, r, nil
@@ -133,8 +135,8 @@ func (f *cloudFakes) RoundTrip(r *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
 }
 
-func (f *cloudFakes) probes(server string) func(cloudTarget) (cloudProbes, error) {
-	return func(cloudTarget) (cloudProbes, error) {
+func (f *cloudFakes) probes(server string) func(context.Context, cloudTarget) (cloudProbes, error) {
+	return func(context.Context, cloudTarget) (cloudProbes, error) {
 		return cloudProbes{server: server, kube: f.kube, creds: f.creds, http: cloudHTTPClient(f), tofuRegistry: "registry.opentofu.org",
 			lookupHost: func(ctx context.Context, host string) ([]string, error) {
 				if f.hang {
@@ -362,8 +364,8 @@ func TestCloudDiagnosticsUnverifiedTLSWarns(t *testing.T) {
 		{testServer, true, "does not verify"},
 	} {
 		f := newCloudFakes(t)
-		probes := func(c cloudTarget) (cloudProbes, error) {
-			p, err := f.probes(tc.server)(c)
+		probes := func(ctx context.Context, c cloudTarget) (cloudProbes, error) {
+			p, err := f.probes(tc.server)(ctx, c)
 			p.insecure = tc.insecure
 			return p, err
 		}
@@ -385,8 +387,8 @@ func TestCloudDiagnosticsNameRowsThatAreNotChecks(t *testing.T) {
 	if r := row(t, rows, "API server name"); r.Verdict != installflow.CheckNotNeeded {
 		t.Errorf("an IP server reads %s", r.Verdict)
 	}
-	probes := func(c cloudTarget) (cloudProbes, error) {
-		p, err := f.probes(testServer)(c)
+	probes := func(ctx context.Context, c cloudTarget) (cloudProbes, error) {
+		p, err := f.probes(testServer)(ctx, c)
 		p.proxied = true
 		return p, err
 	}
@@ -401,7 +403,7 @@ func TestCloudDiagnosticsNameRowsThatAreNotChecks(t *testing.T) {
 // A context that cannot be loaded is one UNKNOWN row, not a failure and not an error.
 func TestCloudDiagnosticsUnloadableContextIsUnknown(t *testing.T) {
 	var rows []installflow.PreflightObservation
-	res, err := cloudDiagnosticsRunner(prodTarget, func(cloudTarget) (cloudProbes, error) {
+	res, err := cloudDiagnosticsRunner(prodTarget, func(context.Context, cloudTarget) (cloudProbes, error) {
 		return cloudProbes{}, errors.New(canaryErr)
 	}).RunPreflight(context.Background(), func(o installflow.PreflightObservation) {
 		if o.Observation == installflow.ObserveCheck {
@@ -458,7 +460,7 @@ func TestCloudDiagnosticsReviewsShareOneBudget(t *testing.T) {
 		}
 		r := a.(ktesting.CreateAction).GetObject().(*authenticationv1.SelfSubjectReview).DeepCopy()
 		r.Status.UserInfo.Username, r.Status.UserInfo.Groups = f.ssrUser, f.ssrGroups
-		if r.Status.UserInfo.Username == "" {
+		if r.Status.UserInfo.Username == "" && !f.ssrEmpty {
 			r.Status.UserInfo.Username = "alice"
 		}
 		return true, r, nil
@@ -485,14 +487,14 @@ func TestCloudDiagnosticsBounds(t *testing.T) {
 	if cloudConnectTimeout != 5*time.Second || cloudAPITimeout != 15*time.Second {
 		t.Fatalf("bounds %v / %v", cloudConnectTimeout, cloudAPITimeout)
 	}
-	c, server, err := cloudKubeConfig(&rest.Config{Host: testServer, BearerToken: "t"})
+	c, server, err := cloudKubeConfig(context.Background(), &rest.Config{Host: testServer, BearerToken: "t"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	kt, ok := c.Transport.(*http.Transport)
 	if c.Timeout != cloudAPITimeout || c.WrapTransport == nil || server.Host != "api.prod.example:6443" || !ok ||
 		kt.DialContext == nil || kt.TLSHandshakeTimeout != cloudConnectTimeout || kt.ResponseHeaderTimeout != cloudAPITimeout ||
-		!kt.DisableKeepAlives || kt.Proxy == nil {
+		!kt.DisableKeepAlives || kt.Proxy != nil {
 		t.Errorf("rest config timeout %v, wrapped %v, server %v, transport %+v", c.Timeout, c.WrapTransport != nil, server, c.Transport)
 	}
 	h := cloudHTTPClient(nil)
@@ -500,7 +502,7 @@ func TestCloudDiagnosticsBounds(t *testing.T) {
 		t.Errorf("registry client timeout %v", h.Timeout)
 	}
 	tr, ok := h.Transport.(readOnlyTransport).next.(*http.Transport)
-	if !ok || tr.TLSHandshakeTimeout != cloudConnectTimeout || tr.ResponseHeaderTimeout != cloudAPITimeout || tr.Proxy == nil ||
+	if !ok || tr.TLSHandshakeTimeout != cloudConnectTimeout || tr.ResponseHeaderTimeout != cloudAPITimeout || tr.Proxy != nil ||
 		!tr.DisableKeepAlives || h.CheckRedirect == nil {
 		t.Errorf("registry transport %+v", h.Transport)
 	}
@@ -530,7 +532,7 @@ func TestTheDiagnosticsRestConfigCannotCreate(t *testing.T) {
 		_, _ = io.WriteString(w, `{"kind":"SelfSubjectAccessReview","apiVersion":"authorization.k8s.io/v1","status":{"allowed":true}}`)
 	}))
 	defer srv.Close()
-	kube, err := cloudKubeClient(&rest.Config{Host: srv.URL})
+	kube, err := cloudKubeClient(context.Background(), &rest.Config{Host: srv.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
