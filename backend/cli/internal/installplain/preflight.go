@@ -97,7 +97,7 @@ func renderCheck(w io.Writer, o installflow.PreflightObservation) {
 	case installflow.CheckFail:
 		fmt.Fprintf(w, "  %s %s\n     %s\n", color.RedString("❌"), o.Text, color.RedString("↳ "+o.Fix.String()))
 	default:
-		// Reserved verdicts the doctor does not reach today. Shown as words.
+		// Unknown and reserved verdicts are shown as words, with their fix.
 		fmt.Fprintf(w, "  %s %s\n", verdictWord(o.Verdict), o.Text)
 		if !o.Fix.IsZero() {
 			fmt.Fprintf(w, "     ↳ %s\n", o.Fix)

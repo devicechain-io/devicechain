@@ -285,12 +285,17 @@ func (d *doctor) checkDockerEngine(opts doctorOpts) string {
 		capacityIssue = d.fail
 	}
 	const capacityFix = "give Docker >= 4 CPUs and >= 8Gi, or re-run install with --compact for the small-footprint preset"
-	if n, _ := strconv.Atoi(d.run("docker", "info", "--format", "{{.NCPU}}")); n > 0 {
+	if n, err := strconv.Atoi(d.run("docker", "info", "--format", "{{.NCPU}}")); err == nil && n > 0 {
 		if n >= 4 {
 			d.pass(fmt.Sprintf("engine CPUs: %d", n))
 		} else {
 			capacityIssue(fmt.Sprintf("engine CPUs: %d", n), capacityFix)
 		}
+	} else {
+		d.check(installflow.CheckUnknown, "engine CPUs: could not be read", "check 'docker info' reports a positive CPU count, then re-run preflight")
+		// Missing capacity has never blocked either footprint. Keep it advisory,
+		// but include it in the tally so unknown cannot become "all checks passed".
+		d.warns++
 	}
 	if b, _ := strconv.ParseInt(d.run("docker", "info", "--format", "{{.MemTotal}}"), 10, 64); b > 0 {
 		gi := b / (1 << 30)

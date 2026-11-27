@@ -271,6 +271,43 @@ func TestAWarningDoesNotBlockContinue(t *testing.T) {
 	}
 }
 
+func TestUnknownCPURendersItsFixAndNeverTalliesAsPassed(t *testing.T) {
+	const fix = "check 'docker info' reports a positive CPU count, then re-run preflight"
+	for _, compact := range []bool{false, true} {
+		for _, warns := range []int{0, 1} {
+			r := &preRunner{
+				obs: []installflow.PreflightObservation{
+					preSection(installplain.SectionDockerEngine),
+					preCheck(installflow.CheckPass, "docker daemon reachable", ""),
+					preCheck(installflow.CheckUnknown, "engine CPUs: could not be read", fix),
+					preCheck(installflow.CheckPass, "engine memory: 16Gi", ""),
+					preTally(0, warns),
+				},
+				res: installflow.PreflightResult{Warns: warns},
+			}
+			facts := preFacts()
+			facts.Compact = compact
+			p := newTestPrerun(&Wizard{Facts: facts}, r)
+			toPreflight(t, p)
+			view := screenText(p)
+			row := rowWith(t, view, "engine CPUs: could not be read")
+			if !strings.Contains(row, "UNKNOWN") || strings.Contains(row, "PASS") || strings.Contains(row, "FAIL") {
+				t.Errorf("unknown CPU rendered as %q", row)
+			}
+			if !strings.Contains(view, "fix: "+fix) || !strings.Contains(view, "1 check not determined") || strings.Contains(view, preflightAllPass) {
+				t.Errorf("unknown CPU must show its fix and remain undetermined:\n%s", view)
+			}
+			if !p.canContinue() {
+				t.Fatal("unknown CPU blocked Continue")
+			}
+			tabTo(t, p, actContinue)
+			if out := press(p, "enter"); out != stay || p.screen != screenChoices {
+				t.Fatalf("Continue with unknown CPU gave %v on screen %v, not the cluster choices", out, p.screen)
+			}
+		}
+	}
+}
+
 func TestEveryVerdictIsAWord(t *testing.T) {
 	for v, want := range map[installflow.CheckVerdict]string{
 		installflow.CheckPass: "PASS", installflow.CheckInfo: "INFO", installflow.CheckWarn: "WARN",
