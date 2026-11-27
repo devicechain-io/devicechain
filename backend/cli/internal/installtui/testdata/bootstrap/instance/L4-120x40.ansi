@@ -1,0 +1,21 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ DeviceChain · dcctl bootstrap · kind-devicechain · v1.11.0                                                           │
+│ \x1b[2m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\x1b[m │
+│ \x1b[1;38;2;32;140;183mInstance\x1b[m                                                                                                             │
+│                                                                                                                      │
+│ Choose the instance to create on this cluster. No changes have been made.                                            │
+│                                                                                                                      │
+│ › \x1b[1mName          \x1b[m\x1b[7macme▏\x1b[m                                                                                                │
+│   \x1b[1mHost          \x1b[mdevicechain.local (default)                                                                          │
+│   \x1b[1mProfile       \x1b[m< default > (1 of 4)                                                                                 │
+│   \x1b[1mExtra areas   \x1b[mnone                                                                                                 │
+│   \x1b[1mTLS           \x1b[m[x] serve HTTPS with a self-signed certificate                                                       │
+│   \x1b[1mObject store  \x1b[m< auto > (1 of 3)                                                                                    │
+│                                                                                                                      │
+│   \x1b[1mCluster\x1b[m       Standard, single node (inherited, read-only)                                                         │
+│                                                                                                                      │
+│    [Back]    [Continue]                                                                                              │
+│                                                                                                                      │
+│ \x1b[2m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\x1b[m │
+│ \x1b[2mTab next · Shift+Tab previous · Enter activate · Esc back · ?/F1 help\x1b[m                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

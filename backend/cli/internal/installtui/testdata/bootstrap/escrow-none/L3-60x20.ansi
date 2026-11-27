@@ -1,0 +1,17 @@
+DeviceChain · dcctl bootstrap · instance acme · kind-device…
+\x1b[1;38;5;31mRoot-key escrow\x1b[m
+DeviceChain encrypts stored credentials with this instance's
+root key. Database backups do not contain it. To recover
+after losing the cluster you need this escrow file and its
+passphrase. Copy the file off this machine; keep the
+passphrase separately.
+  ( ) Write an encrypted escrow file (recommended)
+› \x1b[7m(*) Do not escrow the root key (--no-escrow)\x1b[m
+  \x1b[1;38;5;179mWARNING: PERMANENT LOSS. Without an escrow file the root\x1b[m
+  \x1b[1;38;5;179mkey exists only inside the cluster. If the cluster is\x1b[m
+  \x1b[1;38;5;179mlost, every stored secret becomes permanently unreadable,\x1b[m
+  \x1b[1;38;5;179meven from a database backup. Choose this only for a\x1b[m
+  \x1b[1;38;5;179mthrowaway instance.\x1b[m
+   [Back]    [Continue]
+\x1b[2mTab next · Shift+Tab previous · Space toggle · Enter\x1b[m
+\x1b[2mactivate · Esc back · ?/F1 help\x1b[m

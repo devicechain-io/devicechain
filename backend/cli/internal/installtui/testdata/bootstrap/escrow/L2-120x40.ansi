@@ -1,0 +1,23 @@
++----------------------------------------------------------------------------------------------------------------------+
+| DeviceChain - dcctl bootstrap - instance acme - kind-devicechain - v1.11.0                                           |
+| \x1b[2m--------------------------------------------------------------------------------------------------------------------\x1b[m |
+| \x1b[1;34mRoot-key escrow\x1b[m                                                                                                      |
+|                                                                                                                      |
+| DeviceChain encrypts stored credentials with this instance's root key. Database backups do not contain it. To        |
+| recover after losing the cluster you need this escrow file and its passphrase. Copy the file off this machine; keep  |
+| the passphrase separately.                                                                                           |
+|                                                                                                                      |
+| > \x1b[7m(*) Write an encrypted escrow file (recommended)\x1b[m                                                                   |
+|   ( ) Do not escrow the root key (--no-escrow)                                                                       |
+|                                                                                                                      |
+|   \x1b[1mLocation  \x1b[m/home/op/.devicechain/escrow/acme-rootkey.escrow                                                         |
+|             \x1b[2mdefault for this instance, on this machine, outside what 'dcctl destroy' removes\x1b[m                         |
+|                                                                                                                      |
+|   You will be asked for its passphrase, twice, when the run reaches the escrow step, before anything is changed. Use |
+|   a long unique passphrase from your password manager.                                                               |
+|                                                                                                                      |
+|    [Back]    [Continue]                                                                                              |
+|                                                                                                                      |
+| \x1b[2m--------------------------------------------------------------------------------------------------------------------\x1b[m |
+| \x1b[2mTab next - Shift+Tab previous - Space toggle - Enter activate - Esc back - ?/F1 help\x1b[m                                 |
++----------------------------------------------------------------------------------------------------------------------+

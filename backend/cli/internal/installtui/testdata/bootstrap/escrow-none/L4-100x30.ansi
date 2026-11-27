@@ -1,0 +1,21 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ DeviceChain · dcctl bootstrap · instance acme · kind-devicechain · v1.11.0                       │
+│ \x1b[2m────────────────────────────────────────────────────────────────────────────────────────────────\x1b[m │
+│ \x1b[1;38;2;32;140;183mRoot-key escrow\x1b[m                                                                                  │
+│                                                                                                  │
+│ DeviceChain encrypts stored credentials with this instance's root key. Database backups do not   │
+│ contain it. To recover after losing the cluster you need this escrow file and its passphrase.    │
+│ Copy the file off this machine; keep the passphrase separately.                                  │
+│                                                                                                  │
+│   ( ) Write an encrypted escrow file (recommended)                                               │
+│ › \x1b[7m(*) Do not escrow the root key (--no-escrow)\x1b[m                                                   │
+│                                                                                                  │
+│   \x1b[1;38;2;224;160;48mWARNING: PERMANENT LOSS. Without an escrow file the root key exists only inside the cluster.\x1b[m   │
+│   \x1b[1;38;2;224;160;48mIf the cluster is lost, every stored secret becomes permanently unreadable, even from a\x1b[m        │
+│   \x1b[1;38;2;224;160;48mdatabase backup. Choose this only for a throwaway instance.\x1b[m                                    │
+│                                                                                                  │
+│    [Back]    [Continue]                                                                          │
+│                                                                                                  │
+│ \x1b[2m────────────────────────────────────────────────────────────────────────────────────────────────\x1b[m │
+│ \x1b[2mTab next · Shift+Tab previous · Space toggle · Enter activate · Esc back · ?/F1 help\x1b[m             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

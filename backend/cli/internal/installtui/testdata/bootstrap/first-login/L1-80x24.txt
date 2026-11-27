@@ -1,0 +1,18 @@
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ DeviceChain · dcctl bootstrap · instance acme · kind-devicechain · v1.11.0   │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ First login                                                                  │
+│                                                                              │
+│   Account    admin@devicechain.io                                            │
+│                                                                              │
+│ A password was generated for this account. It can be shown once, here, and   │
+│ dcctl will not show it again. Have your password manager ready.              │
+│                                                                              │
+│   ›[Show once]    [Skip (read it from the Secret later)]                     │
+│                                                                              │
+│ The seed password is also kept in Secret dci-acme/dci-acme-superuser, key    │
+│ password (changing the password in the console does not update it).          │
+│                                                                              │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│ s show once · Tab next · Enter activate · ?/F1 help                          │
+╰──────────────────────────────────────────────────────────────────────────────╯

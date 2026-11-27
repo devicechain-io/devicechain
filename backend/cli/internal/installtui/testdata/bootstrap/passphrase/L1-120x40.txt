@@ -1,0 +1,15 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ DeviceChain · dcctl bootstrap · instance acme · kind-devicechain · v1.11.0                                           │
+│ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│ Escrow passphrase                                                                                                    │
+│                                                                                                                      │
+│ Choose the passphrase that protects the root-key escrow for instance acme.                                           │
+│                                                                                                                      │
+│ › Passphrase  ▏  (typing is not shown)                                                                               │
+│                                                                                                                      │
+│ Use a long unique passphrase from your password manager. Pasting is accepted. It is never shown, logged or stored by │
+│ this screen.                                                                                                         │
+│                                                                                                                      │
+│ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│ Enter submit · Esc clear · F1 help                                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
