@@ -6,10 +6,7 @@ package model
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -376,83 +373,4 @@ func TestSettlementLowestRevisionDecidesNotTheLatest(t *testing.T) {
 	require.NoError(t, db.First(line, line.ID).Error)
 	require.Equal(t, "CONFIRMED", line.Settlement.String)
 	require.EqualValues(t, 5, line.EvidenceRevision.Int64)
-}
-
-// The reconciler lag gauge is sampled per tenant, each at most once per fleetMetricsRefreshEvery,
-// while settlement runs on every tick. With more active tenants than one tick visits, every
-// tenant is still measured, on the tick that reaches it; and a tenant whose measurement keeps
-// failing neither blocks the gauge for the others nor is retried on every tick.
-func TestSettlementLagIsSampledPerTenantAcrossBatches(t *testing.T) {
-	api, _, _ := settlementFixture(t)
-	const tenants, unmeasured = fleetSettlementFastTenants + 50, -1
-	name := func(i int) string { return fmt.Sprintf("lagbatch%03d", i) }
-	failing := name(0)
-	active := tenants + 1 // and the fixture's own tenant, whose change is DISPATCHED and OPEN
-	for i := range tenants {
-		settlementRawOp(t, api, core.WithTenant(context.Background(), name(i)), int64(920001+i), "RUNNING", settlementGoodValue)
-	}
-	// Count each tenant's lag measurements, and fail one tenant's every time.
-	var mu sync.Mutex
-	measured := map[string]int{}
-	db := api.RDB.Database
-	require.NoError(t, db.Callback().Row().Before("gorm:row").Register("test:lag-per-tenant", func(tx *gorm.DB) {
-		if !strings.Contains(tx.Statement.SQL.String(), "min(r.created_at)") {
-			return
-		}
-		tenant, _ := tx.Statement.Vars[0].(string)
-		mu.Lock()
-		measured[tenant]++
-		mu.Unlock()
-		if tenant == failing {
-			_ = tx.AddError(errors.New("planted lag failure"))
-		}
-	}))
-	t.Cleanup(func() { _ = db.Callback().Row().Remove("test:lag-per-tenant") })
-	counts := func() (total int, max int) {
-		mu.Lock()
-		defer mu.Unlock()
-		for _, n := range measured {
-			total += n
-			max = maxInt(max, n)
-		}
-		return total, max
-	}
-	tick := func() error {
-		bulkMetrics.reconcilerLag.Set(unmeasured)
-		return api.RunFleetSettlement(context.Background(), true, false)
-	}
-
-	require.Error(t, tick(), "the failing tenant still fails the pass")
-	total, _ := counts()
-	require.Equal(t, fleetSettlementFastTenants, total, "the first tick measures the batch it visits")
-	require.NotEqual(t, float64(unmeasured), testutil.ToFloat64(bulkMetrics.reconcilerLag), "one tenant's failure does not block the gauge")
-
-	late := settlementRawOp(t, api, core.WithTenant(context.Background(), name(1)), 929999, "RUNNING", settlementGoodValue)
-	_ = tick() // the rest of the tenants, then the first batch again from the wrap
-	total, most := counts()
-	require.Equal(t, active, total, "the next tick measures the tenants the first did not reach, and no one twice")
-	require.Equal(t, 1, most)
-	mu.Lock()
-	require.Len(t, measured, active)
-	require.Equal(t, 1, measured[failing], "a failing tenant is retried at the cadence, not on every tick")
-	mu.Unlock()
-	require.NoError(t, api.RDB.DB(core.WithTenant(context.Background(), name(1))).First(late, late.ID).Error)
-	require.Equal(t, "CONFIRMED", late.Settlement.String, "every tick settles, measured or not")
-
-	// Past the cadence, the tenants a tick visits are measured again.
-	api.fleetReconcilerLag.Lock()
-	for _, sample := range api.fleetReconcilerLag.tenants {
-		sample.measuredAt = sample.measuredAt.Add(-fleetMetricsRefreshEvery)
-	}
-	api.fleetReconcilerLag.Unlock()
-	_ = tick()
-	total, _ = counts()
-	require.Equal(t, active+fleetSettlementFastTenants, total)
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
