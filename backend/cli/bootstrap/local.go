@@ -141,8 +141,11 @@ func createKindCluster(ctx context.Context, name string) error {
 	c.println(color.WhiteString("Creating kind cluster %q:", name))
 	cmd := exec.CommandContext(ctx, "kind", "create", "cluster",
 		"--name", name, "--config", cfg.Name(), "--wait", "90s")
-	cmd.Stdout, cmd.Stderr = c.commandStreams()
-	if err := runKindCommand(cmd); err != nil {
+	var flush func()
+	cmd.Stdout, cmd.Stderr, flush = c.commandStreams()
+	err = runKindCommand(cmd)
+	flush()
+	if err != nil {
 		return fmt.Errorf("creating kind cluster %q: %w", name, err)
 	}
 	return nil

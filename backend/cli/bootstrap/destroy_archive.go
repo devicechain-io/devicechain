@@ -25,6 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/devicechain-io/dcctl/internal/installflow"
 )
 
 // A destroyed instance's event-store backups, in the cluster's own object store.
@@ -92,8 +94,12 @@ type archivePlan struct {
 }
 
 // location is the plan's archive as an operator would name it.
+//
+// It is for printing only. The prefix can be a path a restore derived from a
+// user-supplied source ("<source>-restored-<stamp>"), so it is shown through
+// installflow.RedactURL; the removal itself uses Prefix as it is.
 func (p archivePlan) location() string {
-	return "s3://" + p.Bucket + "/" + p.Prefix
+	return "s3://" + p.Bucket + "/" + installflow.RedactURL(p.Prefix)
 }
 
 // liveObjectStore is what the event store's ObjectStore says it writes to.
@@ -160,12 +166,13 @@ func archivePathRefusal(instance, path string) string {
 		return fmt.Sprintf("the event store archives under its own name (%s/), a path every event store "+
 			"archiving that way on this cluster would share; refusing to remove it", TsdbClusterName)
 	case strings.ContainsAny(path, "/\\*?") || path == "." || path == "..":
-		return fmt.Sprintf("the event store's archive path %q is not a single path segment; refusing to remove it", path)
+		return fmt.Sprintf("the event store's archive path %q is not a single path segment; refusing to remove it",
+			installflow.RedactURL(path))
 	case instanceArchivePaths(instance).MatchString(path) || restoredArchiveSuffix.MatchString(path):
 		return ""
 	default:
 		return fmt.Sprintf("the event store archives under %q, which is not a path dcctl names for instance %q; "+
-			"refusing to remove it", path, instance)
+			"refusing to remove it", installflow.RedactURL(path), instance)
 	}
 }
 
@@ -179,9 +186,9 @@ func planArchiveRemoval(instance string, f archiveFacts) archivePlan {
 	named := func() string {
 		switch {
 		case f.LiveErr == nil && f.Live.Exists && f.Live.Path != "" && f.StoreErr == nil && f.Store.Bucket != "":
-			return "s3://" + f.Store.Bucket + "/" + f.Live.Path + "/ at " + f.Store.Endpoint
+			return "s3://" + f.Store.Bucket + "/" + installflow.RedactURL(f.Live.Path) + "/ at " + installflow.RedactURL(f.Store.Endpoint)
 		case f.Recorded != nil:
-			return "s3://" + f.Recorded.Bucket + "/" + f.Recorded.Prefix + " at " + f.Recorded.Endpoint
+			return "s3://" + f.Recorded.Bucket + "/" + installflow.RedactURL(f.Recorded.Prefix) + " at " + installflow.RedactURL(f.Recorded.Endpoint)
 		}
 		return ""
 	}
@@ -206,7 +213,7 @@ func planArchiveRemoval(instance string, f archiveFacts) archivePlan {
 		// and whether the path could be read makes no difference to that.
 		where := named()
 		if where == "" {
-			where = "bucket " + rec.Outputs.Archive.BucketTsdb + " at " + rec.Outputs.Archive.EndpointURL
+			where = "bucket " + rec.Outputs.Archive.BucketTsdb + " at " + installflow.RedactURL(rec.Outputs.Archive.EndpointURL)
 		}
 		return archivePlan{Action: archiveExternal, Reason: fmt.Sprintf("event-store backups kept: %s is in an "+
 			"object store you own. It is this instance's disaster-recovery copy; delete it yourself when you "+
@@ -224,7 +231,7 @@ func planArchiveRemoval(instance string, f archiveFacts) archivePlan {
 		}
 		if f.StoreErr != nil {
 			return unknown("the event store's ObjectStore could not be read (%v), so which store and bucket "+
-				"s3://…/%s/ is in is not known; nothing was removed", f.StoreErr, f.Live.Path)
+				"s3://…/%s/ is in is not known; nothing was removed", f.StoreErr, installflow.RedactURL(f.Live.Path))
 		}
 		bucket, path, endpoint = f.Store.Bucket, f.Live.Path, f.Store.Endpoint
 	case f.RecordedErr != nil:
@@ -242,7 +249,7 @@ func planArchiveRemoval(instance string, f archiveFacts) archivePlan {
 			"removed by hand (see Removing an instance in the documentation)", rec.Outputs.Archive.BucketTsdb)
 	}
 
-	loc := "s3://" + bucket + "/" + path + "/"
+	loc := "s3://" + bucket + "/" + installflow.RedactURL(path) + "/"
 	a := rec.Outputs.Archive
 	// 🔴 THE STORE THE ARCHIVER WROTE TO, NOT THE ONE THE RECORD NAMES TODAY. They agree
 	// unless the cluster was re-installed onto a different destination after this
@@ -251,7 +258,7 @@ func planArchiveRemoval(instance string, f archiveFacts) archivePlan {
 	if endpoint != a.EndpointURL || bucket != a.BucketTsdb {
 		return unknown("the event store archives to %s at %s, but the cluster's install record names bucket %s "+
 			"at %s for the in-cluster object store; refusing to remove from a store the two do not agree on",
-			loc, endpoint, a.BucketTsdb, a.EndpointURL)
+			loc, installflow.RedactURL(endpoint), a.BucketTsdb, installflow.RedactURL(a.EndpointURL))
 	}
 	if _, _, err := parseInClusterEndpoint(endpoint); err != nil {
 		return unknown("%v; nothing was removed from %s", err, loc)
@@ -268,7 +275,7 @@ func planArchiveRemoval(instance string, f archiveFacts) archivePlan {
 func parseInClusterEndpoint(endpoint string) (service string, port int, err error) {
 	u, err := url.Parse(endpoint)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return "", 0, fmt.Errorf("the object store endpoint %q is not an http(s) URL", endpoint)
+		return "", 0, fmt.Errorf("the object store endpoint %q is not an http(s) URL", installflow.RedactURL(endpoint))
 	}
 	parts := strings.Split(u.Hostname(), ".")
 	ok := len(parts) >= 2 && parts[0] != "" && parts[1] == infraNamespace
@@ -283,7 +290,7 @@ func parseInClusterEndpoint(endpoint string) (service string, port int, err erro
 	}
 	if !ok {
 		return "", 0, fmt.Errorf("the object store endpoint %q does not name a Service in namespace %s, so it is "+
-			"not the cluster's in-cluster object store", endpoint, infraNamespace)
+			"not the cluster's in-cluster object store", installflow.RedactURL(endpoint), infraNamespace)
 	}
 	port = 80
 	if u.Scheme == "https" {
@@ -291,7 +298,7 @@ func parseInClusterEndpoint(endpoint string) (service string, port int, err erro
 	}
 	if p := u.Port(); p != "" {
 		if _, err := fmt.Sscanf(p, "%d", &port); err != nil {
-			return "", 0, fmt.Errorf("the object store endpoint %q has an unreadable port", endpoint)
+			return "", 0, fmt.Errorf("the object store endpoint %q has an unreadable port", installflow.RedactURL(endpoint))
 		}
 	}
 	return parts[0], port, nil

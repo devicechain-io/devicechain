@@ -202,7 +202,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		}
 	}
 	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
-		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
+		color.GreenString(upgradeImages(st)))
 	// The operator's tuning, rendered with the chart before anything is written.
 	if err := precheckValuesOverlay(ctx, st); err != nil {
 		return err
@@ -550,7 +550,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		fmt.Println(color.HiGreenString("\nInstance upgraded."))
 	}
 	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
-		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
+		color.GreenString(upgradeImages(st)))
 	// 🔴 SAID BECAUSE THE OPERATOR IS THE ONE THING THIS COMMAND USED TO MOVE AND NO
 	// LONGER DOES, and an operator who upgraded through the previous release has
 	// every reason to assume it did. The check that let this run at all proved the
@@ -696,6 +696,12 @@ func resolveUpgradeImageSource(st *State) (ImageSource, error) {
 	return img, nil
 }
 
+// upgradeImages is the image source an upgrade names, in words: the registry is
+// user-supplied (--registry), so it is shown through installflow.RedactURL.
+func upgradeImages(st *State) string {
+	return fmt.Sprintf("%s/<area>:%s", installflow.RedactURL(st.ImageRegistry), st.ImageVersion)
+}
+
 // recordUpgradedVersion writes the version this upgrade is moving to back into the
 // instance's declaration.
 //
@@ -737,7 +743,7 @@ func resolveUpgradeImageSource(st *State) (ImageSource, error) {
 func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance string, st *State) error {
 	if st.DryRun {
 		wouldDo(fmt.Sprintf("record %s:%s in the instance declaration",
-			st.ImageRegistry, st.ImageVersion))
+			installflow.RedactURL(st.ImageRegistry), st.ImageVersion))
 		if st.AreaChange != nil && len(st.AreaChange.Added) > 0 {
 			wouldDo(fmt.Sprintf("record %s as enabled in the instance declaration",
 				strings.Join(st.AreaChange.Added, ", ")))

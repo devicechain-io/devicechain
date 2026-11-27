@@ -12,6 +12,8 @@ import (
 	"github.com/devicechain-io/dc-k8s/functionalarea"
 	"github.com/devicechain-io/dc-microservice/config"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/devicechain-io/dcctl/internal/installflow"
 )
 
 // hydrateUpgradeState rebuilds the State an upgrade acts on, entirely from what the
@@ -331,7 +333,7 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	// supplied one, and the run a version move under a verb that promises none.
 	if len(opts.EnableAreas) > 0 && (opts.ImageRegistry != "" || opts.ImageVersion != "") {
 		return fmt.Errorf("enabling an area on instance %q keeps the images it runs (%s:%s); "+
-			"moving them is `dcctl upgrade`", opts.Instance, inst.Spec.ImageRegistry, inst.Spec.ImageVersion)
+			"moving them is `dcctl upgrade`", opts.Instance, installflow.RedactURL(inst.Spec.ImageRegistry), inst.Spec.ImageVersion)
 	}
 	if opts.ImageRegistry != "" {
 		st.ImageRegistry = opts.ImageRegistry

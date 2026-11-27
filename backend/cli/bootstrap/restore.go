@@ -14,6 +14,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
+
+	"github.com/devicechain-io/dcctl/internal/installflow"
 )
 
 // The two CloudNativePG Clusters the OpenTofu root stands up, and the namespace
@@ -499,10 +501,10 @@ func describeRelationalRestore(plan RestorePlan, live clusterArchiveState, now t
 			"Cluster %s/%s already exists, so its restore from %q will NOT run: CloudNativePG "+
 				"reads spec.bootstrap only when it CREATES a cluster. A relational restore only "+
 				"takes effect on a cluster whose relational store is not there — which is the "+
-				"disaster it is for.", infraNamespace, RdbClusterName, plan.RdbFrom)}
+				"disaster it is for.", infraNamespace, RdbClusterName, installflow.RedactURL(plan.RdbFrom))}
 	}
 	line := fmt.Sprintf("relational store recovering from archive %q, and will archive under %q",
-		plan.RdbFrom, path)
+		installflow.RedactURL(plan.RdbFrom), installflow.RedactURL(path))
 	if plan.RdbTargetTime != "" {
 		line += fmt.Sprintf(", replaying no further than %s", plan.RdbTargetTime)
 	}
@@ -568,6 +570,30 @@ var readRdbArchiveState = func(ctx context.Context, kubeContext string) (cluster
 		return clusterArchiveState{}, err
 	}
 	return clusterArchivePath(ctx, dyn, infraNamespace, RdbClusterName)
+}
+
+// eventStoreRestoreNote is what `dcctl bootstrap` tells the operator about the event
+// store it is about to recover: the source it reads and the archive it will own.
+// Both are shown through installflow.RedactURL: the source is whatever was typed
+// after --restore-tsdb-from, and the archive it will own is derived from it.
+func eventStoreRestoreNote(plan RestorePlan, path string) string {
+	return fmt.Sprintf("event store recovering from archive %q, and will archive under %q",
+		installflow.RedactURL(plan.TsdbFrom), installflow.RedactURL(path))
+}
+
+// printArchivePath is the summary line naming the archive a store OWNS — the input
+// to its next restore. After a recovery that name is derived from the restore
+// source, so it is shown through installflow.RedactURL.
+func printArchivePath(c console, label, path string) {
+	c.printf("  %s %s\n", color.WhiteString(label), color.GreenString(installflow.RedactURL(path)))
+}
+
+// describeArchiveMove is a re-install moving the off-site archive, in words. Both
+// endpoints are user-supplied (a backup-credentials file), so both are shown through
+// installflow.RedactURL.
+func describeArchiveMove(was ClusterArchive, now *BackupDestination) string {
+	return fmt.Sprintf("off-site archive %s/%s → %s/%s",
+		installflow.RedactURL(was.EndpointURL), was.BucketTsdb, installflow.RedactURL(now.EndpointURL), now.BucketTsdb)
 }
 
 // alreadyLiveRestoreNote is what a bootstrap says about an event-store restore aimed at a

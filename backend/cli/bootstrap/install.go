@@ -778,8 +778,7 @@ func refuseAReinstallThatWouldHurt(ctx context.Context, st *State, prev *Install
 	// archives to the endpoint and bucket it was built with, and none is re-pointed.
 	if d, a := st.BackupDestination, last.Outputs.Archive; last.Settings.BackupsExternal && d.Configured() &&
 		(d.EndpointURL != a.EndpointURL || d.BucketTsdb != a.BucketTsdb) {
-		changed = append(changed, fmt.Sprintf("off-site archive %s/%s → %s/%s",
-			a.EndpointURL, a.BucketTsdb, d.EndpointURL, d.BucketTsdb))
+		changed = append(changed, describeArchiveMove(a, d))
 	}
 	if len(changed) == 0 {
 		return nil
@@ -911,7 +910,7 @@ func reportInstall(c console, st *State, provider string) {
 			"%s (the relational store, and every instance's event store)", p.describe()))
 	}
 	if p := st.Values["backupServerNameRdb"]; p != "" && databaseBackupsEnabled(st) {
-		c.printf("  %s %s\n", color.WhiteString("Relational archive:"), color.GreenString(p))
+		printArchivePath(c, "Relational archive:", p)
 	}
 	// 🔴 INTENT, AND LABELLED AS INTENT. The apply returning says the recovery
 	// bootstrap was rendered, not that a single row came back — nothing in an apply
@@ -920,7 +919,7 @@ func reportInstall(c console, st *State, provider string) {
 	if st.Restore.RestoresRelationalStore() {
 		c.printf("  %s %s\n", color.WhiteString("Relational recovery:"),
 			color.GreenString("requested from %q — the store was waited for until healthy, which does "+
-				"not say the rows came back: check the data before believing it", st.Restore.RdbFrom))
+				"not say the rows came back: check the data before believing it", installflow.RedactURL(st.Restore.RdbFrom)))
 	}
 	if existing := instancesOnCluster(st); len(existing) > 0 {
 		names := make([]string, len(existing))
@@ -994,7 +993,7 @@ func upgradeTargetFlags(st *State) string {
 		f += " --kube-context " + st.Binding.KubeContext
 	}
 	if st.ImageRegistry != "" {
-		f += " --registry " + st.ImageRegistry
+		f += " --registry " + installflow.RedactURL(st.ImageRegistry)
 	}
 	switch {
 	case st.BuildImages:

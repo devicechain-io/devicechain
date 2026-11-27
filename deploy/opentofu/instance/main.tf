@@ -269,7 +269,8 @@ resource "terraform_data" "cutover_guard" {
 resource "terraform_data" "restore_guard" {
   count = local.tsdb_restore == null ? 0 : 1
 
-  input = var.restore_tsdb_from
+  # Sensitive, so a plan does not print the restore source: see database_restored_from.
+  input = sensitive(var.restore_tsdb_from)
 
   lifecycle {
     precondition {

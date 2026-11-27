@@ -162,6 +162,10 @@ output "database_restored_from" {
     form of that answer worth having.
   EOT
   value       = local.rdb_restore == null ? null : local.rdb_restore.source_server_name
+  # Sensitive: a restore source is whatever was typed after --restore-*-from, and a
+  # credential written into it would otherwise be printed in every plan and apply.
+  # `tofu output -json` (which dcctl reads) and `tofu output -raw` still return it.
+  sensitive = true
 }
 
 # 🔴🔴 THE ARCHIVE CONTRACT — the four values an instance root cannot derive.
@@ -180,6 +184,9 @@ output "database_restored_from" {
 output "backup_endpoint_url" {
   description = "S3 endpoint an instance root should archive to. Empty when backups are off here, which is the same thing as there being nothing to archive into."
   value       = local.backup_endpoint
+  # Sensitive: an external endpoint is user-supplied and may carry a credential in its
+  # URL. `tofu output -json` (which dcctl reads) and `tofu output -raw` still return it.
+  sensitive = true
 }
 
 output "backup_credentials_secret" {

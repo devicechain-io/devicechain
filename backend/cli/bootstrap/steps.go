@@ -19,6 +19,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/natsauth"
+	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/operator"
 	"github.com/fatih/color"
 	corev1 "k8s.io/api/core/v1"
@@ -208,9 +209,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 	paths := resolveArchivePaths(live, st.Restore, freshTsdbArchivePath(st.Instance, st.InstanceUID), time.Now().UTC())
 	st.Values["backupServerNameTsdb"] = paths.Tsdb
 	if st.Restore.RestoresEventStore() {
-		notes = append(notes, fmt.Sprintf(
-			"event store recovering from archive %q, and will archive under %q",
-			st.Restore.TsdbFrom, paths.Tsdb))
+		notes = append(notes, eventStoreRestoreNote(st.Restore, paths.Tsdb))
 		if backupSnapshotClass(st) != "" {
 			notes = append(notes, snapshotRestoreNote("event store"))
 		}
@@ -570,7 +569,7 @@ func stepLocalRegistry(ctx context.Context, st *State) error {
 		out(ctx).doing("ensuring local registry + building images from source")
 		out(ctx).println()
 		out(ctx).wouldDo(fmt.Sprintf("provision a registry at %s, wire it to the kind network, and ko-build+push images at tag %q",
-			st.ImageRegistry, st.ImageVersion))
+			installflow.RedactURL(st.ImageRegistry), st.ImageVersion))
 		return nil
 	}
 
@@ -644,7 +643,8 @@ func koBuild(ctx context.Context, root string, st *State, moduleDir, imageName s
 		"KO_DOCKER_REPO="+imageName,
 		"KO_CONFIG_PATH="+filepath.Join(root, ".ko.yaml")), extraEnv...)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("ko build %s: %w\n%s", imageName, err, out)
+		return fmt.Errorf("ko build %s: %w\n%s", installflow.RedactURL(imageName), err,
+			installflow.RedactURLsInText(string(out)))
 	}
 	return nil
 }
@@ -1280,7 +1280,7 @@ func stepReport(ctx context.Context, st *State) error {
 			{"Event archive:", st.Values["backupServerNameTsdb"]},
 		} {
 			if p.path != "" {
-				out(ctx).printf("  %s %s\n", color.WhiteString(p.label), color.GreenString(p.path))
+				printArchivePath(out(ctx), p.label, p.path)
 			}
 		}
 	}
@@ -1440,10 +1440,19 @@ func registryPort(registry string) string {
 }
 
 // run executes a command, returning a combined-output error on failure.
+//
+// The command line the error repeats is shown through installflow.RedactURL, one
+// argument at a time: its arguments include image references built from --registry,
+// which is user-supplied. An argument with no credential in it is shown unchanged.
 func run(ctx context.Context, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, out)
+		shown := make([]string, len(args))
+		for i, a := range args {
+			shown[i] = installflow.RedactURL(a)
+		}
+		return fmt.Errorf("%s %s: %w\n%s", name, strings.Join(shown, " "), err,
+			installflow.RedactURLsInText(string(out)))
 	}
 	return nil
 }

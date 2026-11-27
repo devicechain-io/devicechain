@@ -36,11 +36,25 @@ func consoleOf(c installflow.Console) console {
 	return console{out: c.Stdout, err: c.Stderr, children: c.ChildStreams}
 }
 
-func (c console) commandStreams() (io.Writer, io.Writer) {
+// commandStreams are the streams a tool dcctl runs writes to, behind the URL stream
+// filter: a tool quoting a URL it was given quotes its credential too. flush passes on
+// a last line that did not end; call it once the tool has exited.
+func (c console) commandStreams() (stdout, stderr io.Writer, flush func()) {
+	o, e := c.stdout(), c.stderr()
 	if c.children != nil {
-		return c.children()
+		o, e = c.children()
 	}
-	return c.stdout(), c.stderr()
+	// The process's own descriptors, which plain output hands a tool so that it can see
+	// the terminal (kind draws its progress for one), are passed as they are: a filter
+	// in between would make the tool's output a pipe's. The tools run this way are given
+	// no user-supplied URL.
+	if _, ok := o.(*os.File); ok {
+		if _, ok := e.(*os.File); ok {
+			return o, e, func() {}
+		}
+	}
+	fo, fe := installflow.NewURLRedactingWriter(o), installflow.NewURLRedactingWriter(e)
+	return fo, fe, func() { _, _ = fo.Flush(), fe.Flush() }
 }
 
 func (c console) stdout() io.Writer {

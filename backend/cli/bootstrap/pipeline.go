@@ -11,6 +11,8 @@ import (
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/fatih/color"
+
+	"github.com/devicechain-io/dcctl/internal/installflow"
 )
 
 // DefaultImageRegistry is where published images live.
@@ -646,9 +648,9 @@ func ResolveImageSource(registry, version string, build bool) (ImageSource, erro
 			version)
 	}
 
-	label := fmt.Sprintf("%s/<area>:%s (published)", registry, version)
+	label := fmt.Sprintf("%s/<area>:%s (published)", installflow.RedactURL(registry), version)
 	if build {
-		label = fmt.Sprintf("built from source → %s/<area>:%s", registry, version)
+		label = fmt.Sprintf("built from source → %s/<area>:%s", installflow.RedactURL(registry), version)
 	}
 	return ImageSource{Registry: registry, Version: version, Label: label}, nil
 }
@@ -663,7 +665,7 @@ func requireResolvedImages(st *State, what string) error {
 	if st.ImageRegistry == "" || st.ImageVersion == "" {
 		return fmt.Errorf(
 			"%s needs a settled image source and has none (registry %q, version %q); "+
-				"ResolveImageSource must run before the pipeline", what, st.ImageRegistry, st.ImageVersion)
+				"ResolveImageSource must run before the pipeline", what, installflow.RedactURL(st.ImageRegistry), st.ImageVersion)
 	}
 	return nil
 }

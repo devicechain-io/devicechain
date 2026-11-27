@@ -25,6 +25,8 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
+
+	"github.com/devicechain-io/dcctl/internal/installflow"
 )
 
 // HaVerifyOptions selects the instance to check and how to reach its broker.
@@ -499,7 +501,7 @@ func dialBrokerCtx(ctx context.Context, url string, natscfg config.NatsConfigura
 	}
 	nc, err := nats.Connect(url, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to the broker at %s: %w", url, err)
+		return nil, fmt.Errorf("connecting to the broker at %s: %w", installflow.RedactURL(url), installflow.RedactURLError(err))
 	}
 	return nc, nil
 }
