@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -21,7 +22,8 @@ import (
 // Bulk-change metrics (S1 §9 under served names). Three rules hold for every one of them:
 //
 //   - every series exists from construction, at zero, so an alert on a rate or a gauge sees a zero
-//     series on a healthy instance rather than no series;
+//     series on a healthy instance rather than no series. The one exception is the reconciler lag,
+//     born NaN (not measured) because 0 is its healthy reading;
 //   - every label value comes from a closed list fixed by this release, and a value outside it is
 //     not recorded (it never mints a series): a stored vocabulary value a newer release wrote cannot
 //     grow the series set;
@@ -121,8 +123,9 @@ func NewBulkChangeMetrics(f BulkChangeMetricFactory) *BulkChangeMetrics {
 		deadlineLag: f.NewGauge("bulk_change_deadline_lag_seconds",
 			"How far past its settlement deadline the oldest unsettled applied line is, on the database clock. 0 when none is."),
 		reconcilerLag: f.NewGauge("bulk_change_reconciler_lag_seconds",
-			"Age of the oldest device report that could decide an applied bulk change line and has not yet, on the "+
-				"database clock. 0 when none is waiting."),
+			"Age of the oldest device report that could decide an applied bulk change line and has not yet, across "+
+				"the instance, on the database clock. 0 when none is waiting; NaN until this pod has measured it and "+
+				"whenever its last measurement failed."),
 		lastPass: f.NewGauge("bulk_change_driver_last_pass_timestamp_seconds",
 			"When this pod's bulk change driver last completed a pass, as a Unix timestamp. 0 until the first pass."),
 		authority: f.NewCounterVec("bulk_change_authority_decisions_total",
@@ -143,6 +146,9 @@ func NewBulkChangeMetrics(f BulkChangeMetricFactory) *BulkChangeMetrics {
 			"1 when the database enforces the device attribute writer protocol that bulk changes post under, 0 when it "+
 				"does not or cannot be read."),
 	}
+	// The one series not born at zero: 0 is the healthy reading, and nothing has been measured yet.
+	// See fleet_reconciler_lag.go.
+	m.reconcilerLag.Set(math.NaN())
 	for _, kind := range bulkChangeKinds {
 		for _, result := range bulkChangePostResults {
 			m.postAttempts.WithLabelValues(kind, result)

@@ -1434,6 +1434,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 			return err
 		}
 	}
+	if FleetReconcilerLag != nil {
+		if err = FleetReconcilerLag.Start(ctx); err != nil {
+			return err
+		}
+	}
 	if FleetMaintenance != nil {
 		if err = FleetMaintenance.Start(ctx); err != nil {
 			return err
@@ -1589,6 +1594,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 			return err
 		}
 	}
+	if FleetReconcilerLag != nil {
+		if err := FleetReconcilerLag.Stop(ctx); err != nil {
+			return err
+		}
+	}
 
 	// Stop inbound events processor.
 	err := InboundEventsProcessor.Stop(ctx)
@@ -1687,6 +1697,11 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	}
 	if FleetSettlementDeadline != nil {
 		if err := FleetSettlementDeadline.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+	if FleetReconcilerLag != nil {
+		if err := FleetReconcilerLag.Terminate(ctx); err != nil {
 			return err
 		}
 	}
