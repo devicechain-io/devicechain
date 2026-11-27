@@ -82,3 +82,34 @@ func paint(st lipgloss.Style, s string) string {
 	}
 	return st.Render(s)
 }
+
+// Theme is this package's theme as the installer's other screens use it, so every
+// screen draws with the same tokens, glyphs and capability levels. It is a copy of
+// what the result screens use, never a second set of rules.
+type Theme struct {
+	Glyphs Glyphs
+	// The roles. Focus is the inverse highlight that repeats the focus glyph.
+	OK, Warn, Fail, Accent, Dim, Bold, Focus lipgloss.Style
+}
+
+// Glyphs is the character set of one capability level.
+type Glyphs struct {
+	TL, TR, BL, BR, H, V, TeeL, TeeR, Focus, Dot string
+	// Ellipsis marks text cut to fit.
+	Ellipsis string
+}
+
+// NewTheme is the theme for caps.
+func NewTheme(caps terminal.Capabilities) Theme {
+	t := newTheme(caps)
+	g := t.g
+	ellipsis := "..."
+	if g == unicodeGlyphs {
+		ellipsis = "…"
+	}
+	return Theme{
+		Glyphs: Glyphs{TL: g.tl, TR: g.tr, BL: g.bl, BR: g.br, H: g.h, V: g.v, TeeL: g.teeL, TeeR: g.teeR,
+			Focus: g.focus, Dot: g.dot, Ellipsis: ellipsis},
+		OK: t.ok, Warn: t.warn, Fail: t.fail, Accent: t.acc, Dim: t.dim, Bold: t.bd, Focus: t.focus,
+	}
+}

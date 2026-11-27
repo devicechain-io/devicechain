@@ -1,0 +1,30 @@
++-\x1b[1m DeviceChain - dcctl install - kind devicechain \x1b[m--------------------------------- dcctl v1.12.0 -+
+| \x1b[1mPreflight\x1b[m - read-only checks - footprint Standard                                                |
+|                                                                                                  |
+| \x1b[1mTooling\x1b[m                                                                                          |
+|   PASS        kubectl v1.33.1                                                                    |
+|   PASS        tofu v1.10.6                                                                       |
+|   PASS        kind v0.29.0                                                                       |
+| \x1b[1mDocker engine\x1b[m                                                                                    |
+|   PASS        docker daemon reachable                                                            |
+|   PASS        docker context = default (native engine)                                           |
+| > \x1b[7mFAIL\x1b[m        engine memory: 6.0Gi                                                               |
+|               fix: give Docker >= 4 CPUs and >= 8Gi, or re-run install with --compact            |
+|   WARN        storage driver: vfs                                                                |
+| \x1b[1mPorts & registry\x1b[m                                                                                 |
+|   PASS        port 80 free                                                                       |
+|   PASS        port 443 free                                                                      |
+|   \x1b[1mFAIL\x1b[m        port 1883 in use by mosquitto (pid 4121)                                           |
+| \x1b[1mKubernetes contexts\x1b[m                                                                              |
+|   INFO        no contexts in the kubeconfig yet (expected before the first install)              |
+|                                                                                                  |
+| \x1b[1mPreflight: 2 failures, 1 warning. Continue is unavailable while any check fails. Fix each\x1b[m        |
+| \x1b[1mfailure, then Recheck.\x1b[m                                                                           |
+|                                                                                                  |
+|   Continue (unavailable)  > \x1b[7mRecheck\x1b[m    Switch to Compact    Exit                                 |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
++--------------------------------------------------------------------------------------------------+
+| up/down check - Tab action - Enter select - Esc back - q exit - Ctrl+C exit                      |
++--------------------------------------------------------------------------------------------------+

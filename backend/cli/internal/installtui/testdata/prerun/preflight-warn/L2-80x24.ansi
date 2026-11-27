@@ -1,0 +1,24 @@
++-\x1b[1m DeviceChain - dcctl install - kind devicechain \x1b[m------------- dcctl v1.12.0 -+
+| \x1b[1mPreflight\x1b[m - read-only checks - footprint Standard                            |
+|                                                                              |
+| \x1b[1mDocker engine\x1b[m                                                                |
+|   PASS        docker daemon reachable                                        |
+|   WARN        docker context = colima                                        |
+| \x1b[1mKernel & cgroups\x1b[m                                                             |
+| > \x1b[7mPASS\x1b[m        cgroup v2                                                      |
+|   WARN        fs.inotify.max_user_watches = 8192                             |
+|                                                                              |
+| Preflight: ready, with 2 warnings. Review them before you continue.          |
+|                                                                              |
+|   Continue  > \x1b[7mRecheck\x1b[m    Switch to Compact    Exit                           |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
++------------------------------------------------------------------------------+
+| up/down check - Tab action - Enter select - Esc back - q exit - Ctrl+C exit  |
++------------------------------------------------------------------------------+

@@ -84,7 +84,7 @@ func checkHostDisk(d *doctor, path string, free func(string) (uint64, error)) {
 // not expose the free space inside Docker Desktop's VM, so this is information, and
 // the fix text points at the setting that bounds it.
 func checkDockerDiskUsage(d *doctor) {
-	out := runCmd("docker", "system", "df", "--format", "{{.Type}}: {{.Size}} ({{.Reclaimable}} reclaimable)")
+	out := d.run("docker", "system", "df", "--format", "{{.Type}}: {{.Size}} ({{.Reclaimable}} reclaimable)")
 	if out == "" {
 		d.warn("could not read Docker disk usage", "check Docker Desktop > Settings > Resources > Virtual disk limit; the install needs ~40Gi free inside it")
 		return

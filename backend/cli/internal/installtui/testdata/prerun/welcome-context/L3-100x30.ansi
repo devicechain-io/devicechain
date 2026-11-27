@@ -1,0 +1,30 @@
+╭─\x1b[1m DeviceChain · dcctl install · context prod \x1b[m─────────────────────────────────────\x1b[38;5;109m dcctl v1.12.0 \x1b[m─╮
+│ \x1b[1mWelcome\x1b[m                                                                                          │
+│ This installs shared cluster prerequisites. Create an instance later with dcctl bootstrap.       │
+│                                                                                                  │
+│   \x1b[38;5;109mProvider   \x1b[m local                                                                              │
+│   \x1b[38;5;109mTarget     \x1b[m existing cluster, context prod (dcctl never creates or deletes it)                 │
+│   \x1b[38;5;109mFootprint  \x1b[m Compact (from --compact)                                                           │
+│   \x1b[38;5;109mTopology   \x1b[m HA (from --ha)                                                                     │
+│   \x1b[38;5;109mImages     \x1b[m built from this source checkout, pushed to localhost:5000 as dev                   │
+│   \x1b[38;5;109mPreflight  \x1b[m read-only checks run next                                                          │
+│                                                                                                  │
+│ No changes have been made.                                                                       │
+│                                                                                                  │
+│   Continue  › \x1b[7mExit\x1b[m                                                                               │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;5;109mEnter select · Tab action · q exit · Ctrl+C exit\x1b[m                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

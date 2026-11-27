@@ -1,0 +1,40 @@
++- DeviceChain - dcctl install - kind devicechain ----------------------------------------------------- dcctl v1.12.0 -+
+| Preflight - read-only checks - footprint Standard                                                                    |
+|                                                                                                                      |
+| Tooling                                                                                                              |
+|   PASS        kubectl v1.33.1                                                                                        |
+|   PASS        tofu v1.10.6                                                                                           |
+|   PASS        kind v0.29.0                                                                                           |
+| Docker engine                                                                                                        |
+|   PASS        docker daemon reachable                                                                                |
+|                                                                                                                      |
+| working: the read-only checks are running (4 checks so far)                                                          |
+|                                                                                                                      |
+|   Continue (unavailable)  > Recheck (unavailable)    Exit                                                            |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
+|                                                                                                                      |
++----------------------------------------------------------------------------------------------------------------------+
+| up/down check - Tab action - Enter select - Esc back - q exit - Ctrl+C exit                                          |
++----------------------------------------------------------------------------------------------------------------------+

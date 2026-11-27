@@ -10,6 +10,7 @@ import (
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/devicechain-io/dcctl/internal/installchoice"
 	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/installtui"
 	"github.com/spf13/cobra"
 )
 
@@ -121,21 +122,8 @@ the cluster, with one exception: the connection budget may be raised.`,
 		if err != nil {
 			return err
 		}
-		effective := prepared.Effective
-
-		doctorOptions := doctorOptsFor(effective.KubeContext, effective.Cluster, effective.Build)
-		doctorOptions.FullSizeInstall = !effective.Compact
-
-		return runInstallEngine(cmd.Context(), &bootstrap.InstallEngine{
-			Provider:      provider,
-			Options:       bootstrap.InstallOptions{Options: prepared.BootstrapOptions()},
-			SkipPreflight: effective.SkipPreflight,
-			Cluster:       installEngine,
-			ResolveOptions: func() (bootstrap.InstallOptions, error) {
-				plan, err := prepared.ResolveWithReader(readAlertFile)
-				return plan.Options, err
-			},
-		}, doctorRunner(args[0], doctorOptions))
+		e, preflight := installRunFor(provider, args[0], prepared)
+		return runInstallEngine(cmd.Context(), e, preflight, installWizardFor(provider, choices, prepared))
 	},
 	SilenceUsage: true,
 }
@@ -146,11 +134,31 @@ the cluster, with one exception: the connection budget may be raised.`,
 // layer and the engine's own first stages print and decide. Production never reassigns it.
 var installEngine = bootstrap.Install
 
+// installRunFor is the engine and the preflight for one prepared request: the run the
+// command line asked for, or the one a screen re-resolved it to.
+func installRunFor(provider bootstrap.Provider, providerName string, prepared installchoice.Prepared) (*bootstrap.InstallEngine, installflow.PreflightRunner) {
+	effective := prepared.Effective
+	doctorOptions := doctorOptsFor(effective.KubeContext, effective.Cluster, effective.Build)
+	doctorOptions.FullSizeInstall = !effective.Compact
+	return &bootstrap.InstallEngine{
+		Provider:      provider,
+		Options:       bootstrap.InstallOptions{Options: prepared.BootstrapOptions()},
+		SkipPreflight: effective.SkipPreflight,
+		Cluster:       installEngine,
+		ResolveOptions: func() (bootstrap.InstallOptions, error) {
+			plan, err := prepared.ResolveWithReader(readAlertFile)
+			return plan.Options, err
+		},
+	}, doctorRunner(providerName, doctorOptions)
+}
+
 // runInstallEngine runs an install through the presenter --ui selects. Without --ui that
 // is the plain presenter: today's output, on the process's own streams, with the
 // kind-cluster prompt answered from stdin. With --output json it runs through the event
-// stream's presenter instead, which never reads stdin.
-func runInstallEngine(ctx context.Context, e *bootstrap.InstallEngine, preflight installflow.PreflightRunner) error {
+// stream's presenter instead, which never reads stdin. wiz is what the terminal UI's
+// screens before the run show; the other presenters never see it.
+func runInstallEngine(ctx context.Context, e *bootstrap.InstallEngine, preflight installflow.PreflightRunner,
+	wiz *installtui.Wizard) error {
 	if ctx == nil { // RunE called directly, as tests do, rather than through Execute
 		ctx = context.Background()
 	}
@@ -159,7 +167,7 @@ func runInstallEngine(ctx context.Context, e *bootstrap.InstallEngine, preflight
 	}
 	// A console mode the terminal probe changed and could not put back is restored on the way out.
 	defer restoreProbedConsole()
-	presenter, err := installPresenterFor(e.Options)
+	presenter, err := installPresenterFor(e.Options, wiz)
 	if err != nil {
 		return err
 	}

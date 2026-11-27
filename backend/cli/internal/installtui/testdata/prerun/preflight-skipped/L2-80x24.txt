@@ -1,0 +1,24 @@
++- DeviceChain - dcctl install - kind devicechain ------------- dcctl v1.12.0 -+
+| Preflight - read-only checks - footprint Standard                            |
+|                                                                              |
+|   NOT CHECKED --skip-preflight supplied: the checks were not run, here or by |
+|               the install.                                                   |
+|                                                                              |
+|   Continue  > Switch to Compact    Exit                                      |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
++------------------------------------------------------------------------------+
+| Tab action - Enter select - Esc back - q exit - Ctrl+C exit                  |
++------------------------------------------------------------------------------+

@@ -163,9 +163,9 @@ func (b *Broker) resolve(ctx context.Context, id PromptID, p Prompt) (Answer, er
 		if resp.Secret.IsEmpty() {
 			return Answer{Disposition: PromptCancelled}, ErrInvalidAnswer
 		}
-		// Whatever else the run prints from here on, this value is redacted
-		// from it. A value too short to redact safely is still accepted; the
-		// producer-side allowlist is what keeps it out of events.
+		// Best-effort defence in depth: strict registration can refuse an answer
+		// whose raw or sanitised form is too short. It is still accepted without
+		// coverage here; producers keep exposed answers out of events and output.
 		_ = b.events.AddSecret(string(resp.Secret.Expose()))
 		return Answer{Disposition: PromptProvided, Secret: resp.Secret}, nil
 	}

@@ -10,11 +10,15 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/installtui/brand"
 	"github.com/devicechain-io/dcctl/internal/installtui/terminal"
 )
 
-// splashHold is how long the static splash stays before the run starts on its own.
-const splashHold = 500 * time.Millisecond
+// splashHold is how long the static splash stays before the next screen on its own.
+const splashHold = brand.StaticHold
+
+// splashSubtitle names the journey under the logo.
+const splashSubtitle = "Prepare a Kubernetes cluster"
 
 // tickEvery is the progress screen's redraw beat while a run is live: the clock line
 // and the moving marker. It is 4 redraws a second, under the 12 the splash may use.
@@ -31,15 +35,14 @@ type (
 	}
 	// stoppingMsg says the run's context is done, whatever cancelled it.
 	stoppingMsg struct{}
-	// splashDoneMsg ends the splash when nobody pressed a key.
-	splashDoneMsg struct{}
 	// tickMsg redraws the clock line and the moving marker.
 	tickMsg struct{}
 )
 
-// model is the install screen: a splash, then the progress screen (the overall bar, a
-// row per display stage with its own bar, the clock and budget line, the log pane), the
-// one open question, the stopping notice, and the verdict.
+// model is the install screen: the splash, the welcome and preflight screens, then the
+// progress screen (the overall bar, a row per display stage with its own bar, the clock
+// and budget line, the log pane), the one open question, the stopping notice, and the
+// verdict.
 type model struct {
 	caps terminal.Capabilities
 	intr *interrupter
@@ -63,25 +66,83 @@ type model struct {
 	every time.Duration
 	tick  int
 
-	splash   bool
+	// splash is true while the splash is up; splashM draws it.
+	splash  bool
+	splashM *SplashModel
+	// pre is the screens before the run, up while prePhase is true. Nil: the run starts
+	// as soon as the splash ends (a progress-only run, or no wizard given).
+	pre      *prerun
+	prePhase bool
+	// choose hands the plan the screens settled on to the run, before it starts.
+	choose func(installflow.Engine, installflow.PreflightRunner)
+	// leaving: the operator ended the screens before the run; the program ends once
+	// the run, which is never started, has settled.
+	leaving bool
+
 	prompt   *promptMsg
 	stopping bool
 	summary  *installflow.Summary
 }
 
-func newModel(caps terminal.Capabilities, intr *interrupter, start func(), logs logSource, redact func(string) string) model {
-	return model{caps: caps, intr: intr, start: start, logs: logs, redact: redact, splash: caps.Splash != terminal.NoArt,
+// modelOptions are the parts of the screen that exist only for some runs.
+type modelOptions struct {
+	// version is shown on the splash; it may be empty. It is already sanitised and
+	// redacted (splashVersion).
+	version string
+	// pre is the welcome and preflight screens; nil skips them.
+	pre    *prerun
+	choose func(installflow.Engine, installflow.PreflightRunner)
+	clock  Clock
+}
+
+func newModel(caps terminal.Capabilities, intr *interrupter, start func(), logs logSource, redact func(string) string,
+	o modelOptions) model {
+	m := model{caps: caps, intr: intr, start: start, logs: logs, redact: redact, splash: caps.Splash != terminal.NoArt,
 		theme: newTheme(caps), keys: newKeyMap(), progress: newProgressState(),
 		// The pane opens on its own only where there is room for it beside the rows.
 		pane:  newLogPane(caps.Layout == terminal.Full),
 		width: caps.Width, height: caps.Height,
-		now: time.Now, loc: time.Local, every: tickEvery}
+		now: time.Now, loc: time.Local, every: tickEvery,
+		pre: o.pre, prePhase: o.pre != nil, choose: o.choose}
+	if m.splash {
+		clock := o.clock
+		if clock == nil {
+			clock = SystemClock{}
+		}
+		// The animated splash when the session is eligible for it (caps.Animate: never
+		// over SSH, with NO_COLOR, --no-splash, --yes, --dev or --dry-run); otherwise the
+		// static mark, or a one-line header where the terminal cannot draw the mark.
+		m.splashM = NewSplash(brand.Options{Caps: caps, Subtitle: splashSubtitle, Version: o.version}, clock)
+	}
+	return m
 }
 
 func (m model) Init() tea.Cmd {
 	if m.splash {
-		return tea.Tick(splashHold, func(time.Time) tea.Msg { return splashDoneMsg{} })
+		return m.splashM.Init()
 	}
+	if m.prePhase {
+		return nil
+	}
+	m.start()
+	return m.beat()
+}
+
+// abandon ends the screens before the run without confirming it. The run they
+// would have started is never started (see Presenter.Run); the program ends once
+// that has settled.
+func (m *model) abandon() {
+	m.splash, m.prePhase, m.leaving, m.stopping = false, false, true, true
+	m.start()
+}
+
+// begin starts the run with the plan the screens before it settled on. It is the
+// confirmation: only Continue calls it.
+func (m *model) begin() tea.Cmd {
+	if m.pre != nil && m.choose != nil {
+		m.choose(m.pre.engine, m.pre.runner)
+	}
+	m.prePhase = false
 	m.start()
 	return m.beat()
 }
@@ -100,17 +161,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.key(msg)
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.splashM != nil {
+			m.splashM.Update(msg)
+		}
+		if m.pre != nil {
+			m.pre.resize(msg.Width, msg.Height)
+		}
 	case tickMsg:
 		m.tick++
 		return m, m.beat()
-	case splashDoneMsg:
+	case splashTick:
+		if m.splash {
+			_, cmd := m.splashM.Update(msg)
+			return m, cmd
+		}
+	case SplashDone:
 		if m.splash {
 			m.splash = false
-			m.start()
-			return m, m.beat()
+			if !m.prePhase {
+				m.start()
+				return m, m.beat()
+			}
+		}
+	case checkMsg:
+		if m.pre != nil {
+			// Drained after the run starts too, so the checks' goroutine never blocks.
+			cmd, _ := m.pre.update(msg)
+			return m, cmd
 		}
 	case stoppingMsg:
 		m.stopping = true
+		if m.pre != nil && (m.splash || m.prePhase) {
+			// An OS interrupt before the run: the one cancel, like Exit or Ctrl+C.
+			m.abandon()
+		}
 	case promptMsg:
 		m.prompt = &msg
 	case eventMsg:
@@ -126,17 +210,34 @@ func (m model) key(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// interrupter, which restores the terminal first.
 		m.intr.interrupt()
 		m.stopping = true
-		if m.splash {
+		switch {
+		case m.pre != nil && (m.splash || m.prePhase):
+			m.abandon() // before the run: nothing is started
+		case m.splash:
 			m.splash = false
 			m.start() // the engine starts on a cancelled context and settles at once
+			return m, m.beat()
 		}
 		return m, nil
 	}
 	if m.splash {
-		// Any key skips the splash and is CONSUMED: it must not answer the first question.
-		m.splash = false
-		m.start()
-		return m, m.beat()
+		// Any key skips the splash and is CONSUMED: it must not answer the first
+		// question, nor act on the welcome screen. The splash says so with SplashDone.
+		_, cmd := m.splashM.Update(k)
+		return m, cmd
+	}
+	if m.prePhase {
+		cmd, out := m.pre.update(k)
+		switch out {
+		case proceed:
+			return m, tea.Batch(cmd, m.begin())
+		case leave:
+			// Exit before anything has run: the same cancel an interrupt is, and the
+			// program ends as soon as the run has settled.
+			m.intr.interrupt()
+			m.abandon()
+		}
+		return m, cmd
 	}
 	if m.prompt != nil {
 		switch k.String() {
@@ -190,8 +291,9 @@ func (m model) event(e installflow.Envelope) (tea.Model, tea.Cmd) {
 		s := p
 		m.summary = &s
 		m.prompt = nil
-		if m.caps.ProgressOnly {
-			// --yes: progress only, and the run's end is the program's end.
+		if m.caps.ProgressOnly || m.leaving {
+			// --yes: progress only, and the run's end is the program's end. Ended before
+			// the run: nothing ran, so there is no result to read on screen.
 			return m, tea.Quit
 		}
 	}
@@ -207,7 +309,10 @@ func (m model) View() tea.View {
 
 func (m model) render() string {
 	if m.splash {
-		return "\n  DeviceChain\n  Prepare a Kubernetes cluster\n\n  press any key to continue\n"
+		return m.splashM.Splash().View()
+	}
+	if m.prePhase {
+		return m.pre.render()
 	}
 	return m.renderProgress()
 }

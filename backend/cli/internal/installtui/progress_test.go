@@ -73,7 +73,7 @@ func newTestModel(caps terminal.Capabilities, logs logSource, now time.Time) mod
 	if r, ok := logs.(interface{ Redact(string) string }); ok {
 		redact = r.Redact
 	}
-	m := newModel(caps, &interrupter{cancel: func() {}, force: func() {}}, func() {}, logs, redact)
+	m := newModel(caps, &interrupter{cancel: func() {}, force: func() {}}, func() {}, logs, redact, modelOptions{})
 	m.now = func() time.Time { return now }
 	m.loc, m.every = time.UTC, 0
 	return m

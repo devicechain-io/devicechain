@@ -1,0 +1,16 @@
+\x1b[1mDeviceChain · dcctl install · kind devicechain\x1b[m \x1b[38;5;109mdcctl v1.12.0\x1b[m
+────────────────────────────────────────────────────────────
+\x1b[1mPreflight\x1b[m · read-only checks · footprint Standard
+
+\x1b[1mTooling\x1b[m
+  \x1b[38;5;78mPASS\x1b[m        kubectl v1.33.1
+  \x1b[38;5;78mPASS\x1b[m        tofu v1.10.6
+  \x1b[38;5;78mPASS\x1b[m        kind v0.29.0
+… 2 lines below
+
+\x1b[38;5;109mworking: the read-only checks are running (4 checks so far)\x1b[m
+
+  \x1b[38;5;109mContinue (unavailable)\x1b[m  › \x1b[7mRecheck (unavailable)\x1b[m    Exit
+────────────────────────────────────────────────────────────
+\x1b[38;5;109m↑/↓ check · Tab action · Enter select · Esc back · q exit\x1b[m
+\x1b[38;5;109mCtrl+C exit\x1b[m

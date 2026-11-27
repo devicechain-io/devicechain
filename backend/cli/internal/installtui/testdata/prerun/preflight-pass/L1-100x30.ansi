@@ -1,0 +1,30 @@
+╭─ DeviceChain · dcctl install · kind devicechain ───────────────────────────────── dcctl v1.12.0 ─╮
+│ Preflight · read-only checks · footprint Standard                                                │
+│                                                                                                  │
+│ Tooling                                                                                          │
+│   PASS        kubectl v1.33.1                                                                    │
+│   PASS        tofu v1.10.6                                                                       │
+│ Docker engine                                                                                    │
+│   PASS        docker daemon reachable                                                            │
+│   PASS        engine CPUs: 8                                                                     │
+│   PASS        engine memory: 16Gi                                                                │
+│ Kubernetes server version                                                                        │
+│   PASS        server v1.33.1                                                                     │
+│                                                                                                  │
+│ Preflight: all checks passed.                                                                    │
+│                                                                                                  │
+│ › Continue    Recheck    Switch to Compact    Exit                                               │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ↑/↓ check · Tab action · Enter select · Esc back · q exit · Ctrl+C exit                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

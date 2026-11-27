@@ -1,0 +1,30 @@
+╭─\x1b[1m DeviceChain · dcctl install · kind devicechain \x1b[m─────────────────────────────────\x1b[38;5;109m dcctl v1.12.0 \x1b[m─╮
+│ \x1b[1mPreflight\x1b[m · read-only checks · footprint Standard                                                │
+│                                                                                                  │
+│ \x1b[1mTooling\x1b[m                                                                                          │
+│   \x1b[38;5;78mPASS\x1b[m        kubectl v1.33.1                                                                    │
+│   \x1b[38;5;78mPASS\x1b[m        tofu v1.10.6                                                                       │
+│ \x1b[1mDocker engine\x1b[m                                                                                    │
+│   \x1b[38;5;78mPASS\x1b[m        docker daemon reachable                                                            │
+│   \x1b[38;5;78mPASS\x1b[m        engine CPUs: 8                                                                     │
+│   \x1b[38;5;78mPASS\x1b[m        engine memory: 16Gi                                                                │
+│ \x1b[1mKubernetes server version\x1b[m                                                                        │
+│   \x1b[38;5;78mPASS\x1b[m        server v1.33.1                                                                     │
+│                                                                                                  │
+│ \x1b[38;5;78mPreflight: all checks passed.\x1b[m                                                                    │
+│                                                                                                  │
+│ › \x1b[7mContinue\x1b[m    Recheck    Switch to Compact    Exit                                               │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;5;109m↑/↓ check · Tab action · Enter select · Esc back · q exit · Ctrl+C exit\x1b[m                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

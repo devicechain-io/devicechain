@@ -40,6 +40,16 @@ var sectionHeadings = map[installflow.MessageCode]sectionHeading{
 	SectionSystem:            {"🖥️", "System"},
 }
 
+// SectionTitle is the words for a section code, the same words the plain report
+// heads it with (without its emoji). A code with no wording is its own title, so
+// a section is never shown nameless.
+func SectionTitle(code installflow.MessageCode) string {
+	if h, ok := sectionHeadings[code]; ok {
+		return h.title
+	}
+	return string(code)
+}
+
 // greenUnderline is dcctl's house style for a section heading.
 var greenUnderline = color.New(color.Underline, color.FgHiGreen).SprintFunc()
 

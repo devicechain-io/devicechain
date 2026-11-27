@@ -1,0 +1,40 @@
+╭─ DeviceChain · dcctl install · kind devicechain ───────────────────────────────────────────────────── dcctl v1.12.0 ─╮
+│ Preflight · read-only checks · footprint Standard                                                                    │
+│                                                                                                                      │
+│ Docker engine                                                                                                        │
+│   PASS        docker daemon reachable                                                                                │
+│   WARN        docker context = colima                                                                                │
+│ Kernel & cgroups                                                                                                     │
+│ › PASS        cgroup v2                                                                                              │
+│   WARN        fs.inotify.max_user_watches = 8192                                                                     │
+│                                                                                                                      │
+│ Preflight: ready, with 2 warnings. Review them before you continue.                                                  │
+│                                                                                                                      │
+│   Continue  › Recheck    Switch to Compact    Exit                                                                   │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ↑/↓ check · Tab action · Enter select · Esc back · q exit · Ctrl+C exit                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

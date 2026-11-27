@@ -33,6 +33,10 @@ type Presenter struct {
 	Stdout io.Writer
 	Stderr io.Writer
 	Caps   terminal.Capabilities
+	// Wizard is the welcome and preflight screens shown before the run, and the plan
+	// change they may make. Nil, or a progress-only run (--yes, --dev), starts the run
+	// as soon as the splash ends.
+	Wizard *Wizard
 
 	// Test seams. Zero values are the real process: signal.Notify for SIGINT and
 	// SIGTERM, os.Exit, and no extra program options.
@@ -99,14 +103,31 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	if err != nil {
 		return err
 	}
-	// Taken before anything starts, so a failure here leaves nothing running.
+	// Taken before anything starts, so a failure here leaves nothing running. The
+	// screens before the run run their checks with the streams already taken, so what a
+	// check's tool writes goes to the log ring, never over the screen.
 	var streamsDropped bool
+	var streams *processStreams
 	if p.OwnProcessStreams {
-		streams, err := takeProcessStreams(hub)
+		streams, err = takeProcessStreams(hub)
 		if err != nil {
 			return err
 		}
-		e = streamsEngine{Engine: e, streams: streams, dropped: &streamsDropped}
+	}
+	// The plan the run starts with. The screens before the run may replace it (a
+	// footprint change) through choose, which happens before start; the engine reads it
+	// only after start, or after the program has returned. choose is also what
+	// CONFIRMS the run: with the screens before the run up, a run nobody confirmed
+	// (Exit, an interrupt, a renderer that failed before Continue) is never started.
+	var planMu sync.Mutex
+	var confirmed bool
+	choose := func(ce installflow.Engine, cp installflow.PreflightRunner) {
+		planMu.Lock()
+		defer planMu.Unlock()
+		confirmed = true
+		if ce != nil {
+			e, preflight = ce, cp
+		}
 	}
 	con := installflow.Console{
 		Stdout: &switchWriter{b: b, log: logOut, plain: p.Stdout, flush: hub.Flush},
@@ -152,7 +173,16 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 		// this is only its starting point; it never draws into a zero-sized screen.
 		tea.WithWindowSize(sizeOr(p.Caps.Width, 80), sizeOr(p.Caps.Height, 24)),
 	}, p.options...)
-	prog = tea.NewProgram(newModel(p.Caps, intr, start, hub, hub.Redact), opts...)
+	mo := modelOptions{}
+	if p.Wizard != nil {
+		mo.version = splashVersion(p.Wizard, hub.Redact)
+		if !p.Caps.ProgressOnly {
+			// The checks on screen run under the run's context, so an interrupt reaches them.
+			mo.pre = newPrerun(runCtx, p.Caps, p.Wizard, preflight, hub.Redact)
+			mo.choose = choose
+		}
+	}
+	prog = tea.NewProgram(newModel(p.Caps, intr, start, hub, hub.Redact, mo), opts...)
 
 	// OS signals while the screen is up. The root context hears the first one too; this
 	// channel is what keeps the SECOND from killing the process with the terminal still
@@ -186,6 +216,21 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 		case <-started:
 		case <-b.done:
 		}
+		planMu.Lock()
+		runE, runPreflight := e, preflight
+		// 🔴 FAIL CLOSED: the screens were up and Continue was never chosen, so the
+		// install was never confirmed. Nothing starts, whatever ended the screens.
+		unconfirmed := mo.pre != nil && !confirmed
+		planMu.Unlock()
+		if unconfirmed {
+			runE, runPreflight = notStarted{}, nil
+		}
+		if streams != nil {
+			runE = streamsEngine{Engine: runE, streams: streams, dropped: &streamsDropped}
+		}
+		if runPreflight != nil {
+			runPreflight = settledPreflight{runPreflight}
+		}
 		var res engineResult
 		defer func() {
 			if r := recover(); r != nil {
@@ -194,8 +239,8 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 			}
 			engineDone <- res
 		}()
-		res.sum, res.err = hub.Run(runCtx, e, req, installflow.Runtime{
-			Prompts: broker, Preflight: preflight, Console: con, ObserveTools: true})
+		res.sum, res.err = hub.Run(runCtx, runE, req, installflow.Runtime{
+			Prompts: broker, Preflight: runPreflight, Console: con, ObserveTools: true})
 	}()
 
 	saved := saveTerminal(p.Stdin, p.Stdout)
@@ -253,12 +298,20 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 		b.fallBack()
 	}
 	close(b.done)
+	planMu.Lock()
+	unconfirmed := mo.pre != nil && !confirmed
+	planMu.Unlock()
 	if !finished {
 		reason := "it closed before the run finished"
 		if perr != nil {
 			reason = perr.Error()
 		}
-		fmt.Fprintf(p.Stderr, "dcctl: the terminal UI stopped (%s); continuing with plain output\n", reason)
+		if unconfirmed {
+			fmt.Fprintf(p.Stderr, "dcctl: the terminal UI stopped (%s) before the install was confirmed; "+
+				"the install was not started\n", reason)
+		} else {
+			fmt.Fprintf(p.Stderr, "dcctl: the terminal UI stopped (%s); continuing with plain output\n", reason)
+		}
 		if gate.refusal() != nil {
 			fmt.Fprintln(p.Stderr, "dcctl: questions cannot be answered after the terminal UI stopped on this console; "+
 				"re-run with --ui=plain to answer them")
@@ -266,6 +319,12 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	}
 
 	res := <-engineDone
+	// The screen's own checks end with the run's context, and are waited for: a check's
+	// tool is never left running behind the command.
+	cancel()
+	if mo.pre != nil {
+		mo.pre.wait()
+	}
 	if res.panicked != nil {
 		_, _ = p.Stderr.Write(res.stack)
 		panic(res.panicked)
@@ -286,6 +345,20 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 		return hub.RedactError(errIncomplete)
 	}
 	return hub.RedactError(res.err)
+}
+
+// settledPreflight is the run's preflight, which does not start once the run has been
+// cancelled: an Exit or an interrupt before the run settles it at once, rather than after
+// a full set of host checks nobody will read. A preflight already running is the
+// doctor's own business, as it is in plain output.
+type settledPreflight struct{ installflow.PreflightRunner }
+
+func (s settledPreflight) RunPreflight(ctx context.Context,
+	observe func(installflow.PreflightObservation)) (installflow.PreflightResult, error) {
+	if err := ctx.Err(); err != nil {
+		return installflow.PreflightResult{}, err
+	}
+	return s.PreflightRunner.RunPreflight(ctx, observe)
 }
 
 func (p Presenter) notifySignals(c chan<- os.Signal) func() {
@@ -367,4 +440,26 @@ func isClosed(c chan struct{}) bool {
 	default:
 		return false
 	}
+}
+
+// splashVersion is the version the splash shows: sanitised and redacted, as every
+// other fact on screen is.
+func splashVersion(w *Wizard, redact func(string) string) string {
+	if w == nil {
+		return ""
+	}
+	return redact(installflow.Text(w.Facts.Version).String())
+}
+
+// errNotStarted is the result of a run the screens before it ended without Continue.
+var errNotStarted = errors.New("the install was not started: it was stopped before it was confirmed, and nothing has been changed")
+
+// notStarted is the run that stands in for an install nobody confirmed: it does
+// nothing at all and reports exactly that.
+type notStarted struct{}
+
+func (notStarted) Run(context.Context, installflow.Request, installflow.Runtime) (installflow.Summary, error) {
+	return installflow.Summary{Outcome: installflow.RunCancelled, InstallRecord: installflow.RecordNotRead,
+		Readiness: installflow.ReadinessNotChecked, Claim: installflow.ClaimNotClaimed,
+		PartialState: installflow.EffectNoneObserved}, errNotStarted
 }

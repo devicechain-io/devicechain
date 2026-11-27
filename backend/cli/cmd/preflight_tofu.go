@@ -56,7 +56,7 @@ func (d *doctor) checkTofuVersion() {
 		if err != nil {
 			continue
 		}
-		if err := checkTofuRequirements(runCmd(path, "version", "-json"), assets.OpenTofuCluster(), assets.OpenTofuInstance()); err != nil {
+		if err := checkTofuRequirements(d.run(path, "version", "-json"), assets.OpenTofuCluster(), assets.OpenTofuInstance()); err != nil {
 			d.fail(name+": "+err.Error(), "install a stable OpenTofu or Terraform satisfying the bundled required_version, then re-run preflight")
 			return
 		}

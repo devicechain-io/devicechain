@@ -1,0 +1,24 @@
+╭─ DeviceChain · dcctl install · context prod ───────────────── dcctl v1.12.0 ─╮
+│ Preflight · read-only checks · footprint Standard                            │
+│                                                                              │
+│ Docker engine                                                                │
+│   NOT NEEDED  engine memory: installing into prod from published images      │
+│ › UNKNOWN     engine CPUs could not be read                                  │
+│               fix: check that docker info answers, then Recheck              │
+│   INFO        not needed — installing into prod from published images        │
+│ Kubernetes contexts                                                          │
+│   PASS        --kube-context prod exists                                     │
+│                                                                              │
+│ Preflight: ready, with 1 check not determined. Review them before you        │
+│ continue.                                                                    │
+│                                                                              │
+│   Continue  › Recheck    Exit                                                │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ ↑/↓ check · Tab action · Enter select · Esc back · q exit · Ctrl+C exit      │
+╰──────────────────────────────────────────────────────────────────────────────╯

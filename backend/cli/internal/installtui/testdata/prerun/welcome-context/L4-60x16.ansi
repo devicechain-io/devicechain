@@ -1,0 +1,16 @@
+\x1b[1mDeviceChain · dcctl install · context prod\x1b[m     \x1b[38;2;138;166;182mdcctl v1.12.0\x1b[m
+────────────────────────────────────────────────────────────
+\x1b[1mWelcome\x1b[m
+This installs shared cluster prerequisites. Create an
+instance later with dcctl bootstrap.
+
+  \x1b[38;2;138;166;182mProvider   \x1b[m local
+  \x1b[38;2;138;166;182mTarget     \x1b[m existing cluster, context prod (dcctl never
+              creates or deletes it)
+… 5 lines below
+
+No changes have been made.
+
+  Continue  › \x1b[7mExit\x1b[m
+────────────────────────────────────────────────────────────
+\x1b[38;2;138;166;182mEnter select · Tab action · q exit · Ctrl+C exit\x1b[m

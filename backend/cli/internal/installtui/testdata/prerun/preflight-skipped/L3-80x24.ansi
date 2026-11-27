@@ -1,0 +1,24 @@
+╭─\x1b[1m DeviceChain · dcctl install · kind devicechain \x1b[m─────────────\x1b[38;5;109m dcctl v1.12.0 \x1b[m─╮
+│ \x1b[1mPreflight\x1b[m · read-only checks · footprint Standard                            │
+│                                                                              │
+│   \x1b[38;5;221mNOT CHECKED\x1b[m --skip-preflight supplied: the checks were not run, here or by │
+│               the install.                                                   │
+│                                                                              │
+│   Continue  › \x1b[7mSwitch to Compact\x1b[m    Exit                                      │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;5;109mTab action · Enter select · Esc back · q exit · Ctrl+C exit\x1b[m                  │
+╰──────────────────────────────────────────────────────────────────────────────╯

@@ -1,0 +1,15 @@
+---
+section: whats-new
+---
+
+## en
+
+- **The install terminal UI opens with a welcome screen and an interactive preflight.** `dcctl install local --ui=tui` now shows what the install will do (the target, footprint, topology and image source, with "No changes have been made") and then runs the read-only preflight checks on screen. Every check reads PASS, WARN, FAIL, UNKNOWN, NOT NEEDED or NOT CHECKED as a word, and the focused check shows its fix. Recheck runs the checks again after you fix something, and the footprint can be switched between Standard and Compact, after a summary of what that changes, with every check run again for the new footprint. While any check fails, Continue is unavailable and there is no way past it; `--skip-preflight` is still the only way to skip the checks. Nothing is installed until you choose Continue: Exit, Ctrl+C, an interrupt signal, or the terminal UI stopping before then ends the command having changed nothing. The logo splash animates for up to 1.2 seconds on a capable local terminal, and is a static mark, or a one-line header, everywhere else. With `--yes` or `--dev` the terminal UI still shows progress only.
+
+## es
+
+- **La interfaz de terminal de la instalación empieza con una pantalla de bienvenida y una comprobación previa interactiva.** `dcctl install local --ui=tui` muestra ahora lo que hará la instalación (el destino, el tamaño, la topología y el origen de las imágenes, con "No changes have been made") y después ejecuta en pantalla las comprobaciones previas de solo lectura. Cada comprobación se lee como una palabra, PASS, WARN, FAIL, UNKNOWN, NOT NEEDED o NOT CHECKED, y la comprobación seleccionada muestra su solución. Recheck vuelve a ejecutar las comprobaciones después de corregir algo, y el tamaño puede cambiarse entre Standard y Compact, tras un resumen de lo que eso cambia, volviendo a ejecutar todas las comprobaciones para el nuevo tamaño. Mientras alguna comprobación falla, Continue no está disponible y no hay forma de saltárselo; `--skip-preflight` sigue siendo la única forma de omitir las comprobaciones. No se instala nada hasta que se elige Continue: Exit, Ctrl+C, una señal de interrupción o que la interfaz de terminal se detenga antes terminan el comando sin haber cambiado nada. El logotipo inicial se anima durante un máximo de 1,2 segundos en un terminal local que lo admite, y en los demás casos es una marca estática o una cabecera de una línea. Con `--yes` o `--dev`, la interfaz de terminal sigue mostrando solo el progreso.
+
+## zh-CN
+
+- **安装的终端界面现在以欢迎屏幕和交互式预检开始。** `dcctl install local --ui=tui` 现在会先显示安装将要做什么（目标、规模、拓扑和镜像来源，并注明 "No changes have been made"），然后在屏幕上运行只读的预检。每项检查都以文字显示为 PASS、WARN、FAIL、UNKNOWN、NOT NEEDED 或 NOT CHECKED，选中的检查会显示其修复方法。修复问题后可用 Recheck 重新运行检查；规模可以在 Standard 和 Compact 之间切换，切换前会说明这会改变什么，切换后会针对新规模重新运行所有检查。只要有任何检查失败，Continue 就不可用，也没有绕过的办法；`--skip-preflight` 仍然是跳过检查的唯一方式。在选择 Continue 之前不会安装任何内容：在此之前选择 Exit、按 Ctrl+C、收到中断信号或终端界面停止，命令都会结束且不做任何更改。在支持的本地终端上，开头的徽标会显示最长 1.2 秒的动画，其他情况下显示静态徽标或一行标题。使用 `--yes` 或 `--dev` 时，终端界面仍然只显示进度。

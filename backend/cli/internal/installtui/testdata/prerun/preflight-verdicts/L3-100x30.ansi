@@ -1,0 +1,30 @@
+╭─\x1b[1m DeviceChain · dcctl install · context prod \x1b[m─────────────────────────────────────\x1b[38;5;109m dcctl v1.12.0 \x1b[m─╮
+│ \x1b[1mPreflight\x1b[m · read-only checks · footprint Standard                                                │
+│                                                                                                  │
+│ \x1b[1mDocker engine\x1b[m                                                                                    │
+│   \x1b[38;5;109mNOT NEEDED\x1b[m  engine memory: installing into prod from published images                          │
+│ › \x1b[7mUNKNOWN\x1b[m     engine CPUs could not be read                                                      │
+│               fix: check that docker info answers, then Recheck                                  │
+│   \x1b[38;5;109mINFO\x1b[m        not needed — installing into prod from published images                            │
+│ \x1b[1mKubernetes contexts\x1b[m                                                                              │
+│   \x1b[38;5;78mPASS\x1b[m        --kube-context prod exists                                                         │
+│                                                                                                  │
+│ \x1b[38;5;221mPreflight: ready, with 1 check not determined. Review them before you continue.\x1b[m                  │
+│                                                                                                  │
+│   Continue  › \x1b[7mRecheck\x1b[m    Exit                                                                    │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;5;109m↑/↓ check · Tab action · Enter select · Esc back · q exit · Ctrl+C exit\x1b[m                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -1,0 +1,30 @@
+╭─\x1b[1m DeviceChain · dcctl install · kind devicechain \x1b[m─────────────────────────────────\x1b[38;2;138;166;182m dcctl v1.12.0 \x1b[m─╮
+│ \x1b[1mPreflight\x1b[m · read-only checks · footprint Standard                                                │
+│                                                                                                  │
+│ … 2 lines above                                                                                  │
+│   \x1b[38;2;95;211;154mPASS\x1b[m        tofu v1.10.6                                                                       │
+│   \x1b[38;2;95;211;154mPASS\x1b[m        kind v0.29.0                                                                       │
+│ \x1b[1mDocker engine\x1b[m                                                                                    │
+│   \x1b[38;2;95;211;154mPASS\x1b[m        docker daemon reachable                                                            │
+│   \x1b[38;2;95;211;154mPASS\x1b[m        docker context = default (native engine)                                           │
+│ › \x1b[7mFAIL\x1b[m        engine memory: 6.0Gi                                                               │
+│               fix: give Docker >= 4 CPUs and >= 8Gi, or re-run install with --compact            │
+│   \x1b[38;2;245;196;81mWARN\x1b[m        storage driver: vfs                                                                │
+│ \x1b[1mPorts & registry\x1b[m                                                                                 │
+│   \x1b[38;2;95;211;154mPASS\x1b[m        port 80 free                                                                       │
+│   \x1b[38;2;95;211;154mPASS\x1b[m        port 443 free                                                                      │
+│   \x1b[38;2;240;114;122mFAIL\x1b[m        port 1883 in use by mosquitto (pid 4121)                                           │
+│ \x1b[1mKubernetes contexts\x1b[m                                                                              │
+│   \x1b[38;2;138;166;182mINFO\x1b[m        no contexts in the kubeconfig yet (expected before the first install)              │
+│                                                                                                  │
+│ \x1b[38;2;240;114;122mPreflight: 2 failures, 1 warning. Continue is unavailable while any check fails. Fix each\x1b[m        │
+│ \x1b[38;2;240;114;122mfailure, then Recheck.\x1b[m                                                                           │
+│                                                                                                  │
+│ Compact is the small-footprint preset for the cluster and every instance on it: smaller volumes, │
+│ lowered JetStream/KV ceilings and scheduling requests, no monitoring stack, and, unless          │
+│ --no-tls=false, no cert-manager and therefore no database backups.                               │
+│ The plan changes to this footprint and every check runs again for it.                            │
+│ \x1b[1mSwitch to Compact?\x1b[m                                                                               │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;2;138;166;182mEnter switch · Esc keep · Ctrl+C exit\x1b[m                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

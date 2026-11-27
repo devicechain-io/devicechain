@@ -1,0 +1,16 @@
+DeviceChain · dcctl install · kind devicechain dcctl v1.12.0
+────────────────────────────────────────────────────────────
+Preflight · read-only checks · footprint Standard
+… 7 lines above
+› FAIL        engine memory: 6.0Gi
+              fix: give Docker >= 4 CPUs and >= 8Gi, or
+… 9 lines below
+Preflight: 2 failures, 1 warning. Continue is unavailable
+while any check fails. Fix each failure, then Recheck.
+  Continue (unavailable)
+› Recheck
+  Switch to Compact
+  Exit
+────────────────────────────────────────────────────────────
+↑/↓ check · Tab action · Enter select · Esc back · q exit
+Ctrl+C exit

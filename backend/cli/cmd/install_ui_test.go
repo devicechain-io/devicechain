@@ -91,7 +91,7 @@ func TestInstallPresenterForWiresTheSelection(t *testing.T) {
 		installUI, installNoSplash, installDev, probeInstallTerminal, newInstallTUI = saveUI, saveSplash, saveDev, saveProbe, saveNew
 	})
 	probeInstallTerminal = eligibleTerminal
-	newInstallTUI = func(c terminal.Capabilities) installPresenter { return fakeTUI{caps: c} }
+	newInstallTUI = func(c terminal.Capabilities, _ *installtui.Wizard) installPresenter { return fakeTUI{caps: c} }
 
 	for _, c := range []struct {
 		ui                         string
@@ -108,7 +108,7 @@ func TestInstallPresenterForWiresTheSelection(t *testing.T) {
 		{ui: "auto", dev: true, yes: true},
 	} {
 		installUI, installNoSplash, installDev = c.ui, c.noSplash, c.dev
-		p, err := installPresenterFor(bootstrap.InstallOptions{Options: bootstrap.Options{AssumeYes: c.yes, DryRun: c.dryRun}})
+		p, err := installPresenterFor(bootstrap.InstallOptions{Options: bootstrap.Options{AssumeYes: c.yes, DryRun: c.dryRun}}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -123,18 +123,19 @@ func TestInstallPresenterForWiresTheSelection(t *testing.T) {
 		}
 	}
 	installUI = "fancy"
-	if _, err := installPresenterFor(bootstrap.InstallOptions{}); err == nil {
+	if _, err := installPresenterFor(bootstrap.InstallOptions{}, nil); err == nil {
 		t.Fatal("an unknown --ui reached a presenter")
 	}
 }
 
 // The terminal UI the command builds owns the process's streams while its screen is up.
 func TestTheCommandsTerminalUIOwnsTheProcessStreams(t *testing.T) {
-	p, ok := newInstallTUI(terminal.Capabilities{TUI: true}).(installtui.Presenter)
+	wiz := &installtui.Wizard{}
+	p, ok := newInstallTUI(terminal.Capabilities{TUI: true}, wiz).(installtui.Presenter)
 	if !ok {
 		t.Fatalf("newInstallTUI built %T", p)
 	}
-	if !p.OwnProcessStreams || p.Stdin != os.Stdin || p.Stdout != os.Stdout || p.Stderr != os.Stderr {
+	if !p.OwnProcessStreams || p.Stdin != os.Stdin || p.Stdout != os.Stdout || p.Stderr != os.Stderr || p.Wizard != wiz {
 		t.Fatalf("the command's terminal UI: %+v", p)
 	}
 }

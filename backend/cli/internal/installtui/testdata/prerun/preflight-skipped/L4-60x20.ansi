@@ -1,0 +1,20 @@
+\x1b[1mDeviceChain · dcctl install · kind devicechain\x1b[m \x1b[38;2;138;166;182mdcctl v1.12.0\x1b[m
+────────────────────────────────────────────────────────────
+\x1b[1mPreflight\x1b[m · read-only checks · footprint Standard
+
+  \x1b[38;2;245;196;81mNOT CHECKED\x1b[m --skip-preflight supplied: the checks were not
+              run, here or by the install.
+
+  Continue  › \x1b[7mSwitch to Compact\x1b[m    Exit
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────
+\x1b[38;2;138;166;182mTab action · Enter select · Esc back · q exit · Ctrl+C exit\x1b[m
