@@ -128,3 +128,22 @@ func parseProcTreeReport(t *testing.T, out string) []string {
 	t.Fatalf("the helper reported nothing: %q", out)
 	return nil
 }
+
+// 🔴 A SCREEN COMMAND IS BOUNDED ON ITS OWN, not only by the screen's context: one that
+// never answers (a credential plugin waiting on input it will never get, an API server
+// that accepts and stays silent) is ended at hostCommandTimeout, its whole tree with it,
+// and reads as a command that failed.
+func TestABoundCommandThatNeverAnswersIsEndedAtItsTimeout(t *testing.T) {
+	old := hostCommandTimeout
+	t.Cleanup(func() { hostCommandTimeout = old })
+	hostCommandTimeout = 300 * time.Millisecond
+	t.Setenv(procTreeRoleEnv, "grandchild") // stalls for a minute
+	start := time.Now()
+	out := runContext(context.Background(), os.Args[0], procTreeArgs...)
+	if took := time.Since(start); took > hostCommandTimeout+commandWaitDelay {
+		t.Fatalf("a command that never answered held the check for %v", took)
+	}
+	if out != "" {
+		t.Fatalf("a command ended at its timeout answered %q", out)
+	}
+}
