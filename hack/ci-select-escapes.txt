@@ -35,6 +35,7 @@ backend/cli/bootstrap/sizing_test.go
 backend/cli/bootstrap/sparkplug_test.go
 backend/cli/bootstrap/steps_test.go
 backend/cli/bootstrap/tofu.go
+backend/cli/bootstrap/urlredact_sites_test.go
 backend/cli/bootstrap/valuesoverlay_test.go
 backend/cli/bulkchange/documents_test.go
 backend/cli/cmd/backup_test.go
