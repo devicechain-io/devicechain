@@ -24,6 +24,9 @@ const splashSubtitle = "Prepare a Kubernetes cluster"
 // and the moving marker. It is 4 redraws a second, under the 12 the splash may use.
 const tickEvery = 250 * time.Millisecond
 
+// withheld replaces a value in a fallback line, checked by result.Input.Line.
+const withheld = "[withheld]"
+
 // Messages from outside the program.
 type (
 	// eventMsg is one event, delivered by the hub in seq order.
@@ -50,7 +53,8 @@ type model struct {
 	start func()
 	logs  logSource
 	// redact is the hub's redaction (Hub.Redact), applied to every composed line before
-	// it is drawn (see line). Nil applies the sanitiser alone.
+	// it is drawn (see result.Input.Line). Its parts are already sanitised; nil
+	// leaves the composed line unchanged.
 	redact func(string) string
 
 	theme    theme

@@ -212,6 +212,7 @@ func (m model) progressLines(f frame) []string {
 // row is one stage row. Its label carries the engine's unit word, so the row is checked
 // whole, as text, and drawn without the label when the label is what makes it unsafe.
 func (m model) row(f frame, g groupView) string {
+	line := (result.Input{Redact: m.redact}).Line
 	compose := func(t theme, label bool) string {
 		bar, words := rowBar(t, g, f.barW, m.tick)
 		labelW := f.inner - 4 - 2 - f.nameW - 2 - f.barW - 2
@@ -222,23 +223,26 @@ func (m model) row(f frame, g groupView) string {
 		return row
 	}
 	plain := m.theme.plain()
-	switch full, bare := compose(plain, true), compose(plain, false); m.line(full, bare) {
+	full, bare := compose(plain, true), compose(plain, false)
+	switch checked := line(full, bare); checked {
 	case full:
 		return compose(m.theme, true)
 	case bare:
 		return compose(m.theme, false)
+	default:
+		return checked
 	}
-	return withheld
 }
 
 // nowBlock is the two lines under the rows: what is running and its numbers, or what
 // the run is waiting for.
 func (m model) nowBlock(f frame, done, total int) []string {
+	line := (result.Input{Redact: m.redact}).Line
 	t, now := m.theme, m.now()
 	fit := func(s string) string { return truncate(s, f.inner, t.g.ellipsis) }
 	switch {
 	case m.prompt != nil:
-		q := m.line(fit(questionWords(m.prompt.q, false)+" [y/N]"), fit(questionWords(m.prompt.q, true)+" [y/N]"))
+		q := line(fit(questionWords(m.prompt.q, false)+" [y/N]"), fit(questionWords(m.prompt.q, true)+" [y/N]"))
 		return []string{t.bold.Render(q), ""}
 	case m.stopping && m.summary == nil:
 		return []string{t.warn.Render(fit("Interrupt received. Waiting for the operation to stop safely. Nothing is being rolled back.")),
@@ -263,7 +267,7 @@ func (m model) nowBlock(f frame, done, total int) []string {
 	}
 	// A stage this table does not know shows by its ID, which the engine sent: the line
 	// is checked as composed, label included.
-	head := m.line("Now  "+truncate(result.StageName(v.id), f.inner-5, t.g.ellipsis), "Now  "+withheld)
+	head := line("Now  "+truncate(result.StageName(v.id), f.inner-5, t.g.ellipsis), "Now  "+withheld)
 	if rest, ok := strings.CutPrefix(head, "Now"); ok {
 		head = t.dim.Render("Now") + rest
 	}
@@ -291,7 +295,7 @@ func (m model) nowBlock(f frame, done, total int) []string {
 	if len(parts) > 0 && v.metric != nil {
 		fallback = detail(parts[1:])
 	}
-	return []string{head, t.dim.Render(m.line(detail(parts), fallback))}
+	return []string{head, t.dim.Render(line(detail(parts), fallback))}
 }
 
 // footer is generated from the key map that is active now, never written by hand.
@@ -319,6 +323,7 @@ func truncateStyled(s string, w int) string {
 
 // renderProgress lays the screen out in exactly the terminal's rows.
 func (m model) renderProgress() string {
+	line := (result.Input{Redact: m.redact}).Line
 	f := newFrame(m.width, m.height)
 	t := m.theme
 	if f.layout == terminal.Minimal {
@@ -326,7 +331,7 @@ func (m model) renderProgress() string {
 	}
 	body := m.progressLines(f)
 	pane := m.pane // render records the rows it was given; the model's copy is set in Update
-	body = append(body, pane.render(m.logs, t, f.inner, paneHeight(f, len(body), m.pane.open), m.loc, m.line)...)
+	body = append(body, pane.render(m.logs, t, f.inner, paneHeight(f, len(body), m.pane.open), m.loc, line)...)
 	for len(body) < f.rows {
 		body = append(body, "")
 	}
@@ -336,7 +341,7 @@ func (m model) renderProgress() string {
 		compose := func(target string) string {
 			return "DeviceChain " + t.g.dot + " " + truncate(m.titleFor(target), f.inner-14, t.g.ellipsis)
 		}
-		head := m.line(compose(m.progress.target), compose(withheld))
+		head := line(compose(m.progress.target), compose(withheld))
 		if rest, ok := strings.CutPrefix(head, "DeviceChain"); ok {
 			head = t.bold.Render("DeviceChain") + rest
 		}
@@ -353,7 +358,7 @@ func (m model) renderProgress() string {
 		title := truncate(" DeviceChain "+g.dot+" "+m.titleFor(target)+" ", f.w-4, g.ellipsis)
 		return g.tl + g.h + title + strings.Repeat(g.h, max(f.w-3-width(title), 0)) + g.tr
 	}
-	lines := []string{m.line(top(m.progress.target), top(withheld))}
+	lines := []string{line(top(m.progress.target), top(withheld))}
 	for _, l := range body {
 		lines = append(lines, g.v+" "+pad(l, f.inner)+" "+g.v)
 	}
@@ -385,6 +390,7 @@ func (m model) logRows() int {
 // renderMinimal is the status block for a terminal under 60x16. Resizing changes only
 // this drawing; it never cancels or restarts anything.
 func (m model) renderMinimal(f frame) string {
+	line := (result.Input{Redact: m.redact}).Line
 	t := m.theme
 	gs := m.progress.groups()
 	done, total := overall(gs)
@@ -395,13 +401,14 @@ func (m model) renderMinimal(f frame) string {
 			compose := func(t theme, label string) string {
 				return stateWord(t, g) + " " + truncate(g.name+" "+label, max(f.w-5, 1), t.g.ellipsis)
 			}
-			switch full, bare := compose(t.plain(), label), compose(t.plain(), ""); m.line(full, bare) {
+			full, bare := compose(t.plain(), label), compose(t.plain(), "")
+			switch checked := line(full, bare); checked {
 			case full:
 				lines = append(lines, compose(t, label))
 			case bare:
 				lines = append(lines, compose(t, ""))
 			default:
-				lines = append(lines, withheld)
+				lines = append(lines, checked)
 			}
 		}
 	}
@@ -413,7 +420,8 @@ func (m model) renderMinimal(f frame) string {
 }
 
 // titleFor is the screen's title naming target, the run.started target context. It is
-// caller-supplied text, so the line it is composed into is checked whole (see line).
+// caller-supplied text, so the line it is composed into is checked whole
+// (see result.Input.Line).
 func (m model) titleFor(target string) string {
 	if target != "" {
 		return "Installing " + m.theme.g.dot + " " + target

@@ -405,7 +405,7 @@ func (m *Model) bodyLines(width, budget int) []string {
 			// 🔴 The label column and the value are checked as ONE line: the label
 			// and its padding, joined to a clean value, can be a registered one.
 			lab := padRight(label, labelWidth)
-			switch got := m.in.line(lab+l, lab+withheld); got {
+			switch got := m.in.Line(lab+l, lab+withheld); got {
 			case lab + l:
 			case lab + withheld:
 				l = withheld
@@ -464,7 +464,7 @@ func (m *Model) header(width int) string {
 	// The JOINED line is checked as it is drawn, truncation included: the context,
 	// the separator and the version can make a registered value none of them is.
 	sep := " " + m.theme.g.dot + " "
-	line := m.in.line(truncate(strings.Join(parts, sep), width), truncate(parts[0]+sep+withheld, width))
+	line := m.in.Line(truncate(strings.Join(parts, sep), width), truncate(parts[0]+sep+withheld, width))
 	return paint(m.theme.bd, truncate(line, width))
 }
 
@@ -550,7 +550,7 @@ func (m *Model) renderMinimal(w, h int) string {
 	// Each line is checked as it is drawn: "Next:" or "At:" joined to a clean
 	// value can be a registered one.
 	for i, l := range lines {
-		lines[i] = m.in.line(l, "")
+		lines[i] = m.in.Line(l, "")
 	}
 	// The verdict and the way out always show; what is between them fits the rest.
 	if h == 2 {

@@ -863,7 +863,7 @@ func TestALineFallsBackOnlyToACleanLine(t *testing.T) {
 		{"a secret line", "secret fallback", withheld},
 		{"a secret line", "", withheld},
 	} {
-		if got := in.line(c[0], c[1]); got != c[2] {
+		if got := in.Line(c[0], c[1]); got != c[2] {
 			t.Errorf("line(%q, %q) = %q, want %q", c[0], c[1], got, c[2])
 		}
 	}
@@ -883,7 +883,7 @@ func TestTheWithheldMarkerIsCheckedToo(t *testing.T) {
 		}
 	}
 	in := Input{Redact: hub.Redact}
-	if got := in.line("a dcRound4Line7xQ line", ""); strings.Contains(got, withheld) || strings.Contains(got, "dcRound4Line7xQ") {
+	if got := in.Line("a dcRound4Line7xQ line", ""); strings.Contains(got, withheld) || strings.Contains(got, "dcRound4Line7xQ") {
 		t.Errorf("a registered marker went out unchecked: %q", got)
 	}
 	// Every line of the screen and the summary, its fallback and the marker all
@@ -905,7 +905,7 @@ func TestTheWithheldMarkerIsCheckedToo(t *testing.T) {
 		}
 	}
 	grow := Input{Redact: func(s string) string { return s + "x" }}
-	if got := grow.line("anything", "fallback"); got != "" {
+	if got := grow.Line("anything", "fallback"); got != "" {
 		t.Errorf("an unsettled redaction drew %q", got)
 	}
 }
