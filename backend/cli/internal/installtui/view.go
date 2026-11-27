@@ -82,7 +82,8 @@ func measured(t theme, cur, total int64, w int) (bar, label string) {
 		fill = int(cur * int64(w) / total)
 	}
 	if fill >= w {
-		fill = w - 1
+		// max: the minimal layout asks for no bar at all (w is 0), only its words.
+		fill = max(w-1, 0)
 	}
 	return paint(t.acc, strings.Repeat(t.g.full, fill)) + paint(t.dim, strings.Repeat(t.g.empty, w-fill)),
 		fmt.Sprintf("%d/%d", cur, total)

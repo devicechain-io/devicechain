@@ -77,6 +77,14 @@ func TestComposedLinesCannotRebuildASecret(t *testing.T) {
 						Mode: installflow.ProgressMeasured, Current: 3, Total: total(9), Unit: "rnd3Unit7xQ"})}
 			},
 			leak: "3/9 rnd3Unit7xQ", want: "RUN   Relational store ready"},
+		{name: "minimal stage row label", secret: "3/9 rnd3Unit7xQ", w: 50, h: 14,
+			envs: func() []installflow.Envelope {
+				return []installflow.Envelope{started("kind-devicechain"),
+					env(at(time.Second), installflow.StepInstallRDBReady, 1, installflow.StepStarted{}),
+					env(at(2*time.Second), installflow.StepInstallRDBReady, 1, installflow.StepProgress{
+						Mode: installflow.ProgressMeasured, Current: 3, Total: total(9), Unit: "rnd3Unit7xQ"})}
+			},
+			leak: "3/9 rnd3Unit7xQ", want: "RUN  Relational store ready"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

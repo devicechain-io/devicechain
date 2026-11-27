@@ -584,3 +584,17 @@ func TestEveryStateIsAWord(t *testing.T) {
 		t.Errorf("a failed stage says FAIL:\n%s", row)
 	}
 }
+
+// The minimal block names a running stage's count in words, with no bar. A measured
+// stage must not ask for a bar of a negative width there: it once panicked the screen
+// on any terminal under 60x16.
+func TestTheMinimalBlockDrawsAMeasuredStage(t *testing.T) {
+	envs := []installflow.Envelope{env(at(0), "", 0, manifestAll()),
+		env(at(time.Second), installflow.StepInstallRDBReady, 1, installflow.StepStarted{}),
+		env(at(2*time.Second), installflow.StepInstallRDBReady, 1, installflow.StepProgress{
+			Mode: installflow.ProgressMeasured, Current: 3, Total: total(9), Unit: "pods"})}
+	view := viewOf(t, terminal.L1, 50, 14, envs, at(3*time.Second), nil)
+	if !strings.Contains(view, "Relational store ready 3/9 pods") {
+		t.Fatalf("the minimal block did not name the running stage's count:\n%s", view)
+	}
+}
