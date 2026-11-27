@@ -1,0 +1,20 @@
+ \x1b[1mdcctl install · kind-devicechain · v1.11.0\x1b[m
+────────────────────────────────────────────────────────────
+ \x1b[38;5;204mFAILED\x1b[m  \x1b[1mInstall failed\x1b[m
+ 
+ \x1b[38;5;109mStage       \x1b[mApply the cluster prerequisites
+ \x1b[38;5;109m            \x1b[m(install.prerequisites)
+ \x1b[38;5;109mCause       \x1b[mapplying the cluster prerequisites: exit
+ \x1b[38;5;109m            \x1b[mstatus 1: Error: creating the alert route:…
+ \x1b[38;5;109mChanges     \x1b[mThe cluster may be partly changed. Nothing was
+ \x1b[38;5;109m            \x1b[mrolled back.
+ \x1b[38;5;109mFix         \x1b[mFix the cause above, then re-run the same
+ \x1b[38;5;109m            \x1b[mcommand: an install converges, so it finishes
+ \x1b[38;5;109m            \x1b[mwhatever this run left half done.
+ \x1b[38;5;109mRe-run      \x1b[m\x1b[38;5;38mdcctl install local\x1b[m
+ \x1b[38;5;109m            \x1b[m\x1b[38;5;38m--alert-webhook='<redacted: supply privately>'\x1b[m
+ \x1b[38;5;109m            \x1b[m\x1b[38;5;38m--compact=true --yes=true\x1b[m
+ 
+────────────────────────────────────────────────────────────
+ › \x1b[7m[ Exit ]\x1b[m   [ Review for re-run ]
+ \x1b[38;5;109mTab move · Enter select · ? help · q exit\x1b[m

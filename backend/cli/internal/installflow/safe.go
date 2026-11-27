@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -18,8 +19,10 @@ const MaxTextBytes = 8 << 10
 const truncationMark = "…"
 
 // SafeText is display text that has been sanitised: terminal escape sequences
-// (CSI, OSC, DCS and the rest), C0 and C1 controls and bidirectional overrides
-// are removed, line breaks and tabs become spaces, invalid UTF-8 is replaced,
+// (CSI, OSC, DCS and the rest), C0 and C1 controls and every Unicode format
+// character (category Cf: the bidirectional controls and the invisible joiners
+// and separators) are removed, line breaks, tabs and the Unicode line and
+// paragraph separators become spaces, invalid UTF-8 is replaced,
 // and the result is capped at MaxTextBytes. The only way to make one is Text,
 // so a payload field of this type has always been through it.
 //
@@ -60,6 +63,7 @@ func sanitize(s string) string {
 		csi    // ESC [ ... final byte
 		str    // OSC / DCS / SOS / PM / APC body, ends at BEL or ST
 		strEsc // ESC inside a string body
+		inter  // ESC then intermediates (0x20-0x2F), until a final byte
 	)
 	state := ground
 	for i := 0; i < len(s); {
@@ -73,8 +77,20 @@ func sanitize(s string) string {
 			case ']', 'P', 'X', '^', '_':
 				state = str
 			default:
-				// A two-byte escape (or an intermediate we do not model): drop
-				// the introducer and this byte.
+				// An intermediate (0x20-0x2F) opens a longer escape such as a
+				// character-set designation, ESC ( B; anything else is a two-byte
+				// escape: drop the introducer and this byte.
+				state = ground
+				if r >= 0x20 && r <= 0x2f {
+					state = inter
+				}
+			}
+			continue
+		case inter:
+			// More intermediates, then one final byte ends the escape. Leaving the
+			// final byte behind would drop a stray character into the text, and
+			// leave the halves of whatever the escape split side by side.
+			if r < 0x20 || r > 0x2f {
 				state = ground
 			}
 			continue
@@ -109,11 +125,15 @@ func sanitize(s string) string {
 		case r == 0x9d || r == 0x90 || r == 0x98 || r == 0x9e || r == 0x9f: // C1 OSC, DCS, SOS, PM, APC
 			state = str
 			continue
-		case r == '\t' || r == '\n' || r == '\r':
+		case r == '\t' || r == '\n' || r == '\r' || r == 0x2028 || r == 0x2029:
 			r = ' '
 		case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
 			continue
-		case (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069):
+		case unicode.Is(unicode.Cf, r):
+			// Format characters draw nothing: the bidi controls, and the invisible
+			// joiners and separators (ZWSP, ZWNJ, ZWJ, word joiner, BOM, soft
+			// hyphen). Left in, one splits a value so that it matches no known
+			// secret while it still reads as that secret on screen.
 			continue
 		}
 		if b.Len()+utf8.RuneLen(r) > MaxTextBytes-len(truncationMark) {

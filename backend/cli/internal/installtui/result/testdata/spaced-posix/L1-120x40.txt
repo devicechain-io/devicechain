@@ -1,0 +1,20 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ dcctl install · team  prod · v1.11.0                                                                                 │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ FAILED  Install failed                                                                                               │
+│                                                                                                                      │
+│ Stage       Wait for the relational store (install.rdb-ready)                                                        │
+│ Cause       the relational store did not become ready within 15m0s: 2/3 instances ready                              │
+│ Changes     Changes were applied. Nothing was rolled back.                                                           │
+│ Claim       Released.                                                                                                │
+│ Record      Recorded as installed.                                                                                   │
+│                                                                                                                      │
+│ Fix         Install recorded; replicas still joining. Re-run the same command once the cluster has room for them: it │
+│             converges and waits again.                                                                               │
+│ Inspect     kubectl --context 'team  prod' get pods --all-namespaces                                                 │
+│ Re-run      dcctl install local --ha=true '--kube-context=team  prod' --yes=true                                     │
+│                                                                                                                      │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ › [ Exit ]   [ Review for re-run ]                                                                                   │
+│ Tab move · Enter select · ? help · q exit                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -1,0 +1,24 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ \x1b[1mdcctl install · kind-devicechain · v1.11.0\x1b[m                                                                           │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;5;221mSTOPPED\x1b[m  \x1b[1mInstall stopped\x1b[m                                                                                             │
+│                                                                                                                      │
+│ \x1b[38;5;109mStage       \x1b[mApply the cluster prerequisites (install.prerequisites)                                                  │
+│ \x1b[38;5;109mCause       \x1b[mdcctl stopped waiting for the interrupted OpenTofu command after its budget. It was asked to stop and to │
+│ \x1b[38;5;109m            \x1b[mwrite its state, but dcctl did not see it finish, so treat the cluster as partly applied, not untouched. │
+│ \x1b[38;5;109m            \x1b[mNothing is being rolled back. Re-run the same command once dcctl has exited; it converges whatever was   │
+│ \x1b[38;5;109m            \x1b[mleft half done.                                                                                          │
+│ \x1b[38;5;109mChanges     \x1b[mThe cluster may be partly changed. Nothing was rolled back.                                              │
+│ \x1b[38;5;109mClaim       \x1b[mNot released: the claim on the cluster is still held.                                                    │
+│ \x1b[38;5;109mRecord      \x1b[mMarked as applying; not recorded as installed.                                                           │
+│                                                                                                                      │
+│ \x1b[38;5;109mFix         \x1b[mRe-run the same command once dcctl has exited: an install converges, so it finishes whatever this run    │
+│ \x1b[38;5;109m            \x1b[mleft half done.                                                                                          │
+│ \x1b[38;5;109mInspect     \x1b[m\x1b[38;5;38mkubectl --context kind-devicechain get pods --all-namespaces\x1b[m                                             │
+│ \x1b[38;5;109mRe-run      \x1b[m\x1b[38;5;38mdcctl install local --yes=true\x1b[m                                                                           │
+│ \x1b[38;5;109m            \x1b[m\x1b[38;5;109mReview for re-run: waiting for the last run to settle.\x1b[m                                                   │
+│                                                                                                                      │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ › \x1b[7m[ Exit ]\x1b[m   \x1b[38;5;109m[ Review for re-run: waiting ]\x1b[m                                                                          │
+│ \x1b[38;5;109mTab move · Enter select · ? help · q exit\x1b[m                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

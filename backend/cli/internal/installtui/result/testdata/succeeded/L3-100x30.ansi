@@ -1,0 +1,20 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ \x1b[1mdcctl install · kind-lab · v1.11.0\x1b[m                                                               │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;5;78mDONE\x1b[m  \x1b[1mShared prerequisites installed\x1b[m                                                             │
+│                                                                                                  │
+│ \x1b[38;5;109mTarget      \x1b[mkind-lab (managed kind cluster)                                                      │
+│ \x1b[38;5;109mShape       \x1b[mCompact footprint, not HA                                                            │
+│ \x1b[38;5;109mTLS         \x1b[mon                                                                                   │
+│ \x1b[38;5;109mMonitoring  \x1b[moff                                                                                  │
+│ \x1b[38;5;109mBackups     \x1b[mconfigured                                                                           │
+│ \x1b[38;5;109mConnections \x1b[m300 (each instance reserves its own share)                                           │
+│ \x1b[38;5;109mConsole     \x1b[mnone for a cluster: it comes with an instance                                        │
+│                                                                                                  │
+│ \x1b[38;5;109mNext        \x1b[m\x1b[38;5;38mdcctl bootstrap local <instance> --cluster lab\x1b[m                                       │
+│ \x1b[38;5;109mCommand     \x1b[m\x1b[38;5;38mdcctl install local --cluster=lab --compact=true --no-tls=false --yes=true\x1b[m           │
+│                                                                                                  │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ › \x1b[7m[ Done ]\x1b[m                                                                                       │
+│ \x1b[38;5;109mEnter select · ? help · q exit\x1b[m                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

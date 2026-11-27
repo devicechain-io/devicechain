@@ -1,0 +1,8 @@
+dcctl install: stopped
+  Target:   kind-devicechain (managed kind cluster)
+  Stage:    Apply the cluster prerequisites (install.prerequisites)
+  Cause:    dcctl stopped waiting for the interrupted OpenTofu command after its budget. It was asked to stop and to write its state, but dcctl did not see it finish, so treat the cluster as partly applied, not untouched. Nothing is being rolled back. Re-run the same command once dcctl has exited; it converges whatever was left half done.
+  Changes:  The cluster may be partly changed. Nothing was rolled back.
+  Claim:    Not released: the claim on the cluster is still held.
+  Inspect:  kubectl --context kind-devicechain get pods --all-namespaces
+  Re-run:   dcctl install local --yes=true

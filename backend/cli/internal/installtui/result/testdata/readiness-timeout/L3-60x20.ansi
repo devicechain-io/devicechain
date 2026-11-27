@@ -1,0 +1,19 @@
+ \x1b[1mdcctl install · prod-east · v1.11.0\x1b[m
+────────────────────────────────────────────────────────────
+ \x1b[38;5;204mFAILED\x1b[m  \x1b[1mInstall failed\x1b[m
+ 
+ \x1b[38;5;109mStage       \x1b[mWait for the relational store
+ \x1b[38;5;109m            \x1b[m(install.rdb-ready)
+ \x1b[38;5;109mCause       \x1b[mthe relational store did not become ready
+ \x1b[38;5;109m            \x1b[mwithin 15m0s: 2/3 instances ready
+ \x1b[38;5;109mChanges     \x1b[mChanges were applied. Nothing was rolled back.
+ \x1b[38;5;109mClaim       \x1b[mReleased.
+ \x1b[38;5;109mFix         \x1b[mInstall recorded; replicas still joining.
+ \x1b[38;5;109m            \x1b[mRe-run the same command once the cluster has
+ \x1b[38;5;109m            \x1b[mroom for them: it converges and waits again.
+ \x1b[38;5;109mRe-run      \x1b[m\x1b[38;5;38mdcctl install local --kube-context=prod-east\x1b[m
+ \x1b[38;5;109m            \x1b[m\x1b[38;5;38m--ha=true --yes=true\x1b[m
+ 
+────────────────────────────────────────────────────────────
+ › \x1b[7m[ Exit ]\x1b[m   [ Review for re-run ]
+ \x1b[38;5;109mTab move · Enter select · ? help · q exit\x1b[m
