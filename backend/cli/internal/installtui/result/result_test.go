@@ -868,3 +868,81 @@ func TestALineFallsBackOnlyToACleanLine(t *testing.T) {
 		}
 	}
 }
+
+// 🔴 The last resort is checked too: a registered "[withheld]" never goes out as it
+// is, and a redaction that never settles leaves the line empty.
+func TestTheWithheldMarkerIsCheckedToo(t *testing.T) {
+	hub := canaryHub(t)
+	registered := []string{"a dcRound4Line7xQ line", withheld,
+		"dcRound4Ctx7xQ - v1.11.0", "dcctl install - [withheld]", // the header and its fallback
+		"Target:   dcRound4Ctx7xQ (existing context)", "Target:   [withheld]", // a summary line
+		"Target      dcRound4Ctx7xQ (existing context)", "Target      [withheld]"} // a screen line
+	for _, s := range registered {
+		if err := hub.AddSecret(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in := Input{Redact: hub.Redact}
+	if got := in.line("a dcRound4Line7xQ line", ""); strings.Contains(got, withheld) || strings.Contains(got, "dcRound4Line7xQ") {
+		t.Errorf("a registered marker went out unchecked: %q", got)
+	}
+	// Every line of the screen and the summary, its fallback and the marker all
+	// registered: nothing registered is drawn or printed.
+	sc := scenarioSucceeded()
+	sc.Redact = hub.Redact
+	sc.Target = installflow.Target{Mode: "existing-context", Context: installflow.Text("dcRound4Ctx7xQ")}
+	sc.Facts.Managed, sc.Facts.Cluster, sc.Facts.KubeContext = false, "", "dcRound4Ctx7xQ"
+	var sum bytes.Buffer
+	if err := WriteExitSummary(&sum, sc); err != nil {
+		t.Fatal(err)
+	}
+	for where, text := range map[string]string{"exit summary": sum.String(),
+		"screen": stripANSI(drive(sc, levelCaps(terminal.L1, 120, 40)).render())} {
+		for _, s := range registered {
+			if strings.Contains(text, s) {
+				t.Errorf("the %s holds the registered %q:\n%s", where, s, text)
+			}
+		}
+	}
+	grow := Input{Redact: func(s string) string { return s + "x" }}
+	if got := grow.line("anything", "fallback"); got != "" {
+		t.Errorf("an unsettled redaction drew %q", got)
+	}
+}
+
+// A composed line is checked for redaction only: a long command holding no secret
+// is printed whole, though its line is past the cap on one text.
+func TestALongCommandIsNotWithheldForItsLength(t *testing.T) {
+	in := scenarioReadiness()
+	in.Redact = canaryHub(t).Redact
+	head := "dcctl install local --kube-context="
+	in.Equivalent = Command{Line: head + strings.Repeat("a", 8180-len(head))}
+	if n := len(in.Equivalent.display(in.Shell)); n != 8180 || in.shown(in.Equivalent.display(in.Shell)) != in.Equivalent.display(in.Shell) {
+		t.Fatalf("the command is %d bytes, or not clean on its own", n)
+	}
+	var b bytes.Buffer
+	if err := WriteExitSummary(&b, in); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(b.String(), "  Re-run:   "+in.Equivalent.Line+"\n") {
+		t.Errorf("the long re-run command was not printed whole:\n%.300s", b.String())
+	}
+}
+
+// With its fallback clean, a screen line whose label completes a value keeps the
+// label and withholds the value.
+func TestAScreenLineKeepsItsLabelWhenOnlyTheValueIsWithheld(t *testing.T) {
+	hub := canaryHub(t)
+	secret := "Target      dcRound4Lab7xQ (existing context)"
+	if err := hub.AddSecret(secret); err != nil {
+		t.Fatal(err)
+	}
+	in := scenarioSucceeded()
+	in.Redact = hub.Redact
+	in.Target = installflow.Target{Mode: "existing-context", Context: installflow.Text("dcRound4Lab7xQ")}
+	in.Facts.Managed, in.Facts.Cluster, in.Facts.KubeContext = false, "", "dcRound4Lab7xQ"
+	text := stripANSI(drive(in, levelCaps(terminal.L1, 120, 40)).render())
+	if strings.Contains(text, secret) || !strings.Contains(text, "Target      "+withheld) {
+		t.Errorf("the screen draws %q, or not its label with the value withheld:\n%s", secret, text)
+	}
+}
