@@ -47,6 +47,12 @@ func Canaries() []Canary {
 			"    token: dccanarykubetoken9w8x7v6u5t4s3r\n" +
 			"    client-key-data: dcCanaryKubeKEYdata4Hq8Zt1Mv6Xc\n",
 			Cores: []string{"dccanarykubetoken9w8x7v6u5t4s3r", "dcCanaryKubeKEYdata4Hq8Zt1Mv6Xc"}},
+		// A value holding an invisible format character (a ZWJ) and a quote. It is
+		// drawn without the ZWJ, and quoted in JSON it is drawn with the escape and
+		// without the ZWJ: a form neither the raw value nor its plain sanitised form
+		// matches.
+		{Label: "format-char", Value: "dcCanaryFmt\"Join\u200der5Rk8Vd3Hx2Qm",
+			Cores: []string{"dcCanaryFmt\"Join", "er5Rk8Vd3Hx2Qm"}},
 	}
 }
 

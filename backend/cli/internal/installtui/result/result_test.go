@@ -495,6 +495,12 @@ func TestASecretSplitByControlBytesIsRedacted(t *testing.T) {
 	// controls, ZWSP, ZWNJ, ZWJ, word joiner, BOM, soft hyphen, LRM, RLM, Arabic
 	// letter mark.
 	splitters = append(splitters, string(rune(0x9b))+"31m")
+	// An UNTERMINATED control sequence, cut short by a byte that cannot continue
+	// one: a control byte, an escape, an invisible format character. Swallowing
+	// past that byte would take part of the secret with it and leave the halves
+	// either side, which match nothing.
+	splitters = append(splitters, string(rune(0x9b))+"\x07", string(rune(0x9b))+"12\x00",
+		string(rune(0x9b))+"\x1b[0m", string(rune(0x9b))+string(rune(0x200d)), "\x1b[\x07", "\x1b[1;\x0e")
 	for _, r := range []rune{0x202a, 0x202e, 0x2066, 0x2069, 0x200b, 0x200c, 0x200d, 0x2060, 0xfeff,
 		0x00ad, 0x200e, 0x200f, 0x061c} {
 		splitters = append(splitters, string(r))
@@ -764,5 +770,101 @@ func TestCommandsNeverCarryASanitisedTarget(t *testing.T) {
 	// A raw value the screen can draw is used as it is.
 	if got := drawableArg("team  prod", "kube-context"); got != "team  prod" {
 		t.Errorf("a drawable value became %q", got)
+	}
+}
+
+// 🔴 A LINE IS CHECKED AS IT IS COMPOSED, label, padding and separators included.
+// Each part of a line can be clean on its own while the line they make is a
+// registered value: the header's context, separator and version; the exit
+// summary's label, its padding and the value; the screen's label column and the
+// value. A line that redaction would change is withheld, never drawn.
+func TestComposedLinesCannotRebuildASecret(t *testing.T) {
+	hub := canaryHub(t)
+	cases := []struct{ ctx, secret, where string }{
+		{"dcRound3Header7xQ", "dcRound3Header7xQ - v1.11.0", "screen"},                    // the header, ASCII glyphs
+		{"dcRound3Row7xQ", "Target:   dcRound3Row7xQ (existing context)", "exit summary"}, // the summary's label
+		{"dcRound3Body7xQ", "Target      dcRound3Body7xQ (existing context)", "screen"},   // the screen's label column
+	}
+	// A line's FALLBACK, its value withheld, is checked too: one that is itself a
+	// registered value gives way to the bare marker.
+	fallbacks := []string{"dcctl install - [withheld]", "Target:   [withheld]", "Target      [withheld]"}
+	for _, s := range fallbacks {
+		cases = append(cases, struct{ ctx, secret, where string }{secret: s})
+	}
+	for _, c := range cases {
+		if err := hub.AddSecret(c.secret); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range cases {
+		if c.ctx == "" {
+			continue // a fallback: registered, and checked for in every text below
+		}
+		// The success screen draws a Target row; the failure screen does not.
+		in := scenarioSucceeded()
+		in.Redact = hub.Redact
+		in.Target = installflow.Target{Mode: "existing-context", Context: installflow.Text(c.ctx)}
+		in.Facts.Managed, in.Facts.Cluster, in.Facts.KubeContext = false, "", c.ctx
+		for _, part := range []string{c.ctx, in.target(), in.Version} {
+			if in.shown(part) != part {
+				t.Fatalf("%s: the part %q is not clean on its own, so this proves nothing", c.ctx, part)
+			}
+		}
+		var b bytes.Buffer
+		if err := WriteExitSummary(&b, in); err != nil {
+			t.Fatal(err)
+		}
+		texts := map[string]string{"exit summary": b.String()}
+		for _, lv := range []terminal.Level{terminal.L1, terminal.L2} {
+			texts["screen"] += stripANSI(drive(in, levelCaps(lv, 120, 40)).render()) + "\n"
+		}
+		for where, text := range texts {
+			for _, other := range cases {
+				if strings.Contains(text, other.secret) {
+					t.Errorf("%s: the %s rebuilds the registered %q:\n%s", c.ctx, where, other.secret, text)
+				}
+			}
+			if strings.Contains(text, "[redacted]") {
+				t.Errorf("%s: the %s draws a line redaction changed instead of withholding it:\n%s", c.ctx, where, text)
+			}
+		}
+		if !strings.Contains(texts[c.where], withheld) {
+			t.Errorf("%s: the %s withholds nothing:\n%s", c.ctx, c.where, texts[c.where])
+		}
+	}
+}
+
+// The minimal status block joins "Next:" to the command's words on one line; that
+// line is checked whole too.
+func TestTheMinimalBlocksNextLineCannotRebuildASecret(t *testing.T) {
+	hub := canaryHub(t)
+	in := scenarioSucceeded()
+	in.Redact = hub.Redact
+	m := drive(in, levelCaps(terminal.L1, 50, 12))
+	words := m.commandWords(in.nextSteps()[0], nil)
+	secret := "Next: " + strings.Join(words[:2], " ")
+	if err := hub.AddSecret(secret); err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(words, " "); in.shown(joined) != joined {
+		t.Fatalf("the command %q is not clean on its own, so this proves nothing", joined)
+	}
+	text := stripANSI(m.render())
+	if strings.Contains(text, secret) || !strings.Contains(text, withheld) {
+		t.Errorf("the minimal block draws %q, or withholds nothing:\n%s", secret, text)
+	}
+}
+
+func TestALineFallsBackOnlyToACleanLine(t *testing.T) {
+	in := Input{Redact: func(s string) string { return strings.ReplaceAll(s, "secret", "[redacted]") }}
+	for _, c := range [][3]string{
+		{"a clean line", "fallback", "a clean line"},
+		{"a secret line", "fallback", "fallback"},
+		{"a secret line", "secret fallback", withheld},
+		{"a secret line", "", withheld},
+	} {
+		if got := in.line(c[0], c[1]); got != c[2] {
+			t.Errorf("line(%q, %q) = %q, want %q", c[0], c[1], got, c[2])
+		}
 	}
 }

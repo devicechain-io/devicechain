@@ -22,15 +22,19 @@ import (
 // and the display-safe commands. A one-time value is never printed here again.
 func WriteExitSummary(w io.Writer, in Input) error {
 	var b strings.Builder
+	// Every line is re-checked as it is composed, label and padding included:
+	// joining safe values can complete a registered one.
+	put := func(s, fallback string) {
+		b.WriteString(in.line(s, fallback))
+		b.WriteByte('\n')
+	}
 	line := func(label, value string) {
 		if value == "" {
 			return
 		}
-		// Each line is re-checked as it is composed: joining safe values can
-		// complete a registered one.
-		fmt.Fprintf(&b, "  %-9s %s\n", label+":", in.shown(value))
+		put(fmt.Sprintf("  %-9s %s", label+":", in.shown(value)), fmt.Sprintf("  %-9s %s", label+":", withheld))
 	}
-	fmt.Fprintf(&b, "dcctl install: %s\n", in.outcome())
+	put("dcctl install: "+in.outcome(), "dcctl install: "+withheld)
 	line("Target", in.target())
 	switch kindOf(in.Summary) {
 	case kindSucceeded, kindPlanned:
@@ -50,7 +54,7 @@ func WriteExitSummary(w io.Writer, in Input) error {
 		line("Re-run", in.Equivalent.display(in.Shell))
 	}
 	if in.Equivalent.Template && in.Equivalent.Line != "" {
-		b.WriteString("  (template: supply the redacted credentials privately)\n")
+		put("  (template: supply the redacted credentials privately)", "")
 	}
 	_, err := io.WriteString(w, b.String())
 	return err

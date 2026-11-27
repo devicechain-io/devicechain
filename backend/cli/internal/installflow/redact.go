@@ -59,7 +59,7 @@ func newRedactor() *redactor {
 
 // add registers secret strictly: see redactor.
 func (r *redactor) add(secret string) bool {
-	if len(secret) < MinSecretBytes {
+	if !longEnough(secret, MinSecretBytes) {
 		return false
 	}
 	forms := secretForms(secret, MinSecretBytes)
@@ -74,7 +74,7 @@ func (r *redactor) add(secret string) bool {
 
 // addToken registers secret as a TOKEN value: see redactor.
 func (r *redactor) addToken(secret string) bool {
-	if len(secret) < MinRedactionBytes {
+	if !longEnough(secret, MinRedactionBytes) {
 		return false
 	}
 	forms := secretForms(secret, MinRedactionBytes)
@@ -96,14 +96,32 @@ func (r *redactor) addToken(secret string) bool {
 	return true
 }
 
-// secretForms is secret and its derived forms: raw, sanitised for display, URL
-// query-, path- and userinfo-escaped, base64, JSON-escaped (with and without HTML
-// escaping), and each substantial line of a multi-line value. Forms shorter than
-// minimum are dropped.
+// longEnough reports whether secret is long enough to register, as it comes AND
+// as it is drawn.
+//
+// 🔴 WHAT IS MATCHED IS WHAT IS DRAWN. Every text is sanitised before it is
+// matched, so a value holding control or format characters is only ever seen in
+// its sanitised form: "abc" + ZWJ is six bytes, and is drawn as the three of "abc".
+// Such a value is REFUSED when its drawn form is under the minimum, exactly as a
+// value that short is, rather than matched as a token: a token match of three
+// visible bytes would redact ordinary words, which is the reason for the minimum,
+// and accepting the value while matching less would tell the caller it is covered
+// when it is not. Refused, the caller learns it is not covered and says so (the
+// bootstrap's registration falls back to a token match, counting what neither
+// takes).
+func longEnough(secret string, minimum int) bool {
+	return len(secret) >= minimum && len(sanitize(secret)) >= minimum
+}
+
+// secretForms is secret and its derived forms: raw, URL query-, path- and
+// userinfo-escaped, base64, JSON-escaped (with and without HTML escaping), and
+// each substantial line of a multi-line value, every one of them also as it is
+// drawn once sanitised (a JSON-escaped value keeps a format character the
+// escaping leaves alone, and is drawn with the escapes and without it). Forms
+// shorter than minimum are dropped.
 func secretForms(secret string, minimum int) []string {
 	candidates := []string{
 		secret,
-		sanitize(secret),
 		url.QueryEscape(secret),
 		url.PathEscape(secret),
 		userinfoEscaped(secret),
@@ -131,8 +149,10 @@ func secretForms(secret string, minimum int) []string {
 	}
 	var out []string
 	for _, c := range candidates {
-		if len(c) >= minimum {
-			out = append(out, c)
+		for _, f := range []string{c, sanitize(c)} {
+			if len(f) >= minimum {
+				out = append(out, f)
+			}
 		}
 	}
 	return out

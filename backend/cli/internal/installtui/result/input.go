@@ -182,6 +182,25 @@ func (in Input) shown(s string) string {
 	return t.String()
 }
 
+// line is a COMPOSED line as it may be drawn or printed: itself when the hub's
+// redaction leaves it alone, otherwise fallback (the line with its value
+// withheld) when that is left alone, otherwise the bare marker.
+//
+// 🔴 THE WHOLE LINE IS CHECKED, NOT ONLY ITS PARTS. A label, its padding and a
+// separator are text too: "Target:" and the spaces after it, joined to a clean
+// value, can be a registered value that neither part is. A line redaction would
+// change is withheld whole rather than drawn redacted, since a marker in the
+// middle of a label's line says nothing the operator can use.
+func (in Input) line(s, fallback string) string {
+	if in.shown(s) == s {
+		return s
+	}
+	if fallback != "" && in.shown(fallback) == fallback {
+		return fallback
+	}
+	return withheld
+}
+
 // ErrIncomplete is returned when the engine returned no error yet the run did not
 // succeed: its verdict is not success, or it never sent one.
 var ErrIncomplete = errors.New("the run's progress could not be reported, so it is not known to have finished")

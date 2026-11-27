@@ -401,7 +401,16 @@ func (m *Model) bodyLines(width, budget int) []string {
 				lines = append(lines, "")
 				continue
 			}
-			lines = append(lines, paint(m.theme.dim, padRight(label, labelWidth))+paint(st, l))
+			// 🔴 The label column and the value are checked as ONE line: the label
+			// and its padding, joined to a clean value, can be a registered one.
+			lab := padRight(label, labelWidth)
+			if plain := lab + l; m.in.shown(plain) != plain {
+				l = withheld
+				if fb := lab + l; m.in.shown(fb) != fb {
+					lab = padRight("", labelWidth)
+				}
+			}
+			lines = append(lines, paint(m.theme.dim, lab)+paint(st, l))
 		}
 	}
 	return clip(lines, budget, width, m.theme)
@@ -450,7 +459,11 @@ func (m *Model) header(width int) string {
 	if m.in.Version != "" {
 		parts = append(parts, m.in.Version)
 	}
-	return paint(m.theme.bd, truncate(strings.Join(parts, " "+m.theme.g.dot+" "), width))
+	// The JOINED line is checked as it is drawn, truncation included: the context,
+	// the separator and the version can make a registered value none of them is.
+	sep := " " + m.theme.g.dot + " "
+	line := m.in.line(truncate(strings.Join(parts, sep), width), truncate(parts[0]+sep+withheld, width))
+	return paint(m.theme.bd, truncate(line, width))
 }
 
 func (m *Model) render() string {
@@ -532,6 +545,11 @@ func (m *Model) renderMinimal(w, h int) string {
 		next = wrap("Fix the cause, then re-run the same command.", inner)
 	}
 	lines = append(lines, next...)
+	// Each line is checked as it is drawn: "Next:" or "At:" joined to a clean
+	// value can be a registered one.
+	for i, l := range lines {
+		lines[i] = m.in.line(l, "")
+	}
 	// The verdict and the way out always show; what is between them fits the rest.
 	if h == 2 {
 		lines = nil
