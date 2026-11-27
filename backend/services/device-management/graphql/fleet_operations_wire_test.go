@@ -13,8 +13,10 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/ledger"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
+	gql "github.com/graph-gophers/graphql-go"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -80,7 +82,7 @@ func person(authorities ...auth.Authority) *auth.Claims {
 }
 
 func fleetSchema() *gqlcore.Schema {
-	return gqlcore.MustParseSchema(SchemaContentWithFleetOperations, &SchemaResolver{})
+	return gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{})
 }
 
 func execFleet(t *testing.T, ctx context.Context, query string, vars map[string]any) (json.RawMessage, []string) {
@@ -103,21 +105,48 @@ func withEngine(t *testing.T) {
 	t.Cleanup(restore)
 }
 
+// bulkChangeSection is the served schema's bulk-change type definitions, from their marker to the end.
+func bulkChangeSection(t *testing.T) string {
+	t.Helper()
+	_, section, found := strings.Cut(SchemaContent, "\n# Bulk changes (Preview)\n")
+	require.True(t, found, "the bulk-change section marker is missing from schema.graphql")
+	require.Contains(t, section, "enum BulkChangeDispatch")
+	return section
+}
+
 func TestBulkChangeFragmentNames(t *testing.T) {
-	fragment := strings.ReplaceAll(strings.ToLower(fleetOperationSchema), "fleet:operate", "")
+	fragment := strings.ReplaceAll(strings.ToLower(bulkChangeSection(t)), "fleet:operate", "")
 	for _, forbidden := range []string{"fleet", "ledger"} {
-		require.False(t, strings.Contains(fragment, forbidden), "fragment contains %q", forbidden)
+		require.False(t, strings.Contains(fragment, forbidden), "bulk-change section contains %q", forbidden)
 	}
 }
 
-func TestTheBulkChangeFragmentIsNotServedUntilTheEngineIs(t *testing.T) {
-	require.NotContains(t, ServedSchema(), "createBulkChange", "an unserved engine must not be reachable")
-	require.NotContains(t, ServedSchema(), "BulkChangeDispatch")
-	require.NotContains(t, SchemaContent, "BulkChangeDispatch")
-	// The fragment itself must parse with the base schema, and the base schema without it still does.
-	require.Contains(t, SchemaContentWithFleetOperations, "createBulkChange")
-	_ = fleetSchema()
-	_ = gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{})
+// Bulk changes are served: the operations are in the schema the service mounts. That each is
+// described as Preview is checked on the SDL by docsgql's sdldesc tests.
+func TestBulkChangesAreServed(t *testing.T) {
+	require.True(t, ledger.Served)
+	// graphql-go itself, not the served wrapper: the service disables introspection.
+	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
+	res := schema.Exec(context.Background(), `{ q: __type(name: "Query") { fields { name } } m: __type(name: "Mutation") { fields { name } } }`, "", nil)
+	require.Empty(t, res.Errors)
+	var out struct {
+		Q, M struct {
+			Fields []struct{ Name string }
+		}
+	}
+	require.NoError(t, json.Unmarshal(res.Data, &out))
+	got := map[string]bool{}
+	for _, f := range append(out.Q.Fields, out.M.Fields...) {
+		got[f.Name] = true
+	}
+	for _, name := range []string{
+		"bulkChange", "bulkChanges", "bulkChangeLines", "planBulkChange", "previewBulkChangeResume", "previewBulkChangeReversal",
+		"createBulkChange", "startBulkChange", "pauseBulkChange", "resumeBulkChange", "abortBulkChange",
+		"reverseBulkChange", "resolveAmbiguousBulkChangeLines",
+	} {
+		require.True(t, got[name], "%s is not served", name)
+	}
+	require.Equal(t, []string{model.FleetKindConfigSet}, ledger.ExecutableKinds(), "device-management registers config.set and nothing else")
 }
 
 func TestPlanAndCreateOverTheWire(t *testing.T) {
@@ -287,8 +316,9 @@ func TestAScopedMemberIsRefusedEverywhere(t *testing.T) {
 }
 
 func TestCreateOverTheWireRefusesAKindTheBuildCannotExecute(t *testing.T) {
-	// No withEngine: the registry is empty in this build, so create must say so with its code and
-	// write nothing.
+	// The kind is shut, as on a build that does not register it: create must say so with its code
+	// and write nothing.
+	t.Cleanup(model.OpenFleetKindsForTest(func(string) bool { return false }))
 	ctx, api := fleetWireCtx(t, person(auth.DeviceRead, auth.DeviceWrite, auth.FleetOperate))
 	_, errs := execFleet(t, ctx, fleetWireCreate, fleetWireRequest("op1", "d1"))
 	require.Len(t, errs, 1)

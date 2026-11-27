@@ -228,6 +228,42 @@ var publishesNotCovered = map[string]string{
 // been published, because they reference a published VERSION NUMBER.
 var afterPublish = []entity{
 	{
+		// Depends on: device, device-profile-configuration, device-profile-version.
+		//
+		// A BULK CHANGE, created through the real API and never started: a drill must never
+		// command a device, and a created change applies nothing until a person starts it. Its
+		// create writes all five bulk-change journal tables (the header, its runtime row, its
+		// one line, its frozen contract and its CREATE event), which the table sweep then finds.
+		// The key is the configuration key the profile declares and publishes above, so the
+		// plan admits the probe's one device rather than refusing it.
+		//
+		// Only fields nothing but data loss changes are selected: a READY change expires after
+		// seven days (its dispatch then moves), and progress, executor and evidence are derived.
+		//
+		// A SKIPPABLE LEAF: a baseline from before bulk changes were served does not declare
+		// the request type, so the row is skipped there and runs on a newer one. It does not
+		// Record.
+		Name:     "bulk-change",
+		Area:     "device-management",
+		Mutation: "createBulkChange",
+		Input:    "BulkChangeCreateRequest!",
+		Read:     "bulkChange",
+		Single:   true,
+		Requires: []string{"BulkChangeCreateRequest.configSet"},
+		Fields:   "token name kind targetKind targetCount requestDigest planDigest contractVersion contractDigest intent initiator",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token": s.tok("bulk-change"),
+				"name":  "apiprobe bulk change",
+				"kind":  "config.set",
+				"configSet": map[string]any{
+					"key": probeConfigKey, "value": probeConfigValue, "valueType": probeValueType,
+				},
+				"deviceTokens": []any{s.tokens["device"]},
+			}}
+		},
+	},
+	{
 		// Depends on: device-profile, device-profile-version.
 		//
 		// An automation change review of the profile just published. It is FIRST in this

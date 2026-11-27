@@ -49,8 +49,13 @@ func TestFleetOperationReadinessPostgres(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(res.Data, &out))
 		require.Equal(t, 1, out.Readiness.ProtocolVersion)
-		require.Equal(t, []string{}, out.Readiness.ExecutableKinds)
 		require.Zero(t, out.Readiness.OrphanedAttributeRows)
+		// Served: config.set is executable exactly while the guard is ENFORCED (no orphans here).
+		if out.Readiness.Enforcement == "ENFORCED" {
+			require.Equal(t, []string{model.FleetKindConfigSet}, out.Readiness.ExecutableKinds)
+		} else {
+			require.Equal(t, []string{}, out.Readiness.ExecutableKinds, out.Readiness.Enforcement)
+		}
 		return out.Readiness.Enforcement
 	}
 	fn := `"device-management".` + model.FleetOperationEnforcementFunction

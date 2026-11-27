@@ -10,19 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ledger"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
-
-func TestFleetDriverIsNotRegisteredWhileUnserved(t *testing.T) {
-	require.False(t, ledger.Served)
-	require.Equal(t, time.Second, fleetDriverInterval)
-	require.NoError(t, initFleetDriver())
-	require.Nil(t, FleetDriver)
-}
 
 func TestFleetDriverLifecycleCancelsAndWaitsForPass(t *testing.T) {
 	source, err := os.ReadFile("main.go")
@@ -56,10 +48,10 @@ func TestFleetDriverLifecycleCancelsAndWaitsForPass(t *testing.T) {
 	require.NoError(t, task.Terminate(context.Background()))
 }
 
-// The bulk-change series are registered only on a build that serves bulk changes, under the
+// The bulk-change series are registered on a build that serves bulk changes, under the
 // service's own namespace and subsystem, before any task can write them.
-func TestBulkChangeMetricsRegisterOnlyWhenServed(t *testing.T) {
-	require.False(t, ledger.Served)
+func TestBulkChangeMetricsRegisterWhenServed(t *testing.T) {
+	require.True(t, ledger.Served)
 	source, err := os.ReadFile("main.go")
 	require.NoError(t, err)
 	init, expiry := strings.Index(string(source), "initBulkChangeMetrics()"), strings.Index(string(source), "initFleetExpirySweep()")
@@ -73,11 +65,6 @@ func TestBulkChangeMetricsRegisterOnlyWhenServed(t *testing.T) {
 	Microservice = ms
 	initBulkChangeMetrics()
 	families, err := reg.Gather()
-	require.NoError(t, err)
-	require.Empty(t, families, "an unserved build exports no bulk-change series")
-
-	model.NewBulkChangeMetrics(ms)
-	families, err = reg.Gather()
 	require.NoError(t, err)
 	require.Len(t, families, 18)
 	for _, f := range families {

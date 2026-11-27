@@ -135,6 +135,16 @@ and `dcctl bulk-change readiness`. The deprecated `fleetOperationReadiness`,
 working for compatibility, including v1.9 clients. The rename does not restart the preview
 clock. Promotion: **two minors after it joined (default)**. They require `fleet:operate`; scoped members are refused.
 
+In **v1.10** bulk changes themselves join the preview tier: the queries `bulkChange`,
+`bulkChanges`, `bulkChangeLines`, `planBulkChange`, `previewBulkChangeResume` and
+`previewBulkChangeReversal`, the mutations `createBulkChange`, `startBulkChange`,
+`pauseBulkChange`, `resumeBulkChange`, `abortBulkChange`, `reverseBulkChange` and
+`resolveAmbiguousBulkChangeLines`, with their dedicated types, inputs, enum values and error codes,
+and the `dcctl bulk-change` commands other than `readiness`. Promotion: **two minors after they
+joined (default)**. Planning, creating, starting, resuming, reversing and resolving require
+`device:write` and `fleet:operate`; pausing and aborting require `device:write`; reads require
+`device:read`. Agent and service identities and scoped members are refused.
+
 ## Supported upgrade paths {#upgrade-paths}
 
 - **Within a minor** (`1.4.0` to `1.4.3`) and **to the next minor** (`1.4.x` to `1.5.0`) are the supported paths.

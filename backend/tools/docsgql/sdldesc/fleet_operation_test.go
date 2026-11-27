@@ -13,11 +13,7 @@ import (
 )
 
 func TestFleetOperationReadinessIsPreviewAndAdditive(t *testing.T) {
-	data, err := os.ReadFile("../../../services/device-management/graphql/schema.graphql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sdl := string(data)
+	sdl := preServeSDL(t)
 	base, _, found := strings.Cut(sdl, "# Fleet operation readiness (Preview)")
 	if !found {
 		t.Fatal("readiness types missing")
@@ -68,11 +64,7 @@ func TestFleetOperationReadinessIsPreviewAndAdditive(t *testing.T) {
 }
 
 func TestBulkChangeRenamePreservesV19Contract(t *testing.T) {
-	data, err := os.ReadFile("../../../services/device-management/graphql/schema.graphql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sdl := string(data)
+	sdl := preServeSDL(t)
 	base, _, found := strings.Cut(sdl, "# Bulk change readiness (Preview)")
 	if !found {
 		t.Fatal("bulk change types missing")
@@ -103,39 +95,122 @@ func TestBulkChangeRenamePreservesV19Contract(t *testing.T) {
 	}
 }
 
-func TestBulkChangeFragmentDescriptionsArePreview(t *testing.T) {
-	base, err := os.ReadFile("../../../services/device-management/graphql/schema.graphql")
+// servedBulkChangeOperations are the operations serving bulk changes added to Query and Mutation.
+var servedBulkChangeOperations = []string{
+	"bulkChange", "bulkChanges", "bulkChangeLines", "planBulkChange", "previewBulkChangeResume", "previewBulkChangeReversal",
+	"createBulkChange", "startBulkChange", "pauseBulkChange", "resumeBulkChange", "abortBulkChange",
+	"reverseBulkChange", "resolveAmbiguousBulkChangeLines",
+}
+
+const bulkChangeSectionMarker = "\n# Bulk changes (Preview)\n"
+
+func servedSDL(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile("../../../services/device-management/graphql/schema.graphql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	source, err := os.ReadFile("../../../services/device-management/graphql/fleet_operations_schema.go")
+	return string(data)
+}
+
+// preServeSDL is the served schema with bulk changes taken back out: the section of their type
+// definitions, and each operation's field with the description above it. It is the schema the
+// readiness tests were written against, and the "before" of the served-flip diff.
+func preServeSDL(t *testing.T) string {
+	t.Helper()
+	sdl, _, found := strings.Cut(servedSDL(t), bulkChangeSectionMarker)
+	if !found {
+		t.Fatal("the bulk-change section marker is missing")
+	}
+	lines := strings.Split(sdl, "\n")
+	drop := map[int]bool{}
+	for i, line := range lines {
+		field := strings.TrimPrefix(line, "    ")
+		if field == line || strings.HasPrefix(field, " ") {
+			continue
+		}
+		for _, op := range servedBulkChangeOperations {
+			if !strings.HasPrefix(field, op+"(") && !strings.HasPrefix(field, op+":") {
+				continue
+			}
+			drop[i] = true
+			if field == op+"(" { // arguments on lines of their own, up to the closing "    ): Type"
+				for k := i + 1; k < len(lines); k++ {
+					drop[k] = true
+					if strings.HasPrefix(lines[k], "    )") {
+						break
+					}
+				}
+			}
+			j := i - 1
+			if d := strings.TrimSpace(lines[j]); d == `"""` {
+				drop[j] = true
+				for j--; j >= 0 && !strings.HasPrefix(strings.TrimSpace(lines[j]), `"""`); j-- {
+					drop[j] = true
+				}
+				drop[j] = true
+			} else if strings.HasPrefix(d, `"""`) && strings.HasSuffix(d, `"""`) && len(d) > 6 {
+				drop[j] = true
+			}
+		}
+	}
+	kept := make([]string, 0, len(lines))
+	for i, line := range lines {
+		if !drop[i] {
+			kept = append(kept, line)
+		}
+	}
+	out := strings.Join(kept, "\n") + "\n"
+	for _, op := range servedBulkChangeOperations {
+		if strings.Contains(out, " "+op+"(") || strings.Contains(out, " "+op+":") {
+			t.Fatalf("the pre-serve schema still declares %s", op)
+		}
+	}
+	return out
+}
+
+// Serving bulk changes is additive: against the schema without them, every difference is an added
+// type or field, the thirteen operations are among them, and every added description begins Preview.
+func TestServedBulkChangesArePreviewAndAdditive(t *testing.T) {
+	before, after := preServeSDL(t), servedSDL(t)
+	old, err := sdlcompat.Parse(before)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The unserved fragment deliberately lives in a Go raw string, outside the published SDL.
-	_, fragment, found := strings.Cut(string(source), "const fleetOperationSchema = `")
-	if !found {
-		t.Fatal("fragment constant missing")
+	cur, err := sdlcompat.Parse(after)
+	if err != nil {
+		t.Fatal(err)
 	}
-	fragment, _, found = strings.Cut(fragment, "`")
-	if !found {
-		t.Fatal("fragment constant is not terminated")
+	added := map[string]bool{}
+	for _, c := range sdlcompat.Diff("device-management", old, cur) {
+		if c.Kind != sdlcompat.TypeAdded && c.Kind != sdlcompat.FieldAdded {
+			t.Errorf("serving bulk changes is not additive: %v", c)
+		}
+		added[c.Coord] = true
 	}
-	before, err := sdldesc.Parse(string(base))
+	for _, op := range servedBulkChangeOperations {
+		if !added["Query."+op] && !added["Mutation."+op] {
+			t.Errorf("%s was not added", op)
+		}
+	}
+	if !added["BulkChange"] || !added["BulkChangeReversalRequest"] {
+		t.Fatalf("the bulk-change types were not added: %v", added)
+	}
+	elements, err := sdldesc.Parse(before)
 	if err != nil {
 		t.Fatal(err)
 	}
 	existing := map[string]bool{}
-	for _, e := range before {
+	for _, e := range elements {
 		existing[e.Coord] = true
 	}
-	after, err := sdldesc.Parse(string(base) + "\n" + fragment)
+	elements, err = sdldesc.Parse(after)
 	if err != nil {
 		t.Fatal(err)
 	}
 	count := 0
-	for _, e := range after {
-		if existing[e.Coord] || e.Desc == "" {
+	for _, e := range elements {
+		if existing[e.Coord] {
 			continue
 		}
 		count++
@@ -143,7 +218,7 @@ func TestBulkChangeFragmentDescriptionsArePreview(t *testing.T) {
 			t.Errorf("%s description does not begin Preview.", e.Coord)
 		}
 	}
-	if count == 0 {
-		t.Fatal("no fragment descriptions checked")
+	if count < 100 {
+		t.Fatalf("checked %d new descriptions; the bulk-change surface has far more", count)
 	}
 }

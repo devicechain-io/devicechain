@@ -152,7 +152,7 @@ func TestWatchStopsOnPauseAbortAndCancellation(t *testing.T) {
 func TestUnservedAndUpgradingNeverBecomeNotFound(t *testing.T) {
 	for _, served := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unserved", true: "upgrading"}[served], func(t *testing.T) {
-			schema := servedBulkChangeTestSDL(t)
+			schema := unservedSDL(t)
 			if served {
 				schema = bulkChangeTestSDL(t)
 			}
@@ -401,7 +401,7 @@ func TestLinesEmptyOrBrokenPaging(t *testing.T) {
 }
 
 func TestVersionProbeRecognizesBothDirectionsOfARoll(t *testing.T) {
-	oldSchema, newSchema := servedBulkChangeTestSDL(t), bulkChangeTestSDL(t)
+	oldSchema, newSchema := unservedSDL(t), bulkChangeTestSDL(t)
 	for _, firstOld := range []bool{true, false} {
 		initial, fresh := newSchema, oldSchema
 		if firstOld {

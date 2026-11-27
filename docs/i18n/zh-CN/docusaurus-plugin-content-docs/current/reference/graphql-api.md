@@ -1017,6 +1017,11 @@ Preview. device-management 租户数据平面提供 `bulkChangeReadiness` 查询
 禁用状态均返回 `DISABLED`。缺少或不匹配的强制执行机制返回 `NOT_INSTALLED`。
 该查询会统计行数，因此应将其视为需要答案时才运行的诊断，而不是用于轮询。预览期限从 v1.9 开始。
 
+自 v1.10 起，当强制执行状态为 `ENFORCED` 且孤立行计数为零时，`executableKinds` 会列出
+`config.set`，这正是 `startBulkChange` 和 `resumeBulkChange` 检查的两项；否则为空。批量变更的查询和
+变更操作本身（`planBulkChange`、`createBulkChange`、`startBulkChange` 等）自 v1.10 起为 Preview；
+参见[设备批量变更](../guides/bulk-changes.md)。
+
 Preview 命令显示相同的四项信息，仅在状态为 `ENFORCED` 且孤立行数为零时成功退出。
 v1.9 中非零退出码是预期行为。登录及实例选项与 `dcctl attr` 相同：
 

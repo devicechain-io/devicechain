@@ -27,9 +27,23 @@ type FleetOperationReadinessResolver struct {
 	orphanErr  error
 }
 
-func (r *FleetOperationReadinessResolver) ProtocolVersion() int32    { return r.protocolVersion }
-func (r *FleetOperationReadinessResolver) Enforcement() string       { return r.enforcement }
-func (r *FleetOperationReadinessResolver) ExecutableKinds() []string { return r.executableKinds }
+func (r *FleetOperationReadinessResolver) ProtocolVersion() int32 { return r.protocolVersion }
+func (r *FleetOperationReadinessResolver) Enforcement() string    { return r.enforcement }
+
+// ExecutableKinds is what the caller can run now: the kinds this build registers, while the database
+// enforces the writer protocol and the caller's tenant has no orphaned attribute rows. Those are the
+// two conditions start and resume check. An orphan count that cannot be read answers no kinds here and
+// its error on orphanedAttributeRows, in the same response.
+func (r *FleetOperationReadinessResolver) ExecutableKinds() []string {
+	if r.enforcement != "ENFORCED" {
+		return []string{}
+	}
+	r.once.Do(func() { r.orphanRows, r.orphanErr = r.orphans() })
+	if r.orphanErr != nil || r.orphanRows != 0 {
+		return []string{}
+	}
+	return r.executableKinds
+}
 
 // OrphanedAttributeRows is read at its own field so a count that cannot be read becomes a null
 // with an error on this field alone, never a response that hides the other facts.

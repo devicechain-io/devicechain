@@ -21,7 +21,7 @@ const resolveWire = `mutation ($request: BulkChangeAmbiguityResolution!) {
 }`
 
 func TestBulkChangeLineResolutionFieldsAreUnique(t *testing.T) {
-	_, body, found := strings.Cut(fleetOperationSchema, "type BulkChangeLine {")
+	_, body, found := strings.Cut(bulkChangeSection(t), "type BulkChangeLine {")
 	require.True(t, found)
 	body, _, found = strings.Cut(body, "\n}")
 	require.True(t, found)
@@ -162,6 +162,4 @@ func TestResolveAndSharedNoteOverTheWire(t *testing.T) {
 	for _, l := range read.Lines.Results {
 		require.Nil(t, l.ResolutionNote)
 	}
-	// The production schema must continue to refuse the new mutation until BC-13.
-	require.NotContains(t, ServedSchema(), "resolveAmbiguousBulkChangeLines")
 }

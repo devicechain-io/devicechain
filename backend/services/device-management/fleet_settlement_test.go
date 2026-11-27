@@ -10,16 +10,8 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/ledger"
 	"github.com/stretchr/testify/require"
 )
-
-func TestSettlementTasksAreNotRegisteredWhileUnserved(t *testing.T) {
-	require.False(t, ledger.Served)
-	require.NoError(t, initFleetSettlement())
-	require.Nil(t, FleetSettlement)
-	require.Nil(t, FleetSettlementDeadline)
-}
 
 // A failing sweep must not stop the fast pass (it ran first and returned, before), nor
 // re-run the full sweep on every five-second tick.

@@ -1238,6 +1238,12 @@ the other facts. Only a trigger enabled `ALWAYS` counts as `ENFORCED`; ordinary,
 and disabled triggers report `DISABLED`. Missing or mismatched enforcement reports `NOT_INSTALLED`.
 The query counts rows, so treat it as a diagnostic to run when you need the answer, not something to poll. The preview clock starts at v1.9.
 
+From v1.10, `executableKinds` lists `config.set` when enforcement is `ENFORCED` and the orphan
+count is zero, the same two facts `startBulkChange` and `resumeBulkChange` check; otherwise it is
+empty. The bulk-change queries and mutations themselves (`planBulkChange`, `createBulkChange`,
+`startBulkChange` and the rest) are Preview from v1.10; see
+[Device bulk changes](../guides/bulk-changes.md).
+
 The Preview command prints the same four facts and exits successfully only when enforcement is
 `ENFORCED` and the orphan count is zero. The v1.9 non-zero exit is expected. Use the same login
 and instance flags as `dcctl attr`:

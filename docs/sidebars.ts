@@ -207,6 +207,7 @@ const sidebars: SidebarsConfig = {
           items: [
             'guides/sending-commands',
             'guides/commanding-a-fleet',
+            'guides/bulk-changes',
             'guides/scheduling-a-fleet',
             'guides/maintenance-windows',
             'guides/alarm-maintenance',

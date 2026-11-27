@@ -242,7 +242,12 @@ jobs:
     # null, which is falsy, so the obvious spelling gives the SHORT budget to the
     # LONG path. Only an explicit false — which is what release.yml passes — buys
     # the tighter one.
-    timeout-minutes: ${{ inputs.build == false && 60 || 120 }}
+    #
+    # The pull budget is 90, not 60, from the release that serves bulk changes: the
+    # bulkchange phase then runs instead of skipping -- a 2,000-device change posted
+    # and settled across a held roll, the old pod restarted after the hook, and the
+    # repair control that must wait out its whole 150 s bound before it is released.
+    timeout-minutes: ${{ inputs.build == false && 90 || 120 }}
     steps:
       # 🔴 fetch-depth: 0 IS REQUIRED, twice over. The rig `git archive`s the
       # baseline tag out of THIS checkout to build that release's own dcctl, and

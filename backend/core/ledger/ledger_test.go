@@ -395,27 +395,52 @@ func (k testKind) Name() string { return string(k) }
 type nilKind struct{}
 
 func (k *nilKind) Name() string { return "nil-kind" }
-func TestUnservedRegistry(t *testing.T) {
-	if Served {
-		t.Fatal("foundation served")
+func TestServedRegistry(t *testing.T) {
+	if !Served {
+		t.Fatal("the engine is served from v1.10; an unserved registry here is a regression")
 	}
 	var typedNil *nilKind
-	for _, k := range []Kind{testKind("config.set"), testKind("config.set"), testKind(""), testKind(" "), nil, typedNil} {
+	for _, k := range []Kind{testKind(""), testKind(" "), testKind(" ledger.test"), testKind("ledger.test "), nil, typedNil} {
 		if err := Register(k); err == nil {
 			t.Errorf("Register(%#v) succeeded", k)
 		}
 	}
-	if got := ExecutableKinds(); len(got) != 0 {
-		t.Fatalf("executable kinds %v", got)
+	if Executable("") || Executable("nil-kind") || Executable(" ") {
+		t.Fatal("a refused registration became executable")
 	}
-	for _, name := range []string{"config.set", "custody.transfer", "", "nil-kind"} {
+	for _, name := range []string{"ledger.test.b", "ledger.test.a"} {
 		if Executable(name) {
-			t.Errorf("%q executable", name)
+			t.Fatalf("%q executable before it was registered", name)
+		}
+		if err := Register(testKind(name)); err != nil {
+			t.Fatalf("Register(%q): %v", name, err)
+		}
+		if !Executable(name) {
+			t.Fatalf("%q not executable after it was registered", name)
 		}
 	}
-	copy := ExecutableKinds()
-	copy = append(copy, "injected")
-	if len(ExecutableKinds()) != 0 || Executable(copy[0]) {
+	if err := Register(testKind("ledger.test.a")); err == nil {
+		t.Fatal("a duplicate registration succeeded")
+	}
+	if Executable("ledger.test") || Executable("custody.transfer") {
+		t.Fatal("an unregistered name is executable")
+	}
+	got := ExecutableKinds()
+	ia, ib := -1, -1
+	for i, name := range got {
+		switch name {
+		case "ledger.test.a":
+			ia = i
+		case "ledger.test.b":
+			ib = i
+		}
+	}
+	if ia < 0 || ib < 0 || ia > ib {
+		t.Fatalf("executable kinds %v: want both test kinds, sorted", got)
+	}
+	got[ia] = "injected"
+	_ = append(got, "injected-too")
+	if Executable("injected") || Executable("injected-too") || !Executable("ledger.test.a") {
 		t.Fatal("exposed mutable registry")
 	}
 }
