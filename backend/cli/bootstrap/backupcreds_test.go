@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/devicechain-io/dcctl/internal/installflow"
 )
 
 func writeBackupFile(t *testing.T, body string) string {
@@ -27,6 +29,55 @@ const goodBackupFile = `{
   "accessKeyId": "AKIAEXAMPLE",
   "secretAccessKey": "not-a-real-secret-value"
 }`
+
+func TestBackupEndpointCredentialsAreDeprecatedWithoutDisclosure(t *testing.T) {
+	for _, tc := range []struct {
+		name, endpoint string
+		wantWarning    bool
+	}{
+		{"clean", "https://s3.example.com/archive", false},
+		{"at in path", "https://s3.example.com/a@b/archive", false},
+		{"userinfo", "https://dcEndpointUser:dcEndpointPassword@s3.example.com/archive", true},
+		{"user only", "https://dcEndpointUser@s3.example.com/archive", true},
+		{"query token", "https://s3.example.com/archive?token=dcEndpointQuery", true},
+		{"fragment token", "https://s3.example.com/archive#dcEndpointFragment", true},
+		{"empty query", "https://s3.example.com/archive?", true},
+		{"empty fragment", "https://s3.example.com/archive#", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var warnings []string
+			body := strings.Replace(goodBackupFile, "https://s3.example.com", tc.endpoint, 1)
+			d, err := ParseBackupDestination(writeBackupFile(t, body), func(w string) {
+				warnings = append(warnings, w)
+			})
+			if err != nil {
+				t.Fatalf("a deprecated endpoint must still be accepted: %v", err)
+			}
+			if d.EndpointURL != tc.endpoint {
+				t.Fatal("the functional endpoint changed during parsing")
+			}
+			if !tc.wantWarning {
+				if len(warnings) != 0 {
+					t.Fatalf("a credential-free endpoint warned: %q", warnings)
+				}
+				return
+			}
+			if len(warnings) != 1 {
+				t.Fatalf("got %d warnings, want one", len(warnings))
+			}
+			w := warnings[0]
+			for _, want := range []string{"credentials in backup endpointUrl", "deprecated", "refused in the next major release",
+				"--backup-credentials-file", "accessKeyId", "secretAccessKey", installflow.RedactURL(tc.endpoint)} {
+				if !strings.Contains(w, want) {
+					t.Errorf("warning lacks %q: %s", want, w)
+				}
+			}
+			if strings.Contains(w, "dcEndpoint") {
+				t.Fatalf("warning disclosed an endpoint credential: %s", w)
+			}
+		})
+	}
+}
 
 func TestASuppliedDestinationIsReadWhole(t *testing.T) {
 	d, err := ParseBackupDestination(writeBackupFile(t, goodBackupFile))

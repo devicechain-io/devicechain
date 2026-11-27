@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/fatih/color"
 )
 
 // InstallEngine is `dcctl install` as an installflow.Engine: the run the command
@@ -26,6 +27,9 @@ import (
 type InstallEngine struct {
 	Provider Provider
 	Options  InstallOptions
+	// Warnings are display-safe input deprecations, presented inside the run so
+	// plain output, JSON and the terminal UI receive the same notice.
+	Warnings []string
 	// ResolveOptions reads and validates file-backed options after a successful
 	// (or skipped) preflight. Options above already supplies the run's target,
 	// --dry-run and --yes; the resolved values must agree with that request.
@@ -87,6 +91,9 @@ func (e *InstallEngine) Run(ctx context.Context, req installflow.Request, rt ins
 	// The command settled argv-only checks before the run began. File reads
 	// retain their historical position after preflight.
 	r.enter(installflow.StepInstallInputs)
+	for _, w := range e.Warnings {
+		r.con.println(color.YellowString("  warning: %s", w))
+	}
 
 	if e.SkipPreflight {
 		r.skip(installflow.StepInstallPreflight)
