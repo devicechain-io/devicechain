@@ -120,6 +120,13 @@ instance:
   # no per-area logins has none, and when the instance configuration says they exist an area
   # refuses to start without its own rather than connect as the shared login.
   natsLoginSecrets: {}
+  # Area-bound mint credentials: a map of area name to the name of the Secret holding THAT area's
+  # service-token mint credential (key `credential`). Only areas that mint through the area-bound
+  # endpoint have one; each is mounted into that area ALONE and into user-management, which checks
+  # it, at /etc/dci-mint/<area>/credential. An area not listed uses `dci-<id>-mint-<area>`, the
+  # Secret `dcctl` writes. Such an area never holds the shared service secret: without its
+  # credential it gets no service token at all.
+  areaMintSecrets: {}
   # Instance-wide configuration mounted at /etc/dci-config/instance and read by
   # every service (infrastructure endpoints + persistence). Rendered verbatim as
   # JSON into a Secret; keys are matched case-insensitively to the Go config struct.

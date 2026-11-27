@@ -753,6 +753,33 @@ func registerServiceTokenHandler() {
 		IdentityManager.IssueServiceToken,
 		identity.NewServiceCeilingObserver(Microservice.MetricsRegisterer(), Microservice.MetricsSubsystem()),
 	))
+	// The AREA-BOUND mint, beside it on the same internal listener: an area in
+	// auth.AreaBoundCallers presents its own credential (mounted here per area, never in the
+	// instance document), the subject is the area that matched, and the ceiling is ENFORCED.
+	// Nothing about the shared-secret endpoint above changes.
+	internalAuthMux().Handle(auth.AreaServiceTokenPath, identity.AreaServiceTokenHandler(
+		auth.AreaBoundCallerNames(),
+		readAreaMintCredential,
+		IdentityManager.IssueServiceToken,
+		auth.CheckServiceCeiling,
+		identity.NewAreaMintMetrics(Microservice.MetricsRegisterer(), Microservice.MetricsSubsystem()),
+	))
+}
+
+// areaMintCredentialDir is where the area-bound credentials are mounted. A variable only so a
+// test can point it at a temporary directory; nothing else assigns it.
+var areaMintCredentialDir = auth.AreaMintCredentialDir
+
+// readAreaMintCredential reads one area's credential from its mounted Secret on every request, so
+// a rotated credential is in force as soon as the kubelet updates the volume. A missing file is
+// that area having no credential (the area is not enabled), which the handler treats as "matches
+// nothing". The value never reaches a log or an error: an error names the path only.
+func readAreaMintCredential(area string) (string, error) {
+	b, err := os.ReadFile(auth.AreaMintCredentialFile(areaMintCredentialDir, area))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
 }
 
 // Called after microservice has been started.

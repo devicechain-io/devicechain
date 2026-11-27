@@ -1,0 +1,42 @@
+{{/*
+Alerting rules for the area-bound service-token mint.
+
+WHY THIS GROUP EXISTS. An area-bound area obtains service tokens only from user-management's
+area-bound endpoint, with a credential of its own; the token's subject is that area and the
+authorities it may ask for are its ceiling, enforced. The area's code asks only for what is in its
+ceiling, so a request for anything else -- an authority outside it, the super-authority, or a
+subject of its choosing -- is never a misconfiguration the area made on its own: it is the area
+running code it should not be running, or a credential that has left it. The request was refused,
+so nothing was granted, but it is the one signal the refusal leaves behind.
+
+The counter is devicechain_usermanagement_area_mint_requests_total{area,result}. Its area label is
+closed (the area-bound areas, or "other" when no credential matched) and every series exists at zero
+from user-management's start, so increase() sees the first refusal.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: area-mint
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.area-mint
+      rules:
+        - alert: AreaMintRefusedForbiddenRequest
+          # No `for`: one such request is the event. The 10m window holds the alert for ten
+          # minutes after the last one. Parenthesised so the comparison binds to the whole
+          # expression (hack/check-prometheus-rules.sh refuses the unparenthesised form).
+          expr: (sum by (area) (increase(devicechain_usermanagement_area_mint_requests_total{namespace="{{ $ns }}", area!="other", result=~"over_ceiling|wildcard|invalid_request"}[10m])) or vector(0)) > 0
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#areamintrefusedforbiddenrequest"
+            summary: "An area-bound area asked for a service token it may never have"
+            description: "user-management refused a service-token request presented with the mint credential of {{ "{{ $labels.area }}" }}: it asked for an authority outside that area's ceiling, for the super-authority, or to name the token's subject itself. The area is built never to ask for any of these, so either its pod is running code it should not be, or its credential is being used by something else. Nothing was granted. user-management's rate-limited 'area-bound service-token request refused' warning names the area, the result and the authorities asked for. Treat the area's pod as suspect: inspect it, then rotate its credential by deleting the Secret dci-<instance>-mint-<area> and running dcctl upgrade, which mints a new one. Both the area and user-management read the credential from its mounted file on every mint, so the new one is in force once the mounts refresh, without a restart."
+{{- end }}

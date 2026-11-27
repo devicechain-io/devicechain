@@ -284,6 +284,30 @@ together.
 {{- get ((.root.Values.instance.natsLoginSecrets) | default dict) .area | default (printf "dci-%s-nats-%s" .root.Values.instance.id .area) -}}
 {{- end -}}
 
+{{/*
+devicechain.areaBoundAreas — the functional areas that obtain service tokens ONLY through the
+area-bound mint: each presents a credential of its own, the token's subject is that area and nothing
+else, and user-management enforces the area's authority ceiling. Such an area never holds the shared
+service secret. The Go side is auth.AreaBoundCallers (backend/core/auth); a test holds the two
+together.
+*/}}
+{{- define "devicechain.areaBoundAreas" -}}
+automation
+{{- end -}}
+
+{{/*
+The Secret holding one area-bound area's mint credential (key `credential`), mounted into that
+area's Deployment and into user-management (which checks it) at /etc/dci-mint/<area>, and into
+nothing else. dcctl writes it under dci-<id>-mint-<area>; instance.areaMintSecrets (area to name)
+overrides one for an install that manages its Secrets itself.
+
+Takes (dict "root" . "area" <area>). The name is spelled in Go too (areaMintSecretName in
+backend/cli/bootstrap/areamintsecret.go); TestTheChartMountsAreaMintCredentials holds the two together.
+*/}}
+{{- define "devicechain.areaMintSecret" -}}
+{{- get ((.root.Values.instance.areaMintSecrets) | default dict) .area | default (printf "dci-%s-mint-%s" .root.Values.instance.id .area) -}}
+{{- end -}}
+
 {{/* The per-service config ConfigMap name. */}}
 {{- define "devicechain.microserviceConfigMap" -}}
 {{- printf "dct-%s-config" .Values.instance.id -}}
