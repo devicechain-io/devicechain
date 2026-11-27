@@ -20,6 +20,7 @@ import (
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/internal/installplain"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -76,6 +77,8 @@ type cloudProbes struct {
 	server   string
 	insecure bool
 	proxied  bool
+	// creds is what kind of credentials the context carries.
+	creds credKind
 
 	lookupHost func(ctx context.Context, host string) ([]string, error)
 	kube       kubernetes.Interface
@@ -166,10 +169,11 @@ func (d *doctor) checkAPIAnswers(ctx context.Context, p cloudProbes, host, kubeC
 		return struct{}{}, err
 	})
 	what := "API server " + host
-	// A refusal of the credentials is still an answer, over the same TLS: the
-	// authentication row says what it means.
-	unauthorized := err != nil && classifyProbeErr(err) == probeUnauthorized
-	if err == nil || unauthorized {
+	// A refusal (401, or a 403 to whoever the server took the caller to be) is still an
+	// answer, over the same TLS: the authentication row says what it means.
+	class := classifyProbeErr(err)
+	unauthorized := err != nil && class == probeUnauthorized
+	if err == nil || unauthorized || class == probeForbidden {
 		switch {
 		case strings.HasPrefix(p.server, "http://"):
 			d.warn(what+" answered, without TLS", "use an https:// server address for this context")
@@ -179,6 +183,8 @@ func (d *doctor) checkAPIAnswers(ctx context.Context, p cloudProbes, host, kubeC
 		default:
 			d.pass(what + " answered over verified TLS")
 		}
+		// (With a credential plugin the request went without credentials, since the
+		// plugin is never run; checkAccess reads nothing into the refusal then.)
 		if unauthorized {
 			return apiUnauthorized
 		}
@@ -237,18 +243,51 @@ type accessResult struct {
 	err             error
 }
 
-func (d *doctor) checkAccess(ctx context.Context, p cloudProbes, answered apiAnswer) {
-	if answered == apiSilent {
-		d.notChecked("authentication: not asked, the API server did not answer", "")
-		for _, a := range cloudAccessNeeds {
-			d.notChecked("may "+a.String()+": not asked, the API server did not answer", "")
+// anonymous reports whether a SelfSubjectReview says the API server took the caller for
+// nobody.
+func anonymous(r *authenticationv1.SelfSubjectReview) bool {
+	if r.Status.UserInfo.Username == "system:anonymous" {
+		return true
+	}
+	for _, g := range r.Status.UserInfo.Groups {
+		if g == "system:unauthenticated" {
+			return true
 		}
+	}
+	return false
+}
+
+const pluginNotRun = "not checked: this context gets its credentials from a plugin, which the advisory checks never run"
+
+func (d *doctor) checkAccess(ctx context.Context, p cloudProbes, answered apiAnswer) {
+	notAsked := func(why string) {
+		for _, a := range cloudAccessNeeds {
+			d.notChecked("may "+a.String()+": "+why, "")
+		}
+	}
+	switch {
+	case answered == apiSilent:
+		d.notChecked("authentication: not asked, the API server did not answer", "")
+		notAsked("not asked, the API server did not answer")
+		return
+	case p.creds == credPlugin:
+		// 🔴 The plugin is never run (cloudKubeConfig), so there are no credentials to
+		// judge, and a review asked without them would answer for nobody.
+		d.notChecked("authentication: "+pluginNotRun,
+			"check them yourself with kubectl auth whoami and kubectl auth can-i --list")
+		notAsked(pluginNotRun)
 		return
 	}
 	// One budget for every review: they are cheap, and a server that stalls on the first
 	// would otherwise cost the budget once per review.
 	budget, cancel := context.WithTimeout(ctx, cloudAPITimeout)
 	defer cancel()
+	who, whoErr := within(budget, cloudAPITimeout, func(ctx context.Context) (*authenticationv1.SelfSubjectReview, error) {
+		return p.kube.AuthenticationV1().SelfSubjectReviews().Create(ctx, &authenticationv1.SelfSubjectReview{}, metav1.CreateOptions{})
+	})
+	if whoErr == nil && who == nil {
+		whoErr = errors.New("empty review")
+	}
 	results := make([]accessResult, len(cloudAccessNeeds))
 	for i, a := range cloudAccessNeeds {
 		review := &authorizationv1.SelfSubjectAccessReview{
@@ -269,30 +308,35 @@ func (d *doctor) checkAccess(ctx context.Context, p cloudProbes, answered apiAns
 		}
 	}
 
-	unauthorized := answered == apiUnauthorized
-	accepted := false
+	unauthorized := answered == apiUnauthorized || classifyProbeErr(whoErr) == probeUnauthorized
 	for _, r := range results {
-		switch {
-		case r.err == nil, classifyProbeErr(r.err) == probeForbidden:
-			// Answered, or refused to THIS user: either way the credentials were accepted.
-			accepted = true
-		case classifyProbeErr(r.err) == probeUnauthorized:
-			unauthorized = true
-		}
+		unauthorized = unauthorized || (r.err != nil && classifyProbeErr(r.err) == probeUnauthorized)
 	}
+	// 🔴 Authentication passes ONLY on the API server's own word that it knows the
+	// caller: a SelfSubjectReview naming someone other than the anonymous user, for a
+	// context that holds credentials. A 403 on a review, or a review answered, proves
+	// nothing: an anonymous caller can be refused, or allowed, exactly the same way.
 	switch {
+	case p.creds == credNone:
+		d.warn("authentication: this context holds no credentials, so the API server treats it as anonymous",
+			"give the context credentials for this cluster, for example with your provider's get-credentials command")
+		if unauthorized {
+			notAsked("not asked, the API server refused anonymous requests")
+			return
+		}
 	case unauthorized:
 		d.warn("authentication: the API server refused this context's credentials",
 			"refresh the context's login (for example your provider's get-credentials command), then Recheck")
-		for _, a := range cloudAccessNeeds {
-			d.notChecked("may "+a.String()+": not asked, the credentials were refused", "")
-		}
+		notAsked("not asked, the credentials were refused")
 		return
-	case accepted:
-		d.pass("authentication: this context's credentials are accepted")
+	case whoErr == nil && anonymous(who):
+		d.warn("authentication: the API server treats this context as anonymous",
+			"its credentials are not being accepted; refresh the context's login, then Recheck")
+	case whoErr == nil:
+		d.pass("authentication: the API server accepts this context's credentials")
 	default:
-		d.unknown("authentication: the API server did not say whether it accepts these credentials",
-			"run kubectl auth can-i --list against this context to see why, then Recheck")
+		d.unknown("authentication: the API server did not say who it takes this context to be",
+			"check with kubectl auth whoami against this context, then Recheck")
 	}
 	for i, a := range cloudAccessNeeds {
 		r := results[i]
@@ -485,69 +529,183 @@ func classifyProbeErr(err error) probeClass {
 	return probeOther
 }
 
-// errMutationRefused is what readOnlyTransport answers a request that could change
-// something. Nothing in the diagnostics sends one; the guard is what makes that a
-// property rather than a promise.
-var errMutationRefused = errors.New("the advisory diagnostics refused a request that could change the cluster")
+// errMutationRefused is what the guards answer a request the diagnostics do not send.
+// Nothing in the diagnostics sends one; the guards are what make that a property rather
+// than a promise.
+var errMutationRefused = errors.New("the advisory diagnostics refused a request they do not send")
 
-// ssarPath is the one POST the diagnostics may send: a SelfSubjectAccessReview asks the
-// API server a question and stores nothing.
+// ssarPath is one of the two POSTs the diagnostics may send: a SelfSubjectAccessReview
+// asks the API server a question and stores nothing.
 const ssarPath = "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews"
 
-// readOnlyRequest reports whether a request may leave: GET and HEAD, and a POST to the
-// access-review endpoint (under any path prefix a proxying API front-end adds).
-func readOnlyRequest(method, path string) bool {
-	switch method {
-	case http.MethodGet, http.MethodHead:
-		return true
-	case http.MethodPost:
-		return strings.HasSuffix(path, ssarPath)
+// ssrPath is the other: a SelfSubjectReview says who the API server takes the caller
+// to be, and stores nothing.
+const ssrPath = "/apis/authentication.k8s.io/v1/selfsubjectreviews"
+
+// kubeRequestPermitted reports whether a request to the cluster may leave. 🔴 IT IS AN
+// ALLOWLIST OF THE DIAGNOSTICS' OWN THREE REQUESTS, each matched EXACTLY under the
+// configured server (its scheme, host and port, and any path prefix it has): GET
+// /version, and POST to the two review endpoints. A suffix would let a proxy subresource
+// (.../services/x/proxy/apis/...) through to a service that can write; so nothing is
+// matched by suffix, and a path that is not already clean, or that was sent escaped,
+// is refused rather than interpreted.
+func kubeRequestPermitted(server *url.URL, method string, u *url.URL) bool {
+	if u.Scheme != server.Scheme || u.Host != server.Host || u.Opaque != "" || u.User != nil {
+		return false
+	}
+	// An escaped path is refused, never decoded into one of ours. An unclean one (a dot
+	// segment, a doubled slash) cannot equal any of the clean paths below, so the exact
+	// match refuses it too.
+	if u.RawPath != "" && u.RawPath != u.Path {
+		return false
+	}
+	base := strings.TrimSuffix(server.Path, "/")
+	switch u.Path {
+	case base + "/version":
+		return method == http.MethodGet
+	case base + ssarPath, base + ssrPath:
+		return method == http.MethodPost
 	}
 	return false
+}
+
+// kubeGuard lets out only what kubeRequestPermitted allows. It sits under client-go's
+// auth wrappers, so it sees every request, with its credentials, before it leaves.
+type kubeGuard struct {
+	server *url.URL
+	next   http.RoundTripper
+}
+
+func (g kubeGuard) RoundTrip(r *http.Request) (*http.Response, error) {
+	if !kubeRequestPermitted(g.server, r.Method, r.URL) {
+		return refuse(r)
+	}
+	return g.next.RoundTrip(r)
+}
+
+// readOnlyRequest reports whether a registry probe may leave: GET and HEAD only.
+func readOnlyRequest(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead
 }
 
 // readOnlyTransport lets out only what readOnlyRequest allows.
 type readOnlyTransport struct{ next http.RoundTripper }
 
 func (t readOnlyTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if !readOnlyRequest(r.Method, r.URL.Path) {
-		if r.Body != nil {
-			_ = r.Body.Close()
-		}
-		return nil, errMutationRefused
+	if !readOnlyRequest(r.Method) {
+		return refuse(r)
 	}
 	return t.next.RoundTrip(r)
 }
 
-// ---- production probes -------------------------------------------------------------------
-
-// cloudRestConfig is the context's REST config as the diagnostics use it: every request
-// through the read-only guard, a connection bounded by cloudConnectTimeout and every
-// answer by cloudAPITimeout.
-func cloudRestConfig(cfg *rest.Config) *rest.Config {
-	c := rest.CopyConfig(cfg)
-	c.Timeout = cloudAPITimeout
-	c.Dial = (&net.Dialer{Timeout: cloudConnectTimeout}).DialContext
-	c.Wrap(func(rt http.RoundTripper) http.RoundTripper { return readOnlyTransport{next: rt} })
-	return c
+func refuse(r *http.Request) (*http.Response, error) {
+	if r.Body != nil {
+		_ = r.Body.Close()
+	}
+	return nil, errMutationRefused
 }
 
-// cloudHTTPClient is the registry probes' client: bounded, read-only, proxy-aware, and
-// never following a redirect (any answer at all says the registry is reachable).
+// noRedirect is every diagnostics client's CheckRedirect. 🔴 A REDIRECT IS NEVER
+// FOLLOWED: client-go's auth wrappers put the kubeconfig's credentials on every hop, so
+// following one would hand them to wherever it points. The 3xx comes back as the
+// answer, which a probe reads as advice.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+// boundedTransport is the diagnostics' one transport shape: a bounded connection and
+// answer, and 🔴 NO KEEP-ALIVE, so a run leaves no idle connection (and no goroutine
+// holding one) behind for the next Recheck to pile on.
+func boundedTransport(proxy func(*http.Request) (*url.URL, error), tlsCfg *tls.Config) *http.Transport {
+	return &http.Transport{
+		Proxy:                 proxy,
+		TLSClientConfig:       tlsCfg,
+		DialContext:           (&net.Dialer{Timeout: cloudConnectTimeout}).DialContext,
+		TLSHandshakeTimeout:   cloudConnectTimeout,
+		ResponseHeaderTimeout: cloudAPITimeout,
+		DisableKeepAlives:     true,
+	}
+}
+
+// ---- production probes -------------------------------------------------------------------
+
+// cloudKubeConfig is the context's REST config as the diagnostics use it, and the
+// server it addresses:
+//
+//   - 🔴 no credential plugin. client-go runs an exec plugin with no way to cancel it, so
+//     a hung one would outlive every bound, and Exit, and each Recheck would queue
+//     another behind it. The plugin is dropped; the probes that need credentials say
+//     they were not checked (credPlugin).
+//   - every request through kubeGuard, on dcctl's own bounded, keep-alive-free
+//     transport carrying the context's TLS settings.
+func cloudKubeConfig(cfg *rest.Config) (*rest.Config, *url.URL, error) {
+	c := rest.CopyConfig(cfg)
+	c.ExecProvider, c.AuthProvider = nil, nil
+	server, _, err := rest.DefaultServerUrlFor(c)
+	if err != nil {
+		return nil, nil, err
+	}
+	tlsCfg, err := rest.TLSConfigFor(c)
+	if err != nil {
+		return nil, nil, err
+	}
+	proxy := c.Proxy
+	if proxy == nil {
+		proxy = http.ProxyFromEnvironment
+	}
+	c.Transport = boundedTransport(proxy, tlsCfg)
+	// The TLS settings now live in the transport; client-go refuses both at once.
+	c.TLSClientConfig, c.Proxy, c.Dial = rest.TLSClientConfig{}, nil, nil
+	c.Timeout = cloudAPITimeout
+	c.Wrap(func(rt http.RoundTripper) http.RoundTripper { return kubeGuard{server: server, next: rt} })
+	return c, server, nil
+}
+
+// cloudKubeClient is the cluster client the diagnostics ask through: cloudKubeConfig's,
+// following no redirect.
+func cloudKubeClient(cfg *rest.Config) (kubernetes.Interface, error) {
+	c, _, err := cloudKubeConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	hc, err := rest.HTTPClientFor(c)
+	if err != nil {
+		return nil, err
+	}
+	own := *hc // never change a client shared with anything else
+	own.CheckRedirect = noRedirect
+	return kubernetes.NewForConfigAndClient(c, &own)
+}
+
+// cloudHTTPClient is the registry probes' client: bounded, read-only, proxy-aware,
+// keep-alive-free, and following no redirect (any answer at all says the registry is
+// reachable).
 func cloudHTTPClient(next http.RoundTripper) *http.Client {
 	if next == nil {
-		next = &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			DialContext:           (&net.Dialer{Timeout: cloudConnectTimeout}).DialContext,
-			TLSHandshakeTimeout:   cloudConnectTimeout,
-			ResponseHeaderTimeout: cloudAPITimeout,
-		}
+		next = boundedTransport(http.ProxyFromEnvironment, nil)
 	}
-	return &http.Client{
-		Timeout:       cloudAPITimeout,
-		Transport:     readOnlyTransport{next: next},
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	return &http.Client{Timeout: cloudAPITimeout, Transport: readOnlyTransport{next: next}, CheckRedirect: noRedirect}
+}
+
+// credKind is what kind of credentials a context carries.
+type credKind uint8
+
+const (
+	// credStatic: a token, a client certificate or a password, held in the kubeconfig.
+	credStatic credKind = iota
+	// credNone: nothing; the API server sees the context as anonymous.
+	credNone
+	// credPlugin: an exec or auth-provider plugin that dcctl would have to run.
+	credPlugin
+)
+
+func credentialsOf(cfg *rest.Config) credKind {
+	switch {
+	case cfg.ExecProvider != nil || cfg.AuthProvider != nil:
+		return credPlugin
+	case cfg.BearerToken != "" || cfg.BearerTokenFile != "" || cfg.Username != "" || cfg.Password != "" ||
+		cfg.CertData != nil || cfg.CertFile != "" || cfg.KeyData != nil || cfg.KeyFile != "":
+		return credStatic
 	}
+	return credNone
 }
 
 // liveCloudProbes are the real windows: the context's API server, this machine's DNS and
@@ -557,13 +715,20 @@ func liveCloudProbes(t cloudTarget) (cloudProbes, error) {
 	if err != nil {
 		return cloudProbes{}, err
 	}
-	c := cloudRestConfig(cfg)
-	kube, err := kubernetes.NewForConfig(c)
+	return cloudProbesFrom(cfg)
+}
+
+// cloudProbesFrom are the windows onto the cluster one REST config describes.
+//
+// 🔴 A credential plugin in cfg is never run: cloudKubeClient drops it, and creds says
+// so, so the probes that would need it read NOT CHECKED.
+func cloudProbesFrom(cfg *rest.Config) (cloudProbes, error) {
+	kube, err := cloudKubeClient(cfg)
 	if err != nil {
 		return cloudProbes{}, err
 	}
 	server := withoutUserinfoURL(cfg.Host)
-	p := cloudProbes{server: server, insecure: cfg.Insecure, lookupHost: net.DefaultResolver.LookupHost,
+	p := cloudProbes{server: server, insecure: cfg.Insecure, creds: credentialsOf(cfg), lookupHost: net.DefaultResolver.LookupHost,
 		kube: kube, http: cloudHTTPClient(nil), tofuRegistry: "registry.opentofu.org"}
 	if _, err := lookPath("tofu"); err != nil {
 		if _, err := lookPath("terraform"); err == nil {

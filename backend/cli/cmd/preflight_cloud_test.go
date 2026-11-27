@@ -20,6 +20,7 @@ import (
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/devicechain-io/dcctl/internal/installflow"
 	"github.com/devicechain-io/dcctl/internal/installplain"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -28,7 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/version"
 	fakediscovery "k8s.io/client-go/discovery/fake"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	ktesting "k8s.io/client-go/testing"
@@ -48,6 +48,12 @@ type cloudFakes struct {
 	lookupErr  error
 	versionErr error
 	ssarErr    error
+	// creds is the context's kind of credentials (credStatic when unset); ssrUser,
+	// ssrGroups and ssrErr are what a SelfSubjectReview answers (alice when unset).
+	creds     credKind
+	ssrUser   string
+	ssrGroups []string
+	ssrErr    error
 	// allow decides each access review; nil allows everything.
 	allow   func(*authorizationv1.ResourceAttributes) (allowed bool, evalErr string)
 	httpErr map[string]error // by host
@@ -70,6 +76,18 @@ func newCloudFakes(t *testing.T) *cloudFakes {
 	f.kube.PrependReactor("get", "version", func(ktesting.Action) (bool, runtime.Object, error) {
 		f.block()
 		return true, nil, f.versionErr
+	})
+	f.kube.PrependReactor("create", "selfsubjectreviews", func(a ktesting.Action) (bool, runtime.Object, error) {
+		f.block()
+		if f.ssrErr != nil {
+			return true, nil, f.ssrErr
+		}
+		r := a.(ktesting.CreateAction).GetObject().(*authenticationv1.SelfSubjectReview).DeepCopy()
+		r.Status.UserInfo.Username, r.Status.UserInfo.Groups = f.ssrUser, f.ssrGroups
+		if r.Status.UserInfo.Username == "" {
+			r.Status.UserInfo.Username = "alice"
+		}
+		return true, r, nil
 	})
 	f.kube.PrependReactor("create", "selfsubjectaccessreviews", func(a ktesting.Action) (bool, runtime.Object, error) {
 		f.block()
@@ -117,7 +135,7 @@ func (f *cloudFakes) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func (f *cloudFakes) probes(server string) func(cloudTarget) (cloudProbes, error) {
 	return func(cloudTarget) (cloudProbes, error) {
-		return cloudProbes{server: server, kube: f.kube, http: cloudHTTPClient(f), tofuRegistry: "registry.opentofu.org",
+		return cloudProbes{server: server, kube: f.kube, creds: f.creds, http: cloudHTTPClient(f), tofuRegistry: "registry.opentofu.org",
 			lookupHost: func(ctx context.Context, host string) ([]string, error) {
 				if f.hang {
 					f.block() // ignores ctx
@@ -184,7 +202,7 @@ func assertReadOnly(t *testing.T, f *cloudFakes) {
 		switch a.GetVerb() {
 		case "get", "list", "watch":
 		case "create":
-			if a.GetResource().Resource != "selfsubjectaccessreviews" {
+			if r := a.GetResource().Resource; r != "selfsubjectaccessreviews" && r != "selfsubjectreviews" {
 				t.Errorf("the diagnostics created %s", a.GetResource().Resource)
 			}
 		default:
@@ -222,7 +240,7 @@ func TestCloudDiagnosticsOnAHealthyCluster(t *testing.T) {
 	f := newCloudFakes(t)
 	rows, res := runCloud(t, f, testServer)
 	for _, prefix := range []string{"API server name api.prod.example resolves", "API server api.prod.example answered over verified TLS",
-		"authentication: this context's credentials are accepted", "may create namespaces", "may create secrets",
+		"authentication: the API server accepts this context's credentials", "may create namespaces", "may create secrets",
 		"may create customresourcedefinitions.apiextensions.k8s.io", "OpenTofu provider registry registry.opentofu.org reachable",
 		"cert-manager chart repository charts.jetstack.io reachable"} {
 		if r := row(t, rows, prefix); r.Verdict != installflow.CheckPass {
@@ -236,8 +254,8 @@ func TestCloudDiagnosticsOnAHealthyCluster(t *testing.T) {
 	if res.Warns != 0 {
 		t.Errorf("%d warning(s) on a healthy cluster", res.Warns)
 	}
-	if n := len(f.kube.Actions()); n != 1+len(cloudAccessNeeds) {
-		t.Errorf("%d cluster requests, want the version and %d reviews", n, len(cloudAccessNeeds))
+	if n := len(f.kube.Actions()); n != 2+len(cloudAccessNeeds) {
+		t.Errorf("%d cluster requests, want the version, the self review and %d access reviews", n, len(cloudAccessNeeds))
 	}
 }
 
@@ -285,7 +303,7 @@ func TestCloudDiagnosticsErrorsAreNeverPass(t *testing.T) {
 		{"reviews forbidden", func(f *cloudFakes) {
 			f.ssarErr = apierrors.NewForbidden(gr, "", errors.New(canaryErr))
 		}, []string{"may create"}, installflow.CheckUnknown},
-		{"reviews other", func(f *cloudFakes) { f.ssarErr = errors.New(canaryErr) },
+		{"reviews other", func(f *cloudFakes) { f.ssarErr, f.ssrErr = errors.New(canaryErr), errors.New(canaryErr) },
 			[]string{"authentication", "may create"}, installflow.CheckUnknown},
 		{"review denied", func(f *cloudFakes) {
 			f.allow = func(a *authorizationv1.ResourceAttributes) (bool, string) { return a.Resource != "secrets", "" }
@@ -427,6 +445,18 @@ func TestCloudDiagnosticsReviewsShareOneBudget(t *testing.T) {
 	t.Cleanup(func() { cloudAPITimeout = oldAPI })
 	cloudAPITimeout = 100 * time.Millisecond
 	f := newCloudFakes(t)
+	f.kube.PrependReactor("create", "selfsubjectreviews", func(a ktesting.Action) (bool, runtime.Object, error) {
+		f.block()
+		if f.ssrErr != nil {
+			return true, nil, f.ssrErr
+		}
+		r := a.(ktesting.CreateAction).GetObject().(*authenticationv1.SelfSubjectReview).DeepCopy()
+		r.Status.UserInfo.Username, r.Status.UserInfo.Groups = f.ssrUser, f.ssrGroups
+		if r.Status.UserInfo.Username == "" {
+			r.Status.UserInfo.Username = "alice"
+		}
+		return true, r, nil
+	})
 	f.kube.PrependReactor("create", "selfsubjectaccessreviews", func(ktesting.Action) (bool, runtime.Object, error) {
 		select {
 		case <-f.release:
@@ -449,42 +479,34 @@ func TestCloudDiagnosticsBounds(t *testing.T) {
 	if cloudConnectTimeout != 5*time.Second || cloudAPITimeout != 15*time.Second {
 		t.Fatalf("bounds %v / %v", cloudConnectTimeout, cloudAPITimeout)
 	}
-	c := cloudRestConfig(&rest.Config{Host: testServer})
-	if c.Timeout != cloudAPITimeout || c.Dial == nil || c.WrapTransport == nil {
-		t.Errorf("rest config timeout %v, dial %v, wrapped %v", c.Timeout, c.Dial != nil, c.WrapTransport != nil)
+	c, server, err := cloudKubeConfig(&rest.Config{Host: testServer, BearerToken: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kt, ok := c.Transport.(*http.Transport)
+	if c.Timeout != cloudAPITimeout || c.WrapTransport == nil || server.Host != "api.prod.example:6443" || !ok ||
+		kt.DialContext == nil || kt.TLSHandshakeTimeout != cloudConnectTimeout || kt.ResponseHeaderTimeout != cloudAPITimeout ||
+		!kt.DisableKeepAlives || kt.Proxy == nil {
+		t.Errorf("rest config timeout %v, wrapped %v, server %v, transport %+v", c.Timeout, c.WrapTransport != nil, server, c.Transport)
 	}
 	h := cloudHTTPClient(nil)
 	if h.Timeout != cloudAPITimeout {
 		t.Errorf("registry client timeout %v", h.Timeout)
 	}
 	tr, ok := h.Transport.(readOnlyTransport).next.(*http.Transport)
-	if !ok || tr.TLSHandshakeTimeout != cloudConnectTimeout || tr.ResponseHeaderTimeout != cloudAPITimeout || tr.Proxy == nil {
+	if !ok || tr.TLSHandshakeTimeout != cloudConnectTimeout || tr.ResponseHeaderTimeout != cloudAPITimeout || tr.Proxy == nil ||
+		!tr.DisableKeepAlives || h.CheckRedirect == nil {
 		t.Errorf("registry transport %+v", h.Transport)
 	}
 }
 
-// 🔴 THE NAMED MUTANT: a mutating verb allowed. The guard lets out reads and access
-// reviews only.
+// 🔴 THE NAMED MUTANT: a mutating verb allowed. The registry guard lets out reads only
+// (the cluster guard is TestKubeRequestPermitted).
 func TestReadOnlyRequest(t *testing.T) {
-	for _, c := range []struct {
-		method, path string
-		ok           bool
-	}{
-		{"GET", "/version", true},
-		{"HEAD", "/v2/", true},
-		{"POST", ssarPath, true},
-		{"POST", "/k8s/clusters/c-1" + ssarPath, true},
-		{"POST", "/api/v1/namespaces/default/pods", false},
-		{"POST", "/api/v1/namespaces/default/secrets", false},
-		{"POST", "/apis/authorization.k8s.io/v1/namespaces/x/localsubjectaccessreviews", false},
-		{"POST", ssarPath + "/x", false},
-		{"PUT", ssarPath, false},
-		{"PATCH", "/api/v1/namespaces/default", false},
-		{"DELETE", "/api/v1/namespaces/default", false},
-		{"OPTIONS", "/", false},
-	} {
-		if got := readOnlyRequest(c.method, c.path); got != c.ok {
-			t.Errorf("%s %s: allowed %v, want %v", c.method, c.path, got, c.ok)
+	for m, ok := range map[string]bool{"GET": true, "HEAD": true, "POST": false, "PUT": false, "PATCH": false,
+		"DELETE": false, "OPTIONS": false, "CONNECT": false} {
+		if got := readOnlyRequest(m); got != ok {
+			t.Errorf("%s: allowed %v, want %v", m, got, ok)
 		}
 	}
 }
@@ -502,7 +524,7 @@ func TestTheDiagnosticsRestConfigCannotCreate(t *testing.T) {
 		_, _ = io.WriteString(w, `{"kind":"SelfSubjectAccessReview","apiVersion":"authorization.k8s.io/v1","status":{"allowed":true}}`)
 	}))
 	defer srv.Close()
-	kube, err := kubernetes.NewForConfig(cloudRestConfig(&rest.Config{Host: srv.URL}))
+	kube, err := cloudKubeClient(&rest.Config{Host: srv.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
