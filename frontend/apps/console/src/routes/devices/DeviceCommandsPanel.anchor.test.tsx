@@ -87,6 +87,11 @@ describe('a command link scrolls to its row', () => {
     serve({ page: [row('c-1')] });
     render(panel('c-1'));
     await waitFor(() => expect(rowOf('cmd-c-1').className).toContain('bg-primary/10'));
+    // The class is in the DOM at the commit, but the fade is scheduled by the effect that runs
+    // after it (the one that scrolls), and React flushes that effect in a task of its own. Under
+    // load the clock can be advanced before that task runs, past a fade that does not exist yet.
+    // The scroll is the effect having run, so the fade's timer is set.
+    await waitFor(() => expect(scrolled).toEqual(['command-c-1']));
     await act(async () => { vi.advanceTimersByTime(COMMAND_HIGHLIGHT_MS + 50); });
     expect(rowOf('cmd-c-1').className).not.toContain('bg-primary/10');
   });
