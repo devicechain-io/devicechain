@@ -513,32 +513,139 @@ func TestWriteEscrowConcurrentWritersNeverReplaceEachOther(t *testing.T) {
 	}
 }
 
-// On a filesystem without hard links the publish is serialised by a lock file. A lock
-// another writer holds is waited for and, when it outlives the wait, reported by name:
-// the artifact is not published past it.
-func TestWriteEscrowWithoutHardLinksHonoursAHeldLock(t *testing.T) {
+// Every publish, by link or by rename, is serialised by a lock file. A lock another
+// writer holds is waited for and, when it outlives the wait, reported by name: the
+// artifact is not published past it, on either path.
+func TestWriteEscrowHonoursAHeldPublishLock(t *testing.T) {
+	for _, noLinks := range []bool{false, true} {
+		t.Run(fmt.Sprintf("no hard links %t", noLinks), func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "prod.escrow")
+			lock := path + ".publishing"
+			if err := os.WriteFile(lock, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			origLink, origWait := linkFile, escrowLockWait
+			if noLinks {
+				linkFile = func(oldname, newname string) error {
+					return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: errors.New("operation not supported")}
+				}
+			}
+			escrowLockWait = 100 * time.Millisecond
+			t.Cleanup(func() { linkFile, escrowLockWait = origLink, origWait })
+
+			err := WriteEscrow(EscrowPlan{Path: path, Passphrase: "pw"}, testRootKey, "prod", time.Now().UTC())
+			if err == nil || !strings.Contains(err.Error(), lock) {
+				t.Fatalf("a held publish lock was not reported: %v", err)
+			}
+			if _, serr := os.Stat(path); !os.IsNotExist(serr) {
+				t.Errorf("the artifact was published past a held lock (%v)", serr)
+			}
+			if _, serr := os.Stat(lock); serr != nil {
+				t.Errorf("another writer's lock was removed: %v", serr)
+			}
+		})
+	}
+}
+
+// 🔴 MIXED PATHS, ONE ARTIFACT. Whether a hard link works can differ between two
+// writers. Writer A is refused the link, checks that the artifact is absent, and is
+// held just before its rename; writer B, whose link works, tries to publish then. B
+// must not get in between A's check and A's rename — otherwise A's rename replaces
+// B's artifact and both report success. Exactly one may win, the other must refuse
+// loudly, and the artifact must hold the winner's key with no temp file left.
+func TestWriteEscrowMixedLinkAndRenameWritersNeverReplaceEachOther(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "prod.escrow")
-	lock := path + ".publishing"
-	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+	var mu sync.Mutex
+	noLink := ""
+	linked := make(chan struct{})
+	var linkedOnce sync.Once
+	orig := linkFile
+	linkFile = func(oldname, newname string) error {
+		mu.Lock()
+		if noLink == "" {
+			noLink = oldname // the first writer to try a link is the one refused it
+		}
+		refused := noLink == oldname
+		mu.Unlock()
+		if refused {
+			return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: errors.New("operation not supported")}
+		}
+		err := orig(oldname, newname)
+		if err == nil {
+			linkedOnce.Do(func() { close(linked) })
+		}
+		return err
+	}
+	var arrived sync.WaitGroup
+	arrived.Add(2)
+	escrowBeforePublish = func() {
+		arrived.Done()
+		arrived.Wait()
+	}
+	// The renaming writer waits here for the linking writer to publish — which it can
+	// only do by getting past the lock — and goes on after a bound when it cannot.
+	escrowBeforeRename = func() {
+		select {
+		case <-linked:
+		case <-time.After(2 * time.Second):
+		}
+	}
+	t.Cleanup(func() { linkFile, escrowBeforePublish, escrowBeforeRename = orig, nil, nil })
+
+	keys := []string{testRootKey, base64.StdEncoding.EncodeToString([]byte("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"))}
+	errs := make([]error, len(keys))
+	var done sync.WaitGroup
+	for i, k := range keys {
+		done.Add(1)
+		go func() {
+			defer done.Done()
+			errs[i] = WriteEscrow(EscrowPlan{Path: path, Passphrase: "pw"}, k, "prod", time.Now().UTC())
+		}()
+	}
+	done.Wait()
+
+	winner := -1
+	for i, err := range errs {
+		if err == nil {
+			if winner >= 0 {
+				t.Fatal("both writers reported success: one replaced the other's escrow artifact")
+			}
+			winner = i
+		}
+	}
+	if winner < 0 {
+		t.Fatalf("neither writer published: %v", errs)
+	}
+	if lost := errs[1-winner]; !strings.Contains(lost.Error(), "will not overwrite") {
+		t.Errorf("the losing writer's error is not the refusal a retry gets:\n%v", lost)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	origLink, origWait := linkFile, escrowLockWait
-	linkFile = func(oldname, newname string) error {
-		return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: errors.New("operation not supported")}
+	art, err := escrow.Decode(raw)
+	if err != nil {
+		t.Fatalf("the published artifact does not parse: %v", err)
 	}
-	escrowLockWait = 100 * time.Millisecond
-	t.Cleanup(func() { linkFile, escrowLockWait = origLink, origWait })
-
-	err := WriteEscrow(EscrowPlan{Path: path, Passphrase: "pw"}, testRootKey, "prod", time.Now().UTC())
-	if err == nil || !strings.Contains(err.Error(), lock) {
-		t.Fatalf("a held publish lock was not reported: %v", err)
+	key, err := escrow.Open(art, "pw")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, serr := os.Stat(path); !os.IsNotExist(serr) {
-		t.Errorf("the artifact was published past a held lock (%v)", serr)
+	if got := base64.StdEncoding.EncodeToString(key); got != keys[winner] {
+		t.Errorf("the artifact holds the losing writer's key")
 	}
-	if _, serr := os.Stat(lock); serr != nil {
-		t.Errorf("another writer's lock was removed: %v", serr)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("the directory holds %v, want the artifact alone", names)
 	}
 }
 

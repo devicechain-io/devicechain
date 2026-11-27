@@ -649,48 +649,75 @@ var linkFile = os.Link
 // or MoveFileEx without MOVEFILE_REPLACE_EXISTING (Windows only).
 //
 // A filesystem without hard links (FAT and exFAT, some network and FUSE mounts)
-// refuses the link with some other error. Then the publish is serialised by a lock
-// file beside the artifact, created with O_CREATE|O_EXCL: holding it, a writer checks
-// that dst is still absent and renames tmp onto it. The artifact still appears only
-// whole, and a writer that comes second waits for the lock and then finds the first
-// writer's complete artifact, never a half-written one (claiming dst itself with
-// O_EXCL and writing into it would show the loser a short file, which the refusal
-// then calls a leftover to move aside). A lock that outlives escrowLockWait is
-// reported, by name, rather than taken: it is another run publishing, or one that
-// was killed in the middle of a rename.
+// refuses the link with some other error, and then the only way left to publish is
+// to check that dst is absent and rename tmp onto it. That check-then-rename is safe
+// only if no other writer can publish in between, by EITHER path.
+//
+// 🔴 ONE PROTOCOL FOR EVERY WRITER. So every publish, the link included, first takes
+// a lock file beside the artifact, created with O_CREATE|O_EXCL, and holds it until it
+// returns. A writer that links without the lock could otherwise publish between a
+// renaming writer's check and its rename, and be replaced while both report success:
+// whether a link works can differ between two runs (another dcctl build, a test, a
+// mount that changed), so "the link path needs no lock" is not a property of the file.
+// Under the lock a link that meets dst still refuses, and a rename re-checks that dst
+// is absent. The artifact appears only whole, and a writer that comes second waits for
+// the lock and then finds the first writer's complete artifact. A lock that outlives
+// escrowLockWait is reported, by name, rather than taken: it is another run
+// publishing, or one that was killed while doing so.
 func publishEscrowArtifact(tmp, dst string) error {
+	release, err := lockEscrowPublish(dst)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return publishLocked(tmp, dst)
+}
+
+// publishLocked publishes tmp at dst; the caller holds dst's publish lock.
+func publishLocked(tmp, dst string) error {
 	err := linkFile(tmp, dst)
 	if err == nil || errors.Is(err, fs.ErrExist) {
 		return err
 	}
+	if _, err := os.Lstat(dst); err == nil {
+		return &fs.PathError{Op: "publish", Path: dst, Err: fs.ErrExist}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if escrowBeforeRename != nil {
+		escrowBeforeRename()
+	}
+	return os.Rename(tmp, dst)
+}
+
+// lockEscrowPublish takes dst's publish lock, waiting up to escrowLockWait for another
+// writer to release it, and returns the function that releases it.
+func lockEscrowPublish(dst string) (func(), error) {
 	lock := dst + ".publishing"
 	deadline := time.Now().Add(escrowLockWait)
 	for {
 		l, err := os.OpenFile(lock, os.O_WRONLY|os.O_CREATE|os.O_EXCL, escrowFileMode)
 		if err == nil {
 			l.Close()
-			break
+			return func() { _ = os.Remove(lock) }, nil
 		}
 		if !errors.Is(err, fs.ErrExist) {
-			return err
+			return nil, fmt.Errorf("taking the escrow publish lock %s: %w", lock, err)
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%s exists: another dcctl run is publishing this escrow artifact, or one was "+
+			return nil, fmt.Errorf("%s exists: another dcctl run is publishing this escrow artifact, or one was "+
 				"interrupted while doing so. If no dcctl run is writing it, remove %s and re-run", lock, lock)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	defer os.Remove(lock)
-	if _, err := os.Lstat(dst); err == nil {
-		return &fs.PathError{Op: "publish", Path: dst, Err: fs.ErrExist}
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	return os.Rename(tmp, dst)
 }
 
+// escrowBeforeRename, when set, runs between the no-link path's absence check and its
+// rename: a test holds a writer there while another tries to publish.
+var escrowBeforeRename func()
+
 // escrowLockWait bounds how long publishEscrowArtifact waits for another writer's
-// lock. Holding it covers one stat and one rename. A test shortens it.
+// lock. Holding it covers one link, or one stat and one rename. A test shortens it.
 var escrowLockWait = 10 * time.Second
 
 // keyFromHalfBuiltEscrow finds the root key a killed bootstrap already escrowed, so the

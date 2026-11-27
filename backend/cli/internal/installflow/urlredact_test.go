@@ -99,6 +99,20 @@ var urlSecretCases = []struct {
 	// host reading does not accept.
 	{"slash-leading password, ipv6 zone host", "https://dcUser:/dcCanaryPw@[fe80::1%25eth0]:9000/x",
 		"https://REDACTED@[fe80::1%25eth0]:9000/x", []string{"dcUser", "dcCanaryPw"}},
+	// A scoped IPv6 literal after the '@' is still the far side of a userinfo: only
+	// a digest there leaves a digit-leading password alone.
+	{"digit-leading password, scoped ipv6 host with a port", "https://dcUser:123/dcCanaryPw@[fe80::1%25eth0]:9000/x",
+		"https://REDACTED@[fe80::1%25eth0]:9000/x", []string{"dcUser", "dcCanaryPw"}},
+	{"digit-leading password, scoped ipv6 host", "https://dcUser:123/dcCanaryPw@[fe80::1%25eth0]/x",
+		"https://REDACTED@[fe80::1%25eth0]/x", []string{"dcUser", "dcCanaryPw"}},
+	{"digit-leading password, raw % zone", "https://dcUser:123/dcCanaryPw@[fe80::1%eth0]:9000/x",
+		"https://REDACTED@[fe80::1%eth0]:9000/x", []string{"dcUser", "dcCanaryPw"}},
+	{"digit-leading password, no host after the @", "s3://dcUser:2024/dcCanaryPw@bucket_name:abc/x",
+		"s3://REDACTED@bucket_name:abc/x", []string{"dcUser", "dcCanaryPw"}},
+	{"digit-leading password, host and port after the @", "s3://dcUser:2024/dcCanaryPw@bucket.example:9000",
+		"s3://REDACTED@bucket.example:9000", []string{"dcUser", "dcCanaryPw"}},
+	{"digit-leading password, a name that is no digest after the @", "s3://dcUser:2024/dcCanaryPw@Bucket.Example:abc",
+		"s3://REDACTED@Bucket.Example:abc", []string{"dcUser", "dcCanaryPw"}},
 	{"colon in the password, ipv6 host", "oci://dcUser:dc:CanaryPw@[2001:db8::1]:5000/org", "oci://REDACTED@[2001:db8::1]:5000/org",
 		[]string{"dcUser", "CanaryPw"}},
 }
@@ -118,6 +132,8 @@ var urlCleanCases = []string{
 	"oci://registry.example:5000/org/img@sha256:abc", "registry.example:5000/org/img:tag@sha256:0123abc",
 	"https://[2001:db8::1]:9000/org/img@sha256:abc", "https://[::1]:9000/a@b/archive",
 	"http://[::1]/x", "http://[::1]:8080",
+	"https://[fe80::1%25eth0]:9000/a@b/x", "http://[fe80::1%25eth0]/x", "http://[fe80::1%eth0]:8080/x",
+	"registry.example:5000/org/img@sha256+b64u:LCa0a2j_xo_5m0U8HTBBNBNCLXBkg7-g-YpeiGJm564",
 }
 
 func TestRedactURLHidesEveryCredentialPart(t *testing.T) {
@@ -191,6 +207,7 @@ func TestRedactURLsInTextHidesCredentialsInFreeText(t *testing.T) {
 		{`input = "s3://admin:2024/dcPwZX@bucket/archive"`, `input = "s3://REDACTED@bucket/archive"`},
 		{`from s3://AKIDZX:/wJalrZX@bucket/archive`, `from s3://REDACTED@bucket/archive`},
 		{`pushing admin:2024/dcPwZX@reg.example/x failed`, `pushing REDACTED@reg.example/x failed`},
+		{`pushing admin:2024/dcPwZX@[fe80::1%25eth0]/x failed`, `pushing REDACTED@[fe80::1%25eth0]/x failed`},
 	} {
 		if got := RedactURLsInText(tc.in); got != tc.want {
 			t.Errorf("RedactURLsInText(%q) = %q, want %q", tc.in, got, tc.want)
@@ -208,6 +225,7 @@ func TestRedactURLsInTextLeavesOrdinaryTextAlone(t *testing.T) {
 		"pushed ghcr.io/devicechain-io/frontend@sha256:abc and localhost:5001/frontend@sha256:def",
 		"see https://kind.sigs.k8s.io/docs/user/quick-start/",
 		"at 12:00:00 the archive https://host/a@b/archive was read",
+		"pushed localhost:5001/frontend@sha256:def.",
 	} {
 		if got := RedactURLsInText(in); got != in {
 			t.Errorf("RedactURLsInText(%q) = %q: ordinary text changed", in, got)

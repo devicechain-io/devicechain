@@ -61,10 +61,12 @@ const URLRedaction = "REDACTED"
 //     userinfo if the authority is not a well-formed host[:port] at all, if it is
 //     a name and a ':' with nothing after it ("s3://AKID:/wJalr…@bucket" — a base64
 //     secret starts with '/' one time in 64), or if it is a name and an all-digit
-//     port ("s3://admin:2024/Secret@bucket") and what follows that '@' reads as a
-//     host. A name and a port look exactly like a user and a password that starts
-//     with digits; the far side of the '@' tells them apart, since it names a host
-//     after a userinfo and a digest ("localhost:5001/img@sha256:…") after a path.
+//     port ("s3://admin:2024/Secret@bucket") and what follows that '@' is anything
+//     but an image digest. A name and a port look exactly like a user and a
+//     password that starts with digits; the far side of the '@' tells them apart
+//     only when it is a digest ("localhost:5001/img@sha256:…"), which follows a
+//     path and never a userinfo. A host there, a scoped IPv6 literal or anything
+//     else unclear is read as userinfo.
 //     A bracketed IP literal, or a name with no ':', is read as a host. The one
 //     form this cannot see is a username alone holding a raw '/'
 //     ("https://tok/en@host"), which is written exactly as a path holding an '@'
@@ -239,24 +241,48 @@ func authorityDoubt(a, tail string) doubt {
 	if strings.HasPrefix(a, "[") || colon < 0 {
 		return noDoubt
 	}
-	if colon == len(a)-1 || readsAsHost(tail) {
+	if colon == len(a)-1 || !readsAsDigest(tail) {
 		return doubtHostPort
 	}
 	return noDoubt
 }
 
-// readsAsHost reports whether tail starts with a well-formed host[:port], up to
-// the end or its first '/', '?' or '#'.
-func readsAsHost(tail string) bool {
-	if i := strings.IndexAny(tail, "/?#"); i >= 0 {
-		tail = tail[:i]
+// readsAsDigest reports whether tail, what follows an '@', is an image digest as
+// the OCI distribution grammar writes one ("sha256:0d1f…"): an algorithm of
+// lower-case letters and digits joined by '+', '.', '_' or '-', a ':', and an
+// encoded part of letters, digits, '=', '_' and '-', and nothing else (closing
+// punctuation of a sentence aside). It is the one thing a name:port/path@… value
+// may carry after its '@' and still be shown: anything else — a host, a scoped IPv6
+// literal, a word — is read as the far side of a userinfo, because when in doubt,
+// more is hidden.
+func readsAsDigest(tail string) bool {
+	tail = strings.TrimRight(tail, ".,;:)]}")
+	alg, enc, ok := strings.Cut(tail, ":")
+	if !ok || alg == "" || enc == "" || allDigits(enc) {
+		// All digits is a port: "host.example:9000" is a host, not a digest.
+		return false
 	}
-	return tail != "" && validHostPort(tail)
+	for i := 0; i < len(alg); i++ {
+		c := alg[i]
+		switch {
+		case 'a' <= c && c <= 'z' || isDigit(c):
+		case strings.IndexByte("+._-", c) >= 0 && i > 0 && i < len(alg)-1 && strings.IndexByte("+._-", alg[i-1]) < 0:
+		default:
+			return false
+		}
+	}
+	for i := 0; i < len(enc); i++ {
+		if c := enc[i]; !(isAlpha(c) || isDigit(c) || c == '=' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // validHostPort reports whether a is a well-formed host with an optional port: a
-// bracketed IP literal or a reg-name (unreserved, percent-encoded and sub-delims
-// characters), then ":" and digits, or nothing.
+// bracketed IP literal, with an optional zone after a '%' ("[fe80::1%25eth0]", or
+// the raw "%eth0" a decoded value holds), or a reg-name (unreserved, percent-encoded
+// and sub-delims characters), then ":" and digits, or nothing.
 func validHostPort(a string) bool {
 	host, port := a, ""
 	if strings.HasPrefix(a, "[") {
@@ -265,6 +291,21 @@ func validHostPort(a string) bool {
 			return false
 		}
 		host, port = a[1:end], a[end+1:]
+		if z := strings.IndexByte(host, '%'); z >= 0 {
+			zone := host[z+1:]
+			if zone == "" {
+				return false
+			}
+			for i := 0; i < len(zone); i++ {
+				if c := zone[i]; !(isAlpha(c) || isDigit(c) || strings.IndexByte("-._~%", c) >= 0) {
+					return false
+				}
+			}
+			host = host[:z]
+		}
+		if host == "" {
+			return false
+		}
 		for i := 0; i < len(host); i++ {
 			if c := host[i]; !(isHex(c) || c == ':' || c == '.') {
 				return false
@@ -418,9 +459,9 @@ func redactWord(w string) string {
 		return w
 	}
 	if after := head[c+1:]; strings.IndexByte(after, '/') > 0 && allDigits(after[:strings.IndexByte(after, '/')]) &&
-		!readsAsHost(w[at+1:]) {
-		// host:port/path@digest — not a password. A host after the '@' makes it
-		// user:password@host with a password that starts with digits.
+		readsAsDigest(w[at+1:]) {
+		// host:port/path@digest — not a password. Anything else after the '@' makes
+		// it user:password@host with a password that starts with digits.
 		return w
 	}
 	// A bracket or parenthesis the tool put around the value is kept.
