@@ -84,7 +84,8 @@ jobs:
       # Whether the fleet-runner job runs: true unless the diff reaches nothing it builds or runs against.
       fleet_runner: ${{ steps.select.outputs.fleet_runner }}
       # Whether the tui-windows job runs: true unless the diff reaches nothing in backend/cli that the
-      # install terminal UI compiles, nor the install command's own files.
+      # install terminal UI compiles, none of the install command's own files or its preflight, and
+      # no Go file in backend/cli that only a Windows build compiles.
       tui_windows: ${{ steps.select.outputs.tui_windows }}
       # The image-smoke legs this run executes: the images whose module runs whole (or one of
       # their image inputs changed), from hack/ci-select.py; every image off a pull request.
@@ -3951,8 +3952,9 @@ jobs:
   tui-windows:
     needs: discover
     # Skipped when the diff reaches nothing in backend/cli that the terminal UI compiles, nor the
-    # install command (hack/ci-select.py TUI_WINDOWS_*); ci-complete accepts the skip only with a
-    # successful discover that said so.
+    # install command or its preflight, nor a Windows-only Go file in backend/cli (hack/ci-select.py
+    # TUI_WINDOWS_* and windows_only); ci-complete accepts the skip only with a successful discover
+    # that said so.
     if: needs.discover.outputs.tui_windows == 'true'
     runs-on: windows-latest
     timeout-minutes: 30

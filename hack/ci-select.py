@@ -522,6 +522,7 @@ class PackageGraph:
 
     def __init__(self, ws, root=ROOT):
         self.ws = ws
+        self.root = root
         self.pkgs = {}
         self.missing = set()  # workspace imports with no package in the tree, from the last closure()
         bypath = sorted(ws.modpaths.items(), key=lambda kv: -len(kv[0]))
@@ -670,8 +671,15 @@ FLEET_RUNNER_INPUTS = [
 # The `tui-windows` job: the install terminal UI's packages and the cmd package (its entry
 # selection and the ConPTY smoke test), run natively on windows-latest. It runs when a changed file
 # reaches a package the TUI roots below compile THAT IS IN backend/cli, or is one of the
-# TUI_WINDOWS_INPUTS (the install command's own files in cmd, Execute's signal handling in root.go,
-# the install characterisation goldens).
+# TUI_WINDOWS_INPUTS (the install command's own files in cmd, its preflight, Execute's signal
+# handling in root.go, the install characterisation goldens), or is a Go file in backend/cli that
+# only a Windows build compiles (windows_only).
+#
+# 🔴 WINDOWS-ONLY FILES ALWAYS RUN IT. A file named *_windows.go, or one whose //go:build line
+# selects windows, is compiled by no Linux test: only the Windows vet type-checks it, and only this
+# job runs it. cmd/preflight_freebytes_windows.go reading zero free bytes would pass every Linux
+# leg and the Windows vet, so a change to any such file in backend/cli runs the job, whichever
+# package holds it.
 #
 # 🔴 WHY ONLY backend/cli'S SIDE OF THE CLOSURE. The roots also compile ~20 core packages (and a few
 # of k8s and deploy), and a change to one of those runs every backend/cli Go leg, whose
@@ -690,9 +698,30 @@ TUI_WINDOWS_ROOTS = [
 ]
 TUI_WINDOWS_INPUTS = [
     "backend/cli/cmd/install*",
+    "backend/cli/cmd/preflight*",
     "backend/cli/cmd/root.go",
     "backend/cli/cmd/testdata/install_golden/**",
 ]
+_WINDOWS_FILE = re.compile(r"_windows(_[a-z0-9]+)?(_test)?\.go$")
+_BUILD_LINE = re.compile(r"^//go:build (.+)$", re.M)
+_SELECTS_WINDOWS = re.compile(r"(?<![!\w])windows\b")
+
+
+def windows_only(path, root=ROOT):
+    """Is `path` a Go file that a Windows build compiles and a Linux one does not: named for windows
+    (the go command's GOOS file-name suffix), or with a //go:build line that selects windows? A
+    deleted file is decided by its name alone."""
+    if not path.endswith(".go"):
+        return False
+    if _WINDOWS_FILE.search(os.path.basename(path)):
+        return True
+    try:
+        with open(os.path.join(root, path), encoding="utf-8", errors="replace") as fh:
+            head = fh.read(8192)
+    except OSError:
+        return False
+    m = _BUILD_LINE.search(head)
+    return bool(m and _SELECTS_WINDOWS.search(m.group(1)))
 
 
 def tui_windows_verdict(s, files, graph):
@@ -704,6 +733,9 @@ def tui_windows_verdict(s, files, graph):
     for f in files:
         if match(f, TUI_WINDOWS_INPUTS):
             s.tui_windows, s.tui_windows_why = True, "runs: %s is an input of the install command" % f
+            return
+        if f.startswith(TUI_WINDOWS_MODULE + "/") and windows_only(f, graph.root if graph is not None else ROOT):
+            s.tui_windows, s.tui_windows_why = True, "runs: %s is compiled only for Windows" % f
             return
     if graph is None:
         inside = [f for f in files if f.startswith(TUI_WINDOWS_MODULE + "/")]
@@ -1679,6 +1711,11 @@ def self_test():
         expect(select(ws, ["backend/cli/x.go"]).tui_windows, "with no package graph, a Go change runs tui-windows")
         expect(select(ws, [".github/workflows/ci.yml"]).tui_windows, "a full selection runs tui-windows")
         expect(not select(ws, ["docs/x.md"]).tui_windows, "a docs change skips tui-windows")
+        expect(select(ws, ["backend/cli/cmd/preflight_cloud.go"]).tui_windows, "the install preflight runs tui-windows")
+        expect(windows_only("backend/cli/bootstrap/procstate_windows.go") and windows_only("x/y_windows_test.go")
+               and windows_only("x/y_windows_arm64.go"), "a *_windows.go name is Windows-only")
+        expect(not windows_only("x/windows.go") and not windows_only("x/y_unix.go") and not windows_only("x/y_windows.txt"),
+               "...and no other name is, by its name")
         drafted = select(ws, ["backend/cli/cmd/install_ui.go"])
         mark_draft(drafted)
         expect(not drafted.tui_windows, "a draft skips tui-windows")
@@ -1713,6 +1750,9 @@ def self_test():
             "backend/services/svc-a/x.go": 'package svca\n\n/* import "example.com/core/messaging" */\n',
             "backend/tools/tool/main.go": 'package main\n\nimport "example.com/core/rdb/sub"\n\nfunc main() {}\n',
             "backend/cli/cli.go": 'package cli\n',
+            # windows build lines (read by tui-windows only; nothing imports them)
+            "backend/core/messaging/tagged.go": '//go:build windows && amd64\n\npackage messaging\n',
+            "backend/core/messaging/untagged.go": '//go:build !windows\n\npackage messaging\n',
         }
         with tempfile.TemporaryDirectory() as tmp:
             for rel, body in tree.items():
@@ -1747,6 +1787,11 @@ def self_test():
                     expect(tui("backend/core/rdb/testdata/fixture.sql"), "a fixture under a TUI root runs tui-windows")
                     expect(not tui("backend/core/deep/d.go"), "a non-root's test import does NOT run tui-windows")
                     expect(not tui("docs/x.md", "frontend/a.ts"), "docs and frontend do NOT run tui-windows")
+                    # Windows-only files of the module run it from any package, by name or build line.
+                    expect(tui("backend/core/messaging/m_windows.go"), "a *_windows.go file in the module runs tui-windows")
+                    expect(tui("backend/core/messaging/tagged.go"), "a file whose build line selects windows runs tui-windows")
+                    expect(not tui("backend/core/messaging/untagged.go"), "a file built everywhere BUT windows does NOT")
+                    expect(not tui("backend/services/svc-a/y_windows.go"), "a *_windows.go file outside the module does NOT")
                     TUI_WINDOWS_MODULE = "backend/tools/tool"
                     expect(not tui("backend/core/leaf/l.go"), "a package outside the TUI module does NOT run tui-windows")
                 finally:

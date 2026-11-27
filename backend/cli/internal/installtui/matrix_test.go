@@ -22,6 +22,11 @@ import (
 // MISSING from the matrix? A screen added without goldens, a scenario dropped from its
 // table, or a size removed from one test's list fails here, by name.
 //
+// That the files on disk are the ones those tests DRAW is each package's golden sweep
+// (golden_sweep_test.go here, in brand and in result): after an unfiltered run, a golden
+// that no test compared fails the package, so a scenario dropped from its table while its
+// fixtures stay behind is caught there, not passed here.
+//
 // Paths are relative to this package; the splash's goldens live in brand/testdata, the
 // result screens' in result/testdata.
 var clusterFlow = []struct {
@@ -33,7 +38,7 @@ var clusterFlow = []struct {
 	{"welcome", []string{"testdata/prerun/welcome-kind", "testdata/prerun/welcome-context"}},
 	{"preflight", []string{"testdata/prerun/preflight-running", "testdata/prerun/preflight-pass",
 		"testdata/prerun/preflight-warn", "testdata/prerun/preflight-fail", "testdata/prerun/preflight-verdicts",
-		"testdata/prerun/preflight-skipped", "testdata/prerun/preflight-switch"}},
+		"testdata/prerun/preflight-skipped", "testdata/prerun/preflight-switch", "testdata/prerun/preflight-advisory"}},
 	{"choices", []string{"testdata/prerun/choices-kind", "testdata/prerun/choices-context-compact",
 		"testdata/prerun/choices-failed", "testdata/prerun/choices-rechecking", "testdata/prerun/choices-renaming",
 		"testdata/prerun/picker"}},
