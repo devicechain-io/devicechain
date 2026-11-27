@@ -53,6 +53,8 @@ install 还创建基础数据库身份，用于创建各实例自己的数据库
 - **`local`**：`--cluster <name>` 指定 kind 名，默认 `devicechain`。不存在则创建，未指定 `--yes` 时先确认；存在则复用。
 - **任意提供商**：`--kube-context <ctx>` 使用已有集群。`dcctl` 从不创建或删除通过此方式访问的集群。
 
+如果希望在安装任何内容之前，先在屏幕上逐步完成检查、选择选项并审核计划，请运行 `dcctl install local --ui=tui`；参见[安装终端界面](./install-terminal-ui.md)。
+
 ### 重新运行安装 {#re-running-install}
 
 在同一集群重跑会收敛：已有内容保持，缺失内容补充，包括备份存储卷保留当前大小，见[备份存储大小](#backup-store-size)。

@@ -118,7 +118,7 @@ func measuredProgress(metric string, unit installflow.Unit, cur, of int64) insta
 }
 
 // The scenarios the goldens draw.
-func scenarioApplying() (envs []installflow.Envelope, now time.Time, keys []tea.KeyPressMsg) {
+func scenarioApplying() (envs []installflow.Envelope, now time.Time, keys []tea.Msg) {
 	s := &script{}
 	s.envs = append(s.envs, env(t0, "", 0, manifestAll()))
 	s.done(installflow.StepInstallInputs, installflow.StepInstallPreflight, installflow.StepInstallCluster,
@@ -135,7 +135,7 @@ func scenarioApplying() (envs []installflow.Envelope, now time.Time, keys []tea.
 	return s.envs, at(6*time.Minute + 42*time.Second), nil
 }
 
-func scenarioReadiness() (envs []installflow.Envelope, now time.Time, keys []tea.KeyPressMsg) {
+func scenarioReadiness() (envs []installflow.Envelope, now time.Time, keys []tea.Msg) {
 	s := &script{}
 	s.envs = append(s.envs, env(t0, "", 0, manifestAll()))
 	ids := installflow.InstallSteps()
@@ -146,10 +146,10 @@ func scenarioReadiness() (envs []installflow.Envelope, now time.Time, keys []tea
 	s.at = 11 * time.Minute
 	s.add(installflow.StepInstallRDBReady, 1, measuredProgress("cloudnativepg.instances", installflow.UnitReplicas, 2, 3))
 	// The operator opens the pane, then pauses it a page up.
-	return s.envs, at(11*time.Minute + 2*time.Second), []tea.KeyPressMsg{{Code: 'l', Text: "l"}, {Code: tea.KeyPgUp}}
+	return s.envs, at(11*time.Minute + 2*time.Second), []tea.Msg{tea.KeyPressMsg{Code: 'l', Text: "l"}, tea.KeyPressMsg{Code: tea.KeyPgUp}}
 }
 
-func scenarioQuiet() (envs []installflow.Envelope, now time.Time, keys []tea.KeyPressMsg) {
+func scenarioQuiet() (envs []installflow.Envelope, now time.Time, keys []tea.Msg) {
 	s := &script{}
 	s.envs = append(s.envs, env(t0, "", 0, manifestAll()))
 	ids := installflow.InstallSteps()
@@ -163,13 +163,43 @@ func scenarioQuiet() (envs []installflow.Envelope, now time.Time, keys []tea.Key
 	return s.envs, at(s.at + 52*time.Second), nil
 }
 
+// scenarioStopping is the first Ctrl+C during the OpenTofu apply: the stopping notice,
+// with the stages as they were, until the engine settles.
+func scenarioStopping() (envs []installflow.Envelope, now time.Time, msgs []tea.Msg) {
+	envs, now, _ = scenarioApplying()
+	return envs, now.Add(3 * time.Second), []tea.Msg{tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}}
+}
+
+// scenarioFinalizing is every stage closed and no summary yet: Finalizing, never success.
+func scenarioFinalizing() (envs []installflow.Envelope, now time.Time, msgs []tea.Msg) {
+	s := &script{}
+	s.envs = append(s.envs, env(t0, "", 0, manifestAll()))
+	s.done(installflow.InstallSteps()...)
+	return s.envs, at(s.at + 2*time.Second), nil
+}
+
+// scenarioKindPrompt is the question to create the kind cluster, asked on the screen: a
+// progress-only run without --yes has no review to answer it.
+func scenarioKindPrompt() (envs []installflow.Envelope, now time.Time, msgs []tea.Msg) {
+	s := &script{}
+	s.envs = append(s.envs, env(t0, "", 0, manifestAll()))
+	s.done(installflow.StepInstallInputs, installflow.StepInstallPreflight)
+	s.add(installflow.StepInstallCluster, 1, installflow.StepStarted{Message: "install.cluster"})
+	q := installflow.Question{ID: "q1", Question: installflow.QuestionCreateKindCluster,
+		Params: []installflow.Param{{Name: "cluster", Value: installflow.Text("devicechain")}}}
+	return s.envs, at(s.at + time.Second), []tea.Msg{promptMsg{q: q, reply: make(chan installflow.Response, 1)}}
+}
+
 var scenarios = []struct {
 	name string
-	make func() ([]installflow.Envelope, time.Time, []tea.KeyPressMsg)
+	make func() ([]installflow.Envelope, time.Time, []tea.Msg)
 }{
 	{"applying", scenarioApplying},
 	{"readiness-logs-paused", scenarioReadiness},
 	{"quiet-retry-indeterminate", scenarioQuiet},
+	{"stopping", scenarioStopping},
+	{"finalizing", scenarioFinalizing},
+	{"kind-prompt", scenarioKindPrompt},
 }
 
 var levels = []struct {
@@ -181,7 +211,7 @@ var sizes = [][2]int{{120, 40}, {100, 30}, {80, 24}, {60, 20}}
 
 // drive plays events and keys through a real Bubble Tea loop (teatest) and returns the
 // final model.
-func drive(t *testing.T, m model, w, h int, envs []installflow.Envelope, keys []tea.KeyPressMsg) model {
+func drive(t *testing.T, m model, w, h int, envs []installflow.Envelope, keys []tea.Msg) model {
 	t.Helper()
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(w, h))
 	for _, e := range envs {

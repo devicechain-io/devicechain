@@ -142,6 +142,10 @@
       "sourceSha256": "3a8e38ea4c130b9dde95ddc0d192fc0b9a35c8c57e5ca2225a0d48c58f20e063",
       "translationSha256": "f6820681c86d5a41ab342180019f511969a3088c0e7543fe8a9cda496f3e1775"
     },
+    "deployment/install-terminal-ui.md": {
+      "sourceSha256": "8938047867c0eb1fe8b667cb4face944dcc4b9290bb7dce035943559a9c789dd",
+      "translationSha256": "c652493bce23cf675dae4f3efcfaa926ec5c76f9202ef6dbe8edbb5f2072f463"
+    },
     "deployment/kubernetes-operator.md": {
       "sourceSha256": "4b883aa5022be4cf3e71561c217b6f38437b35b820679b90913a2fce5d077657",
       "translationSha256": "718d0fb26a3bd8625a3940aac261338ebb19d29e797391c98845503b16d69394"

@@ -1,0 +1,24 @@
++- DeviceChain - Installing - kind-devicechain --------------------------------+
+| Overall  ##############################  6/6 stages                          |
+| Elapsed 00:30 - Remaining: unknown - last observation 2s ago                 |
+|                                                                              |
+| DONE  Resolve target / cluster      ##########  done                         |
+| DONE  Identity, refusals and claim  ##########  done                         |
+| DONE  Credentials and operator      ##########  done                         |
+| DONE  Cluster prerequisites         ##########  done                         |
+| DONE  Base identity and record      ##########  done                         |
+| DONE  Relational store ready        ##########  done                         |
+|                                                                              |
+| Now  Finalizing                                                              |
+|                                                                              |
+| > Logs (collapsed - 312 lines kept - l to open)                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
++------------------------------------------------------------------------------+
+| l logs  Ctrl+C stop                                                          |
++------------------------------------------------------------------------------+
