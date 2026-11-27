@@ -145,12 +145,23 @@ func (p *prerun) update(msg tea.Msg) (tea.Cmd, prerunOutcome) {
 		}
 		return nil, stay
 	case tea.KeyPressMsg:
+		// 🔴 THE REVIEW'S SETTLE GATE SEES EVERY KEY FIRST, before any guard below can drop
+		// it: a key that will not reach the review's own handler (the terminal is too small,
+		// help takes it) is input that does not act on the review, so it restarts the quiet
+		// period and disarms a review that had settled (settleGate.interrupt). Where nothing
+		// reads the terminal for us (a Windows console) this is the only stamp it gets; a key
+		// that does reach the review is stamped and judged by settleGate.admit there.
+		var gate tea.Cmd
+		if p.screen == screenReview && (p.tooSmall() || p.help.open || p.opensHelp(msg)) {
+			gate = p.rv.interrupt()
+		}
 		if p.tooSmall() {
-			return nil, stay
+			return gate, stay
 		}
 		if p.help.open || p.opensHelp(msg) {
 			// 🔴 HELP TAKES THE KEY WHOLE: nothing under it moves, changes or answers.
-			return p.helpKey(msg), stay
+			p.helpKey(msg)
+			return gate, stay
 		}
 		if p.ch.picker != nil {
 			return p.pickerKey(msg)

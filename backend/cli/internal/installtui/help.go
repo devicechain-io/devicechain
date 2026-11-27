@@ -89,12 +89,9 @@ func (p *prerun) opensHelp(k tea.KeyPressMsg) bool {
 	return key.Matches(k, p.keys.help)
 }
 
-// helpKey takes every key while help is open, and the key that opens it.
-func (p *prerun) helpKey(k tea.KeyPressMsg) tea.Cmd {
-	var cmd tea.Cmd
-	if p.screen == screenReview {
-		cmd = p.rv.interrupt() // input: the review settles again once help closes
-	}
+// helpKey takes every key while help is open, and the key that opens it. On the review
+// the key has already been through the settle gate (prerun.update).
+func (p *prerun) helpKey(k tea.KeyPressMsg) {
 	switch {
 	case !p.help.open:
 		p.help = helpState{open: true}
@@ -104,7 +101,6 @@ func (p *prerun) helpKey(k tea.KeyPressMsg) tea.Cmd {
 		_, list, room := p.helpParts()
 		p.help.scroll(k.String(), len(list), room)
 	}
-	return cmd
 }
 
 // helpTitle names the screen help is open over.

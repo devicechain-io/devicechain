@@ -159,12 +159,24 @@ func (p *instancePhase) update(msg tea.Msg) (tea.Cmd, prerunOutcome) {
 	case BootstrapPlanned:
 		return p.review(msg), stay
 	case tea.KeyPressMsg:
-		switch p.stage {
-		case instHandover:
-			return p.handoverKey(msg)
-		case instReview:
-			return p.reviewKey(msg)
+		if p.stage != instHandover && p.stage != instReview {
+			break
 		}
+		// 🔴 THE SETTLE GATE SEES EVERY KEY FIRST, before any guard can drop it (as on the
+		// install review, prerun.update): a key that help takes, or that a screen too small
+		// to show whole drops, is input that does not act on the screen, so it restarts the
+		// quiet period and disarms a screen that had settled. A key that reaches the
+		// screen's handler is stamped and judged by settleGate.admit there.
+		if p.helpKey(msg) {
+			return p.gate.interrupt(), stay
+		}
+		if !p.shown() {
+			return p.gate.interrupt(), stay
+		}
+		if p.stage == instHandover {
+			return p.handoverKey(msg)
+		}
+		return p.reviewKey(msg)
 	}
 	if p.stage == instChoices {
 		_, cmd := p.flow.Update(msg)
@@ -190,12 +202,6 @@ func (p *instancePhase) review(planned BootstrapPlanned) tea.Cmd {
 }
 
 func (p *instancePhase) handoverKey(k tea.KeyPressMsg) (tea.Cmd, prerunOutcome) {
-	if cmd, ok := p.helpKey(k); ok {
-		return cmd, stay
-	}
-	if !p.shown() {
-		return nil, stay // a screen the terminal cannot show whole takes no key
-	}
 	if ok, cmd := p.gate.admit(); !ok {
 		return cmd, stay // typed before the screen settled: dropped, whatever it was
 	}
@@ -215,12 +221,6 @@ func (p *instancePhase) handoverKey(k tea.KeyPressMsg) (tea.Cmd, prerunOutcome) 
 }
 
 func (p *instancePhase) reviewKey(k tea.KeyPressMsg) (tea.Cmd, prerunOutcome) {
-	if cmd, ok := p.helpKey(k); ok {
-		return cmd, stay
-	}
-	if !p.shown() {
-		return nil, stay // a screen the terminal cannot show whole takes no key
-	}
 	if ok, cmd := p.gate.admit(); !ok {
 		return cmd, stay // typed before the screen settled: dropped, whatever it was
 	}
@@ -258,10 +258,9 @@ func (p *instancePhase) back() {
 }
 
 // helpKey takes every key while help is open over the hand-over or the review, and the
-// key that opens it (? or F1), whether or not the screen has settled or fits. Each is
-// input to the settle gate, so the screen settles again after help closes; none of them
-// moves the focus or acts on the screen.
-func (p *instancePhase) helpKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
+// key that opens it (? or F1), whether or not the screen has settled or fits. None of
+// them moves the focus or acts on the screen; update passes each through the settle gate.
+func (p *instancePhase) helpKey(k tea.KeyPressMsg) bool {
 	s := k.String()
 	switch {
 	case p.help && (s == "esc" || s == "?" || s == "f1"):
@@ -270,9 +269,9 @@ func (p *instancePhase) helpKey(k tea.KeyPressMsg) (tea.Cmd, bool) {
 	case s == "?" || s == "f1":
 		p.help = true
 	default:
-		return nil, false
+		return false
 	}
-	return p.gate.interrupt(), true
+	return true
 }
 
 // shown reports whether the screen on the terminal is there whole: only then may a key

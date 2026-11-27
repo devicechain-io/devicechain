@@ -861,3 +861,139 @@ func TestSetupHelpGoldens(t *testing.T) {
 		}
 	}
 }
+
+// smallKeys are keys pressed while the terminal is too small to show a review: help
+// opened (? or F1), a key while help is open (help opened at full size first), and an
+// ordinary key. Each is dropped by the size guard; each is still input.
+var smallKeys = []struct {
+	name      string
+	helpFirst bool
+	small     []string
+}{
+	{"? while small", false, []string{"?"}},
+	{"F1 while small", false, []string{"f1"}},
+	{"Esc under help while small", true, []string{"esc"}},
+	{"scroll under help while small", true, []string{"down"}},
+	{"Tab while small", false, []string{"tab"}},
+}
+
+// 🔴 A KEY THE SIZE GUARD DROPS STILL REACHES THE SETTLE GATE, on the key-handler-stamp
+// path (a Windows console, where nothing reads the terminal for us). The install review
+// settles with Approve focused; the terminal shrinks below 60x16; a key is pressed; the
+// size comes back; Enter is pressed at once. The dropped key was input: it disarmed the
+// review, so that Enter approves nothing, and only a quiet period after it lets a later
+// Enter approve.
+func TestAKeyDroppedWhileTooSmallStillDisarmsTheReview(t *testing.T) {
+	for _, sc := range smallKeys {
+		t.Run(sc.name, func(t *testing.T) {
+			withSettle(t, 500*time.Millisecond)
+			at := time.Hour
+			clock := &inputClock{readerStamps: false, now: func() time.Duration { return at }}
+			p, tick := reviewOn(t, clock)
+			at += time.Second
+			deliver(p, tick)
+			at += time.Second
+			p.update(keyOf("tab")) // to Approve
+			if sc.helpFirst {
+				at += time.Second
+				p.update(keyOf("?")) // help over the settled review, at full size
+				at += time.Second
+				deliver(p, p.rv.ask()) // it settles again while help is read
+			}
+			if !p.rv.armed || p.rv.focus != reviewApprove {
+				t.Fatalf("not settled on Approve: armed %v, focus %d", p.rv.armed, p.rv.focus)
+			}
+			at += time.Second
+			p.resize(40, 10)
+			for _, k := range sc.small {
+				p.update(keyOf(k))
+			}
+			p.resize(200, 40)
+			if p.rv.armed {
+				t.Fatal("a key dropped while the terminal was too small left the review armed")
+			}
+			if p.help.open {
+				p.update(keyOf("esc"))
+			}
+			if _, out := p.update(keyOf("enter")); out != stay || p.approval != nil {
+				t.Fatalf("Enter at once after the size came back: %v", out)
+			}
+			at += time.Second
+			deliver(p, p.rv.ask())
+			at += time.Second
+			if _, out := p.update(keyOf("enter")); out != proceed {
+				t.Fatalf("Approve by a quiet user: %v", out)
+			}
+		})
+	}
+}
+
+// The same sequence on setup's instance review, and on its hand-over: a key the size
+// guard drops disarms the screen, so an Enter pressed as soon as the size comes back
+// neither approves the instance nor continues.
+func TestAKeyDroppedWhileTooSmallStillDisarmsSetupsScreens(t *testing.T) {
+	for _, sc := range smallKeys {
+		t.Run(sc.name, func(t *testing.T) {
+			keys := newFakeKeys()
+			d := instDriverOn(t, keys)
+			keys.clock.readerStamps = false
+			keys.advance(time.Second)
+			d.release()
+			keys.advance(time.Second)
+			d.keys("tab") // to Approve
+			if !d.m.inst.gate.armed || d.m.inst.focus != reviewApprove {
+				t.Fatalf("not settled on Approve: armed %v, focus %d", d.m.inst.gate.armed, d.m.inst.focus)
+			}
+			if sc.helpFirst {
+				keys.advance(time.Second)
+				d.keys("?")
+				keys.advance(time.Second)
+				d.release()
+				if !d.m.inst.gate.armed {
+					t.Fatal("the review did not settle again under help")
+				}
+			}
+			keys.advance(time.Second)
+			d.send(tea.WindowSizeMsg{Width: 40, Height: 10})
+			d.keys(sc.small...)
+			d.send(tea.WindowSizeMsg{Width: 100, Height: 40})
+			if d.m.inst.gate.armed {
+				t.Fatal("a key dropped while the terminal was too small left the review armed")
+			}
+			if d.m.inst.help {
+				d.keys("esc")
+			}
+			d.keys("enter")
+			if len(d.chose) != 0 {
+				t.Fatal("Enter at once after the size came back approved the instance")
+			}
+			keys.advance(time.Second)
+			d.release()
+			keys.advance(time.Second)
+			d.keys("enter")
+			if len(d.chose) != 1 {
+				t.Fatalf("Approve by a quiet user: chose %d", len(d.chose))
+			}
+		})
+	}
+	t.Run("hand-over", func(t *testing.T) {
+		withSettle(t, 500*time.Millisecond)
+		keys := newFakeKeys()
+		keys.clock.readerStamps = false
+		d := newInstDriver(t, instCaps(), instScreens(goodPlan))
+		d.m.inst.gate.clock = keys.clock
+		keys.advance(time.Second)
+		d.release()
+		if !d.m.inst.gate.armed {
+			t.Fatal("the hand-over did not settle")
+		}
+		keys.advance(time.Second)
+		d.send(tea.WindowSizeMsg{Width: 40, Height: 10})
+		d.keys("?")
+		d.send(tea.WindowSizeMsg{Width: 100, Height: 40})
+		d.keys("esc", "enter")
+		if d.stage() != instHandover {
+			t.Fatalf("Enter at once after the size came back left the hand-over: stage %d", d.stage())
+		}
+	})
+}
