@@ -1,0 +1,20 @@
+\x1b[1mDeviceChain - dcctl install - kind devicechain\x1b[m dcctl v1.12.0
+------------------------------------------------------------
+\x1b[1mChoose a context\x1b[m
+Contexts from your kubeconfig. Choosing one makes it the
+target and runs the checks against it.
+
+  kind-devicechain
+> \x1b[7mprod\x1b[m
+  staging
+
+
+
+
+
+
+
+
+
+------------------------------------------------------------
+up/down context - Enter use - Esc close - Ctrl+C exit

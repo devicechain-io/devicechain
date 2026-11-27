@@ -1,0 +1,24 @@
++-\x1b[1m DeviceChain - dcctl install - kind devicechain \x1b[m------------- dcctl v1.12.0 -+
+| \x1b[1mAdvanced settings\x1b[m                                                            |
+| Editors change the plan at once and re-run the checks. Every other flag from |
+| the command line is carried as given.                                        |
+| ... 11 lines above                                                           |
+|                                                                              |
+| \x1b[1mBackups and snapshots\x1b[m                                                        |
+| > TLS (cert-manager) (--no-tls): \x1b[7mon\x1b[m (default)                                |
+|   Database backups: on (follows the bundled CloudNativePG operator and, on   |
+|   Compact, TLS)                                                              |
+|                                                                              |
+| \x1b[1mRelational recovery\x1b[m                                                          |
+|   nothing set; the defaults apply                                            |
+|                                                                              |
+| \x1b[1mGateway, MQTT and legacy ingress\x1b[m                                             |
+|   nothing set; the defaults apply                                            |
+|                                                                              |
+| \x1b[1mEscape hatches\x1b[m                                                               |
+|   --yes true carried (from the command line)                                 |
+|                                                                              |
+| Preflight: all checks passed.                                                |
++------------------------------------------------------------------------------+
+| up/down setting - Space toggle - Esc close - Ctrl+C exit                     |
++------------------------------------------------------------------------------+

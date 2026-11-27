@@ -1,0 +1,16 @@
+DeviceChain - dcctl install - kind devicechain dcctl v1.12.0
+------------------------------------------------------------
+Cluster choices
+
+... 4 lines above
+> Topology   ( ) Single (*) HA (changed in this installer)
+
+... 2 lines below
+
+Preflight: 2 failures, 1 warning. Continue is unavailable
+while any check fails. Fix each failure, then Recheck.
+
+  Continue (unavailable)    Advanced    Preflight    Exit
+------------------------------------------------------------
+up/down/Space choose - Tab next - Esc back - q exit
+Ctrl+C exit

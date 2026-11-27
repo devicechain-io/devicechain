@@ -35,6 +35,7 @@ type prerunScreen uint8
 const (
 	screenWelcome prerunScreen = iota
 	screenPreflight
+	screenChoices
 )
 
 // Minimum size the screens before the run are drawn at. Below it they ask for a larger
@@ -45,10 +46,10 @@ const (
 	prerunMinHeight = 16
 )
 
-// prerun is the welcome and preflight screens: everything shown before the run starts.
-// It changes nothing anywhere. Its checks are the read-only preflight, and the one thing
-// it can change, the footprint, is a change to the pending plan made through the
-// command's own resolver.
+// prerun is the welcome, preflight and cluster-choice screens: everything shown before
+// the run starts. It changes nothing anywhere. Its checks are the read-only preflight,
+// and what it can change (the target, footprint, topology and the drawer's editors) is a
+// change to the pending plan made through the command's own resolver.
 type prerun struct {
 	caps terminal.Capabilities
 	// theme is the result screens' theme: one set of tokens and glyphs for every
@@ -62,12 +63,19 @@ type prerun struct {
 	width  int
 	height int
 
-	facts  Facts
-	replan func(compact bool) (installflow.Engine, installflow.PreflightRunner, error)
+	facts    Facts
+	settings []Setting
+	contexts func() ([]string, error)
+	replan   func(Edits) (Replanned, error)
+	// edits are the changes made so far; the plan is the command line's request with
+	// them applied.
+	edits Edits
 	// engine and runner are the plan as it stands: nil engine means the one the command
 	// passed. runner is what the screen's checks run.
 	engine installflow.Engine
 	runner installflow.PreflightRunner
+	// refusal is why the last change was refused; the plan stayed as it was.
+	refusal string
 
 	// checks counts the screen's preflight runs still going; wait joins them.
 	checks sync.WaitGroup
@@ -75,6 +83,7 @@ type prerun struct {
 	screen  prerunScreen
 	welcome int // the focused welcome action
 	pf      preflightState
+	ch      choicesState
 }
 
 func newPrerun(ctx context.Context, caps terminal.Capabilities, w *Wizard, runner installflow.PreflightRunner,
@@ -85,8 +94,8 @@ func newPrerun(ctx context.Context, caps terminal.Capabilities, w *Wizard, runne
 	theme := result.NewTheme(caps)
 	p := &prerun{caps: caps, theme: theme, keys: newPrerunKeys(theme.Glyphs),
 		redact: redact, ctx: ctx, width: caps.Width, height: caps.Height,
-		facts: w.Facts, replan: w.Replan, runner: runner}
-	p.pf = newPreflightState(w.Facts.Compact)
+		facts: w.Facts, settings: w.Settings, contexts: w.Contexts, replan: w.Replan, runner: runner}
+	p.pf = newPreflightState()
 	return p
 }
 
@@ -116,8 +125,14 @@ func (p *prerun) update(msg tea.Msg) (tea.Cmd, prerunOutcome) {
 		if p.tooSmall() {
 			return nil, stay
 		}
-		if p.screen == screenWelcome {
+		if p.ch.picker != nil {
+			return p.pickerKey(msg)
+		}
+		switch p.screen {
+		case screenWelcome:
 			return p.welcomeKey(msg)
+		case screenChoices:
+			return p.choicesKey(msg)
 		}
 		return p.preflightKey(msg)
 	}
@@ -132,6 +147,8 @@ func (p *prerun) update(msg tea.Msg) (tea.Cmd, prerunOutcome) {
 type prerunKeys struct {
 	next, prev, up, down, enter, back, exit, cancel key.Binding
 	confirm, keep                                   key.Binding
+	// The cluster choices, the drawer, the picker and the name editor.
+	nextField, choose, toggle, setting, pick, closeOverlay, apply, erase key.Binding
 }
 
 func newPrerunKeys(g result.Glyphs) prerunKeys {
@@ -150,6 +167,15 @@ func newPrerunKeys(g result.Glyphs) prerunKeys {
 		cancel:  key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("Ctrl+C", "exit")),
 		confirm: key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "switch")),
 		keep:    key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "keep")),
+
+		nextField:    key.NewBinding(key.WithKeys("tab", "right"), key.WithHelp("Tab", "next")),
+		choose:       key.NewBinding(key.WithKeys("up", "down", "space"), key.WithHelp(updown+"/Space", "choose")),
+		toggle:       key.NewBinding(key.WithKeys("space", "enter"), key.WithHelp("Space", "toggle")),
+		setting:      key.NewBinding(key.WithKeys("up", "down"), key.WithHelp(updown, "setting")),
+		pick:         key.NewBinding(key.WithKeys("up", "down"), key.WithHelp(updown, "context")),
+		closeOverlay: key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "close")),
+		apply:        key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "use")),
+		erase:        key.NewBinding(key.WithKeys("backspace"), key.WithHelp("Backspace", "erase")),
 	}
 }
 
@@ -161,6 +187,10 @@ func (p *prerun) active() []key.Binding {
 		return []key.Binding{k.cancel}
 	case p.screen == screenWelcome:
 		return []key.Binding{k.enter, k.next, k.exit, k.cancel}
+	case p.ch.picker != nil:
+		return p.pickerActive()
+	case p.screen == screenChoices:
+		return p.choicesActive()
 	case p.pf.confirm:
 		return []key.Binding{k.confirm, k.keep, k.cancel}
 	}
@@ -245,9 +275,14 @@ func (p *prerun) render() string {
 	footer := p.footer(f.inner)
 	f.rows -= len(footer) - 1
 	var body []string
-	if p.screen == screenWelcome {
+	switch {
+	case p.ch.picker != nil:
+		body = p.pickerLines(f.inner, f.rows)
+	case p.screen == screenWelcome:
 		body = p.welcomeLines(f.inner, f.rows)
-	} else {
+	case p.screen == screenChoices:
+		body = p.choicesLines(f.inner, f.rows)
+	default:
 		body = p.preflightLines(f.inner, f.rows)
 	}
 	body = fit(body, f.rows)

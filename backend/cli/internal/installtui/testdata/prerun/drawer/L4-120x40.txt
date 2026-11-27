@@ -1,0 +1,40 @@
+╭─ DeviceChain · dcctl install · kind devicechain ───────────────────────────────────────────────────── dcctl v1.12.0 ─╮
+│ Advanced settings                                                                                                    │
+│ Editors change the plan at once and re-run the checks. Every other flag from the command line is carried as given.   │
+│                                                                                                                      │
+│ Images and developer build                                                                                           │
+│ › --registry localhost:5000 carried (from the command line)                                                          │
+│                                                                                                                      │
+│ Monitoring and alerts                                                                                                │
+│   Monitoring stack (--no-monitoring): on (default)                                                                   │
+│   --alert-webhook configured (hidden) carried (from the command line)                                                │
+│                                                                                                                      │
+│ Database placement, connection budget and WAL                                                                        │
+│   --database-toleration dedicated=db:NoSchedule, spot=true:NoSchedule carried (from the command line)                │
+│                                                                                                                      │
+│ Backups and snapshots                                                                                                │
+│   TLS (cert-manager) (--no-tls): on (default) unavailable: Standard always installs cert-manager                     │
+│   Database backups: on (follows the bundled CloudNativePG operator and, on Compact, TLS)                             │
+│                                                                                                                      │
+│ Relational recovery                                                                                                  │
+│   nothing set; the defaults apply                                                                                    │
+│                                                                                                                      │
+│ Gateway, MQTT and legacy ingress                                                                                     │
+│   nothing set; the defaults apply                                                                                    │
+│                                                                                                                      │
+│ Escape hatches                                                                                                       │
+│   --yes true carried (from the command line)                                                                         │
+│                                                                                                                      │
+│ Preflight: all checks passed.                                                                                        │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ ↑/↓ setting · Esc close · Ctrl+C exit                                                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -1,0 +1,30 @@
+╭─\x1b[1m DeviceChain · dcctl install · kind devicechain \x1b[m─────────────────────────────────\x1b[38;2;138;166;182m dcctl v1.12.0 \x1b[m─╮
+│ \x1b[1mCluster choices\x1b[m                                                                                  │
+│                                                                                                  │
+│   \x1b[38;2;138;166;182mTarget    \x1b[m (*) Managed local kind ( ) Existing context                                         │
+│   \x1b[38;2;138;166;182mCluster   \x1b[m devicechain, created if it does not exist\x1b[38;2;138;166;182m (Enter to rename)\x1b[m                         │
+│ › \x1b[38;2;138;166;182mFootprint \x1b[m ( ) Standard (*) \x1b[7mCompact\x1b[m (changed in this installer)                                │
+│              \x1b[38;2;138;166;182mCompact is the small-footprint preset for the cluster and every instance on it:\x1b[m     │
+│              \x1b[38;2;138;166;182msmaller volumes, lowered JetStream/KV ceilings and scheduling requests, no\x1b[m          │
+│              \x1b[38;2;138;166;182mmonitoring stack, no cert-manager, and no database backups.\x1b[m                         │
+│   \x1b[38;2;138;166;182mTopology  \x1b[m (*) Single ( ) HA                                                                   │
+│                                                                                                  │
+│ \x1b[38;2;138;166;182mEach change re-resolves the plan as the command line would, and runs the read-only checks again\x1b[m  │
+│ \x1b[38;2;138;166;182mfor it.\x1b[m                                                                                          │
+│                                                                                                  │
+│ \x1b[38;2;138;166;182mworking: the checks are running for this plan. Continue waits for them.\x1b[m                          │
+│                                                                                                  │
+│   \x1b[38;2;138;166;182mContinue (unavailable)\x1b[m    Advanced    Preflight    Exit                                        │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+├──────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ \x1b[38;2;138;166;182m↑/↓/Space choose · Tab next · Esc back · q exit · Ctrl+C exit\x1b[m                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯

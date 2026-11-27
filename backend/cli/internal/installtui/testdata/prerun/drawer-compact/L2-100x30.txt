@@ -1,0 +1,30 @@
++- DeviceChain - dcctl install - kind devicechain --------------------------------- dcctl v1.12.0 -+
+| Advanced settings                                                                                |
+| Editors change the plan at once and re-run the checks. Every other flag from the command line is |
+| carried as given.                                                                                |
+| ... 4 lines above                                                                                |
+| Monitoring and alerts                                                                            |
+|   Monitoring stack (--no-monitoring): on (default)                                               |
+|   --alert-webhook configured (hidden) carried (from the command line)                            |
+|                                                                                                  |
+| Database placement, connection budget and WAL                                                    |
+|   --database-toleration dedicated=db:NoSchedule, spot=true:NoSchedule carried (from the command  |
+|   line)                                                                                          |
+|                                                                                                  |
+| Backups and snapshots                                                                            |
+| > TLS (cert-manager) (--no-tls): on (default)                                                    |
+|   Database backups: on (follows the bundled CloudNativePG operator and, on Compact, TLS)         |
+|                                                                                                  |
+| Relational recovery                                                                              |
+|   nothing set; the defaults apply                                                                |
+|                                                                                                  |
+| Gateway, MQTT and legacy ingress                                                                 |
+|   nothing set; the defaults apply                                                                |
+|                                                                                                  |
+| Escape hatches                                                                                   |
+|   --yes true carried (from the command line)                                                     |
+|                                                                                                  |
+| Preflight: all checks passed.                                                                    |
++--------------------------------------------------------------------------------------------------+
+| up/down setting - Space toggle - Esc close - Ctrl+C exit                                         |
++--------------------------------------------------------------------------------------------------+

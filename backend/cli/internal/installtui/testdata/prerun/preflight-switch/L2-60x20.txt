@@ -4,15 +4,15 @@ Preflight - read-only checks - footprint Standard
 ... 7 lines above
 > FAIL        engine memory: 6.0Gi
               fix: give Docker >= 4 CPUs and >= 8Gi, or
-                   re-run install with --compact
-... 8 lines below
+... 9 lines below
 Preflight: 2 failures, 1 warning. Continue is unavailable
 while any check fails. Fix each failure, then Recheck.
 Compact is the small-footprint preset for the cluster and
 every instance on it: smaller volumes, lowered JetStream/KV
-ceilings and scheduling requests, no monitoring stack, and,
-unless --no-tls=false, no cert-manager and therefore no
-database backups.
+ceilings and scheduling requests, no monitoring stack unless
+--no-monitoring=false keeps it, and, unless --no-tls=false,
+no cert-manager and therefore no database backups. The
+cluster choices show what this plan keeps.
 The plan changes to this footprint and every check runs
 again for it.
 Switch to Compact?

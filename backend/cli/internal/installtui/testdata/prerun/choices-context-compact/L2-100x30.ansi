@@ -1,0 +1,30 @@
++-\x1b[1m DeviceChain - dcctl install - context prod \x1b[m------------------------------------- dcctl v1.12.0 -+
+| \x1b[1mCluster choices\x1b[m                                                                                  |
+|                                                                                                  |
+|   Target     ( ) Managed local kind (*) Existing context (from --kube-context prod)              |
+|   Context    prod (Enter to choose another)                                                      |
+| > Footprint  ( ) Standard (*) \x1b[7mCompact\x1b[m (from --compact)                                           |
+|              Compact is the small-footprint preset for the cluster and every instance on it:     |
+|              smaller volumes, lowered JetStream/KV ceilings and scheduling requests, no          |
+|              monitoring stack, no cert-manager, and no database backups.                         |
+|   Topology   ( ) Single (*) HA (from --ha)                                                       |
+|                                                                                                  |
+| Each change re-resolves the plan as the command line would, and runs the read-only checks again  |
+| for it.                                                                                          |
+|                                                                                                  |
+| Preflight: all checks passed.                                                                    |
+|                                                                                                  |
+|   Continue    Advanced    Preflight    Exit                                                      |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
+|                                                                                                  |
++--------------------------------------------------------------------------------------------------+
+| up/down/Space choose - Tab next - Esc back - q exit - Ctrl+C exit                                |
++--------------------------------------------------------------------------------------------------+

@@ -33,8 +33,9 @@ const (
 // What each footprint means, shown before a switch. The words are the flags' own.
 const (
 	consequencesCompact = "Compact is the small-footprint preset for the cluster and every instance on it: " +
-		"smaller volumes, lowered JetStream/KV ceilings and scheduling requests, no monitoring stack, and, " +
-		"unless --no-tls=false, no cert-manager and therefore no database backups."
+		"smaller volumes, lowered JetStream/KV ceilings and scheduling requests, no monitoring stack unless " +
+		"--no-monitoring=false keeps it, and, unless --no-tls=false, no cert-manager and therefore no database " +
+		"backups. The cluster choices show what this plan keeps."
 	consequencesStandard = "Standard is the full-size footprint. A local kind cluster then needs Docker to " +
 		"have at least 4 CPUs and 8 GiB of memory."
 	consequencesRecheck = "The plan changes to this footprint and every check runs again for it."
@@ -47,6 +48,7 @@ const (
 	actContinue pfAction = iota
 	actRecheck
 	actFootprint
+	actContext
 	actExit
 )
 
@@ -63,7 +65,6 @@ type checkMsg struct {
 
 // preflightState is the preflight screen.
 type preflightState struct {
-	compact bool
 	started bool
 	gen     int
 	running bool
@@ -77,12 +78,13 @@ type preflightState struct {
 	focus   int
 	action  pfAction
 	confirm bool
-	// replanErr is why the last footprint change was refused.
-	replanErr string
+	// stop cancels the run in flight, when one is: a run whose plan has been replaced
+	// is stopped, not left to finish unseen.
+	stop context.CancelFunc
 }
 
-func newPreflightState(compact bool) preflightState {
-	return preflightState{compact: compact, focus: -1, action: actRecheck}
+func newPreflightState() preflightState {
+	return preflightState{focus: -1, action: actRecheck}
 }
 
 func (s *preflightState) checkCount() int {
@@ -128,6 +130,9 @@ func (p *prerun) actions() ([]pfAction, []bool) {
 	}
 	if p.replan != nil {
 		acts = append(acts, actFootprint)
+		if p.contexts != nil {
+			acts = append(acts, actContext)
+		}
 	}
 	acts = append(acts, actExit)
 	enabled := make([]bool, len(acts))
@@ -135,7 +140,7 @@ func (p *prerun) actions() ([]pfAction, []bool) {
 		switch a {
 		case actContinue:
 			enabled[i] = p.canContinue()
-		case actRecheck, actFootprint:
+		case actRecheck, actFootprint, actContext:
 			enabled[i] = !p.pf.running
 		default:
 			enabled[i] = true
@@ -152,6 +157,8 @@ func actionLabel(a pfAction, compact bool) string {
 		return "Recheck"
 	case actFootprint:
 		return "Switch to " + footprintWord(!compact)
+	case actContext:
+		return "Choose another context"
 	}
 	return "Exit"
 }
@@ -250,12 +257,16 @@ func (p *prerun) preflightKey(k tea.KeyPressMsg) (tea.Cmd, prerunOutcome) {
 			}
 			switch a {
 			case actContinue:
-				return nil, proceed
+				// The cluster choices come next; the run starts from there.
+				p.screen = screenChoices
+				p.ch.focus = 0
 			case actRecheck:
 				return p.startChecks(), stay
 			case actFootprint:
-				s.replanErr = ""
+				p.refusal = ""
 				s.confirm = true
+			case actContext:
+				p.openPicker()
 			case actExit:
 				return nil, leave
 			}
@@ -267,14 +278,32 @@ func (p *prerun) preflightKey(k tea.KeyPressMsg) (tea.Cmd, prerunOutcome) {
 // switchFootprint changes the plan to the other footprint and runs every check again
 // for it. A refusal leaves the plan, and the results on screen, as they were.
 func (p *prerun) switchFootprint() tea.Cmd {
-	s := &p.pf
-	want := !s.compact
-	e, runner, err := p.replan(want)
-	if err != nil {
-		s.replanErr = p.text(err.Error())
+	want := !p.facts.Compact
+	return p.applyEdit(func(e *Edits) { e.Compact = &want })
+}
+
+// applyEdit makes one change to the plan: the edits so far with change applied,
+// resolved again through the command's own resolver. A refusal leaves the plan, and the
+// preflight on screen, exactly as they were.
+//
+// 🔴 A CHANGED PLAN HAS NO PREFLIGHT UNTIL ITS OWN HAS RUN. The results on screen were
+// taken for the plan being replaced (another cluster, another footprint, another
+// topology), so they are dropped here, at the one place a plan changes, and the checks
+// start again for the new one. Continue stays unavailable until they have passed.
+func (p *prerun) applyEdit(change func(*Edits)) tea.Cmd {
+	if p.replan == nil {
 		return nil
 	}
-	s.compact, p.engine, p.runner = want, e, runner
+	next := p.edits.clone()
+	change(&next)
+	r, err := p.replan(next)
+	if err != nil {
+		p.refusal = p.text(err.Error())
+		return nil
+	}
+	p.refusal = ""
+	p.edits, p.facts, p.settings = next, r.Facts, r.Settings
+	p.engine, p.runner = r.Engine, r.Preflight
 	return p.startChecks()
 }
 
@@ -282,6 +311,10 @@ func (p *prerun) switchFootprint() tea.Cmd {
 // previous run are cleared at once: a result never outlives the plan it was taken for.
 func (p *prerun) startChecks() tea.Cmd {
 	s := &p.pf
+	if s.stop != nil {
+		s.stop()
+		s.stop = nil
+	}
 	s.started = true
 	s.gen++
 	s.rows, s.summary, s.result, s.err = nil, nil, installflow.PreflightResult{}, ""
@@ -299,8 +332,12 @@ func (p *prerun) startChecks() tea.Cmd {
 	// Recheck keeps the focus while the checks run, unavailable: an Enter pressed then
 	// does nothing at all.
 	s.running, s.action = true, actRecheck
+	ctx, stop := context.WithCancel(p.ctx)
+	s.stop = stop
 	p.checks.Add(1)
-	return runChecks(p.ctx, s.gen, screenRunner(p.runner), p.checks.Done)
+	// The screen runs the bound form, under its own context: a replaced plan's
+	// checks, the doctor's host commands included, end when this run is replaced.
+	return runChecks(ctx, s.gen, screenRunner(p.runner), p.checks.Done)
 }
 
 // contextBound is a preflight that can also run with its commands bound to the
@@ -374,6 +411,10 @@ func (p *prerun) checkResult(m checkMsg) tea.Cmd {
 	switch {
 	case m.done:
 		s.running, s.finished = false, true
+		if s.stop != nil {
+			s.stop()
+			s.stop = nil
+		}
 		s.result = m.res
 		if m.err != nil {
 			s.err = p.text(m.err.Error())
@@ -520,7 +561,7 @@ func (p *prerun) preflightLines(w, rows int) []string {
 	t := p.theme
 	s := &p.pf
 	head := []string{t.Bold.Render(preflightTitle) + " " + t.Glyphs.Dot + " read-only checks " + t.Glyphs.Dot +
-		" footprint " + footprintWord(s.compact), ""}
+		" footprint " + footprintWord(p.facts.Compact), ""}
 
 	// The list: every section and check, scrolled so the focused row and its fix show.
 	var list []string
@@ -556,11 +597,7 @@ func (p *prerun) preflightLines(w, rows int) []string {
 			tail = append(tail, st.Render(l))
 		}
 	}
-	if s.replanErr != "" {
-		for _, l := range wrap("The footprint was not changed: "+s.replanErr, w) {
-			tail = append(tail, t.Fail.Render(l))
-		}
-	}
+	tail = append(tail, p.refusalLines(w)...)
 	tail = append(tail, "")
 	if s.confirm {
 		tail = append(tail, p.confirmLines(w)...)
@@ -569,7 +606,7 @@ func (p *prerun) preflightLines(w, rows int) []string {
 		labels := make([]string, len(acts))
 		focus := -1
 		for i, a := range acts {
-			labels[i] = actionLabel(a, s.compact)
+			labels[i] = actionLabel(a, p.facts.Compact)
 			if a == s.action {
 				focus = i
 			}
@@ -582,7 +619,7 @@ func (p *prerun) preflightLines(w, rows int) []string {
 
 func (p *prerun) confirmLines(w int) []string {
 	t := p.theme
-	want := !p.pf.compact
+	want := !p.facts.Compact
 	words := consequencesStandard
 	if want {
 		words = consequencesCompact

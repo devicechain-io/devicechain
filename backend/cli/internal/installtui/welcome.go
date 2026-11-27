@@ -42,6 +42,28 @@ func (p *prerun) welcomeKey(k tea.KeyPressMsg) (tea.Cmd, prerunOutcome) {
 	return nil, stay
 }
 
+// origin says where a choice came from, after its value: the flag that set it, or that
+// it was changed on these screens. A default says nothing.
+func (p *prerun) origin(flag string, changed bool) string {
+	switch {
+	case changed:
+		return " (" + changedHere + ")"
+	case flag != "":
+		return " (from " + p.text(flag) + ")"
+	}
+	return ""
+}
+
+// changedHere marks a choice made on these screens rather than on the command line.
+const changedHere = "changed in this installer"
+
+func topologyWord(ha bool) string {
+	if ha {
+		return "HA"
+	}
+	return "Single"
+}
+
 // footprintWord is the footprint as the screens name it.
 func footprintWord(compact bool) string {
 	if compact {
@@ -73,21 +95,8 @@ func (p *prerun) welcomeFacts() [][2]string {
 	case f.Cluster != "":
 		rows = append(rows, [2]string{"Target", "local kind cluster " + p.text(f.Cluster) + ", created if it does not exist"})
 	}
-	footprint := footprintWord(p.pf.compact)
-	if p.pf.compact == f.Compact && f.FootprintFlag != "" {
-		footprint += " (from " + p.text(f.FootprintFlag) + ")"
-	} else if p.pf.compact != f.Compact {
-		footprint += " (changed on the preflight screen)"
-	}
-	rows = append(rows, [2]string{"Footprint", footprint})
-	topology := "Single"
-	if f.HA {
-		topology = "HA"
-	}
-	if f.TopologyFlag != "" {
-		topology += " (from " + p.text(f.TopologyFlag) + ")"
-	}
-	rows = append(rows, [2]string{"Topology", topology})
+	rows = append(rows, [2]string{"Footprint", footprintWord(f.Compact) + p.origin(f.FootprintFlag, p.edits.Compact != nil)})
+	rows = append(rows, [2]string{"Topology", topologyWord(f.HA) + p.origin(f.TopologyFlag, p.edits.HA != nil)})
 	if f.Images != "" {
 		rows = append(rows, [2]string{"Images", p.text(f.Images)})
 	}

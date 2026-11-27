@@ -1,0 +1,16 @@
+DeviceChain · dcctl install · context prod     dcctl v1.12.0
+────────────────────────────────────────────────────────────
+Cluster choices
+
+… 3 lines above
+› Footprint  ( ) Standard (*) Compact (from --compact)
+             Compact is the small-footprint preset for the
+             cluster and every instance on it: smaller
+… 7 lines below
+
+Preflight: all checks passed.
+
+  Continue    Advanced    Preflight    Exit
+────────────────────────────────────────────────────────────
+↑/↓/Space choose · Tab next · Esc back · q exit
+Ctrl+C exit
