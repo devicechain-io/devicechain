@@ -393,8 +393,11 @@ func unhex(c byte) byte {
 // person typed into dcctl comes back quoted inside a sentence: ko quotes the
 // repository it could not push to, user:password@registry and all.
 //
-// Words are split at whitespace, quotes, backticks and angle brackets. A word holding
-// "://" is a URL from its scheme on (from the word's start when what comes before
+// Words are split at whitespace, quotes, backticks and angle brackets, with one
+// exception: a ' is legal in a userinfo ("https://hook:it's@host"), so a ' does not
+// end a word that already holds a ':' when an '@' follows it before the next of the
+// other delimiters. The quotes a tool puts around a value still end it, since no '@'
+// follows the closing one. A word holding "://" is a URL from its scheme on (from the word's start when what comes before
 // the scheme could itself be userinfo); a word with no scheme is redacted only when
 // it reads as user:password@host, so an address (ops@example.com, git@github.com:org)
 // or an image digest (registry:5000/img@sha256:…) is left as it is. Text with none of
@@ -415,18 +418,41 @@ func RedactURLsInText(s string) string {
 		for j < len(s) && !isTextDelimiter(s[j]) {
 			j++
 		}
-		b.WriteString(redactWord(s[i:j]))
+		redactQuotedWords(&b, s[i:j])
 		i = j
 	}
 	return b.String()
 }
 
+// isTextDelimiter is what always ends a word. A ' may, see redactQuotedWords.
 func isTextDelimiter(c byte) bool {
 	switch c {
-	case ' ', '\t', '\n', '\r', '\v', '\f', '"', '\'', '`', '<', '>':
+	case ' ', '\t', '\n', '\r', '\v', '\f', '"', '`', '<', '>':
 		return true
 	}
 	return false
+}
+
+// redactQuotedWords writes seg, a run with no isTextDelimiter in it, to b with each
+// of its words redacted. A ' ends a word unless the word already holds a ':' and an
+// '@' follows the ' in seg: then it is a ' inside a userinfo.
+func redactQuotedWords(b *strings.Builder, seg string) {
+	lastAt := strings.LastIndexByte(seg, '@')
+	start, colon := 0, false
+	for k := 0; k < len(seg); k++ {
+		switch seg[k] {
+		case ':':
+			colon = true
+		case '\'':
+			if colon && k < lastAt {
+				continue
+			}
+			b.WriteString(redactWord(seg[start:k]))
+			b.WriteByte('\'')
+			start, colon = k+1, false
+		}
+	}
+	b.WriteString(redactWord(seg[start:]))
 }
 
 // redactWord applies RedactURLsInText's rule to one word.
