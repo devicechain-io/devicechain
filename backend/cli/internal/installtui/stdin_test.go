@@ -22,7 +22,7 @@ func TestStdinHandoverLosesNoInput(t *testing.T) {
 	defer r.Close()
 	defer w.Close()
 	g := newStdinGate(r)
-	tea := g.programInput()
+	tea := programInputOf(t, g)
 
 	programRead := make(chan []byte, 1)
 	go func() {
@@ -79,7 +79,8 @@ func (f fifoReader) Read(p []byte) (int, error) {
 func TestTheProgramsWaitingReadPassesTheAnswerOn(t *testing.T) {
 	in := make(fifoReader)
 	g := newStdinGate(in)
-	go func() { _, _ = g.programInput().Read(make([]byte, 64)) }()
+	program := programInputOf(t, g)
+	go func() { _, _ = program.Read(make([]byte, 64)) }()
 	time.Sleep(100 * time.Millisecond) // the program's read is waiting
 	plain := bufio.NewReader(g.handOver())
 	answer := make(chan string, 1)
@@ -112,7 +113,16 @@ func TestStdinGatePassesInputToTheProgram(t *testing.T) {
 		t.Fatal(err)
 	}
 	buf := make([]byte, 8)
-	if n, err := g.programInput().Read(buf); err != nil || string(buf[:n]) != "q" {
+	if n, err := programInputOf(t, g).Read(buf); err != nil || string(buf[:n]) != "q" {
 		t.Fatalf("read %q, %v", buf[:n], err)
 	}
+}
+
+func programInputOf(t *testing.T, g *stdinGate) io.Reader {
+	t.Helper()
+	in, err := g.programInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return in
 }

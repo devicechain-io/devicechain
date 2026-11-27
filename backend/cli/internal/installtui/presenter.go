@@ -142,8 +142,10 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 			go prog.Kill() // this write is the renderer's, which the shutdown waits for
 		}
 	}}
+	// Made before the program, so an input reader that cannot start leaves it unrun.
+	input, inputErr := gate.programInput()
 	opts := append([]tea.ProgramOption{
-		tea.WithInput(gate.programInput()), tea.WithOutput(screenOutput(screen, p.Stdout)),
+		tea.WithInput(input), tea.WithOutput(screenOutput(screen, p.Stdout)),
 		// The root command owns the signals; this presenter dedupes them with Ctrl+C.
 		tea.WithoutSignalHandler(),
 		// The size the probe saw. On a terminal Bubble Tea reads the real size itself and
@@ -197,7 +199,14 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 	}()
 
 	saved := saveTerminal(p.Stdin, p.Stdout)
-	_, perr := prog.Run()
+	perr := inputErr
+	if perr == nil {
+		_, perr = prog.Run()
+	} else {
+		prog.Kill() // never run: this only releases a Send waiting on it
+	}
+	// Bubble Tea's input loop can outlive Run: the gate, not Bubble Tea, ends its read.
+	gate.stopProgram()
 	close(sigDone)
 	stopSignals()
 	// 🔴 BUBBLE TEA DOES NOT RESTORE ON EVERY RETURN. When its input reader cannot start it
