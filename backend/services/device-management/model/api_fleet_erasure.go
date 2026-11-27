@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -16,6 +17,33 @@ import (
 )
 
 const fleetMaintenanceChunk = 10000
+
+// fleetErasureRepairWindow is how many of one tenant's lines one repair pass reads. A variable only
+// so a test can walk a window through a handful of lines.
+var fleetErasureRepairWindow = fleetMaintenanceChunk
+
+// fleetErasureCursor is, per tenant, the last device the repair pass has examined the lines of.
+// Like the maintenance cursor it is advisory, process-local state: a replica that takes the pass
+// over starts its tenants from the beginning, which costs one cycle, never a missed line.
+type fleetErasureCursor struct {
+	sync.Mutex
+	after map[string]int64
+}
+
+func (c *fleetErasureCursor) get(tenant string) int64 {
+	c.Lock()
+	defer c.Unlock()
+	return c.after[tenant]
+}
+
+func (c *fleetErasureCursor) set(tenant string, after int64) {
+	c.Lock()
+	defer c.Unlock()
+	if c.after == nil {
+		c.after = map[string]int64{}
+	}
+	c.after[tenant] = after
+}
 
 // redactFleetDeviceOnTx runs after K_dev, never K_op: taking the fence here
 // would invert the posting lock order. The row UPDATE is the last line lock.
@@ -121,20 +149,46 @@ func fleetMaintenanceProtocol(db *gorm.DB) *gorm.DB {
 // RepairFleetErasure covers deletes by previous-minor pods. The correlated
 // NOT EXISTS is an anti-join, including the tenant and soft-deletion predicate;
 // a nullable target_id is an unresolved input, not a deleted device.
+//
+// 🔴 ONE PASS READS A WINDOW OF THE TENANT'S LINES, NOT ALL OF THEM. An orphan is a line whose
+// device a previous-minor pod deleted, so it can be any line, however old, and nothing marks it:
+// finding them is an anti-join of the lines against the devices. Run over every line, with no
+// orphan to stop at, that read every retained line of the tenant on every maintenance pass. Each
+// pass instead reads the next fleetErasureRepairWindow lines in device order, from the tenant's
+// cursor, along the (tenant_id, target_id) index, and the cursor wraps at the end: every line is
+// examined once a cycle, so an orphan made at any time, of a line of any age, is repaired within
+// one cycle of the tenant's passes. The window ends at a whole device, so a device's lines are
+// never split between passes. The cursor does not move past a window the pass did not finish (a
+// full chunk of candidates, or a device whose repair failed), so that window is read again.
 func (api *Api) RepairFleetErasure(ctx context.Context) error {
-	if _, ok := core.TenantFromContext(ctx); !ok || core.IsSystemContext(ctx) {
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok || core.IsSystemContext(ctx) {
 		return errors.New("bulk-change erasure repair requires a tenant context")
 	}
 	db := api.RDB.DB(ctx)
+	after := api.fleetErasureCursor.get(tenant)
+	// The window's last device: the device of the window-th line after the cursor. None means
+	// fewer lines than a window remain, and this pass reads to the end and wraps.
+	var bounds []int64
+	if err := db.Model(&FleetOperationLine{}).Where("target_id > ?", after).Order("target_id").
+		Offset(fleetErasureRepairWindow-1).Limit(1).Pluck("target_id", &bounds).Error; err != nil {
+		return err
+	}
 	q := func(model string) string { return db.Statement.Quote(db.NamingStrategy.TableName(model)) }
 	lines := q("FleetOperationLine")
 	devices := db.Model(&Device{}).Select("1").Where(q("Device") + ".id = " + lines + ".target_id").
 		Where(q("Device") + ".tenant_id = " + lines + ".tenant_id")
 	ops := fleetMaintenanceProtocol(db.Model(&FleetOperation{}).Select("1")).
 		Where(q("FleetOperation") + ".id = " + lines + ".operation_id").Where(q("FleetOperation") + ".tenant_id = " + lines + ".tenant_id")
+	window := db.Where("target_id > ?", after)
+	next := int64(0) // the cursor after a finished window: the window's last device, or the start again
+	if len(bounds) != 0 {
+		next = bounds[0]
+		window = window.Where("target_id <= ?", next)
+	}
 	var candidates []FleetOperationLine
-	if err := db.Select("id", "target_id").Where("redacted_at IS NULL AND target_id IS NOT NULL").
-		Where("NOT EXISTS (?)", devices).Where("EXISTS (?)", ops).Order("id").Limit(fleetMaintenanceChunk).Find(&candidates).Error; err != nil {
+	if err := window.Select("id", "target_id").Where("redacted_at IS NULL AND target_id IS NOT NULL").
+		Where("NOT EXISTS (?)", devices).Where("EXISTS (?)", ops).Order("target_id, id").Limit(fleetMaintenanceChunk).Find(&candidates).Error; err != nil {
 		return err
 	}
 	var failures []error
@@ -167,6 +221,9 @@ func (api *Api) RepairFleetErasure(ctx context.Context) error {
 		for table, n := range counts {
 			bulkMetrics.maintained(bulkMetrics.repairs, table, n)
 		}
+	}
+	if len(failures) == 0 && len(candidates) < fleetMaintenanceChunk {
+		api.fleetErasureCursor.set(tenant, next)
 	}
 	// Report rows a previous-minor delete leaves behind are not this pass's:
 	// MaintainDeviceConfigurationReports already removes orphans on every replica.
