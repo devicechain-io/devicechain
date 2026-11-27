@@ -1976,7 +1976,8 @@ instancia a través del ingress del clúster. El superusuario es `superuser@devi
 y no hay contraseña por defecto. El arranque genera una para la instancia, la guarda en el
 Secret `dci-<instance>-superuser` del namespace de la instancia y la imprime una sola vez, al
 final de la ejecución que la generó (o de la que termina un arranque inicial que falló antes de
-imprimirla). Para volver a leerla:
+imprimirla). Solo se imprime cuando esa salida es un terminal: la salida canalizada o redirigida,
+como un registro de CI, nombra el Secret en su lugar. Para volver a leerla, o desde un script:
 
 ```bash
 kubectl -n dci-my-instance get secret dci-my-instance-superuser -o jsonpath='{.data.password}' | base64 -d

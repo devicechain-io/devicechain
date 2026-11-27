@@ -16,6 +16,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/installplain"
 )
 
 // The instance's global superuser, and the one secret it is seeded from.
@@ -173,17 +174,28 @@ func printSuperuserReport(ctx context.Context, st *State) {
 		"kubectl -n %s get secret %s -o jsonpath='{.data.%s}' | base64 -d", ref.Namespace, ref.Name, ref.Key))
 }
 
+// stdoutIsTerminal answers whether w is a person's terminal. A variable so a test can
+// stand in for one.
+var stdoutIsTerminal = installplain.IsTerminal
+
 // superuserSeedLine writes the seed password as the report has always shown it.
 func superuserSeedLine(w io.Writer, value []byte) {
 	fmt.Fprintf(w, "           %s %s\n", color.WhiteString("password:"), color.GreenString(string(value)))
 }
 
 // showSuperuserSeed shows the seed once, and reports whether it was shown. Outside an
-// engine run it prints the line to c, as the report always did. Inside one it is
-// offered to the presenter as a one-use Reveal, never printed to the run's console.
+// engine run it prints the line to c when c's stdout is a terminal. Inside one it is
+// offered to the presenter as a one-use Reveal, never printed to the run's console; a
+// presenter whose output is not a terminal is given no reveal sink, so offers none.
+//
+// 🔴 NEVER TO OUTPUT THAT IS NOT A TERMINAL: that is a CI log or a file, kept and read
+// by people the password was never for. The report then names the Secret it is kept in.
 func showSuperuserSeed(ctx context.Context, c console, st *State, ref mintedCredentialRef) bool {
 	run := runFrom(ctx)
 	if run == nil {
+		if !stdoutIsTerminal(c.stdout()) {
+			return false
+		}
 		superuserSeedLine(c.stdout(), []byte(st.Credentials.SuperuserPassword))
 		return true
 	}

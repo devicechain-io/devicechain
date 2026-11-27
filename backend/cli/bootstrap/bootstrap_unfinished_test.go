@@ -176,6 +176,7 @@ func TestFinishingABootstrapShowsTheSeedTheFailedRunNeverShowed(t *testing.T) {
 		t.Fatalf("the seed the earlier run generated was not kept: settled %v", st.SuperuserSeed)
 	}
 	st.Credentials = set
+	pretendStdoutIsATerminal(t)
 	out := captureStdout(t, func() { printSuperuserReport(context.Background(), st) })
 	if !strings.Contains(out, "the-seed") || !strings.Contains(out, "shown only this once") {
 		t.Errorf("the finishing run does not show the password the failed run never reached:\n%s", out)

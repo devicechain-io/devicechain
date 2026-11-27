@@ -1836,7 +1836,8 @@ through the cluster ingress. The superuser is `superuser@devicechain.local`, and
 default password. The bootstrap generates one for the instance, keeps it in the Secret
 `dci-<instance>-superuser` in the instance's namespace, and prints it once, at the end of the
 run that generated it (or of the run that finishes a bootstrap that failed before printing it).
-To read it again:
+It is printed only when that output is a terminal: piped or redirected output, such as a CI log,
+names the Secret instead. To read it again, or from a script:
 
 ```bash
 kubectl -n dci-my-instance get secret dci-my-instance-superuser -o jsonpath='{.data.password}' | base64 -d

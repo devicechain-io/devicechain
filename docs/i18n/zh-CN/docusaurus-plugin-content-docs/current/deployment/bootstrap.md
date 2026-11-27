@@ -838,7 +838,7 @@ kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge
 
 ## 初始化之后 {#after-bootstrap}
 
-命令打印命名空间、**超级用户**凭据和通过集群 Ingress 访问方式。超级用户为 `superuser@devicechain.local`，没有默认密码。初始化为实例生成密码，保存于实例命名空间的 Secret `dci-<instance>-superuser`，只在生成密码的运行结束时显示一次，或完成此前尚未显示密码便失败的初始化时显示。再次读取：
+命令打印命名空间、**超级用户**凭据和通过集群 Ingress 访问方式。超级用户为 `superuser@devicechain.local`，没有默认密码。初始化为实例生成密码，保存于实例命名空间的 Secret `dci-<instance>-superuser`，只在生成密码的运行结束时显示一次，或完成此前尚未显示密码便失败的初始化时显示。仅当输出为终端时才会打印；管道或重定向的输出（例如 CI 日志）会改为指明该 Secret。再次读取或在脚本中读取：
 
 ```bash
 kubectl -n dci-my-instance get secret dci-my-instance-superuser -o jsonpath='{.data.password}' | base64 -d
