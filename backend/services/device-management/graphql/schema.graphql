@@ -9965,7 +9965,10 @@ input BulkChangeAmbiguityResolution {
   allAmbiguous: Boolean
   """Preview. The person's verdict."""
   verdict: BulkChangeVerdict!
-  """Preview. Reason for the verdict, from 1 to 1000 characters."""
+  """
+  Preview. Reason for the verdict, from 1 to 1000 characters. Served back as each line's resolutionNote to every
+  holder of device:read, so keep secrets out of it.
+  """
   note: String!
 }
 
@@ -10161,7 +10164,7 @@ type BulkChangeLine {
   overrideChanged: Boolean!
   """Preview. Sign-in name of the person who resolved the line."""
   resolvedBy: String
-  """Preview. The resolution's shared note. Null once redacted."""
+  """Preview. The resolution's shared note, visible to every holder of device:read. Null once redacted."""
   resolutionNote: String
   """Preview. When it was resolved."""
   resolvedAt: String

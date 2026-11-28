@@ -9,6 +9,7 @@
 // parses the taxonomy, so this is where a bad rule is actually caught.
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/event-processing';
+import { refusedAsUnserved } from './rolling-upgrade';
 import type {
   RuleHealthQuery,
   DetectionStreamSubscription,
@@ -58,6 +59,23 @@ const VALIDATE_DETECTION_RULES_WITH_METRICS = graphql(`
   }
 `);
 
+// An event-processing older than the argument (mid-upgrade, an old pod can answer) refuses the
+// whole document. The rule is then validated without the types, as it was before them: the STRING
+// warning is the only thing they add, and the compile result is the same.
+const METRICS_ARGUMENT_REFUSAL = [
+  /Unknown argument "metrics" on field "(Query\.)?validateDetectionRules"/,
+  /Unknown type "DetectionMetricInput"/,
+];
+
+async function validateWithMetrics(rules: { token: string; definition: string; groupScoped: boolean }[], metrics: ProfileMetric[]) {
+  try {
+    return (await gql('event-processing', VALIDATE_DETECTION_RULES_WITH_METRICS, { rules, metrics })).validateDetectionRules;
+  } catch (err) {
+    if (!refusedAsUnserved(err, METRICS_ARGUMENT_REFUSAL)) throw err;
+  }
+  return (await gql('event-processing', VALIDATE_DETECTION_RULES, { rules })).validateDetectionRules;
+}
+
 // A metric of the profile the rule belongs to, as the gate needs it.
 export interface ProfileMetric {
   key: string;
@@ -98,7 +116,7 @@ export async function validateDetectionRule(
   // for, and a profile without one validates exactly as it always did, even against a server that
   // does not know the argument yet.
   const result = metrics.some((m) => m.dataType === 'STRING')
-    ? (await gql('event-processing', VALIDATE_DETECTION_RULES_WITH_METRICS, { rules, metrics })).validateDetectionRules
+    ? await validateWithMetrics(rules, metrics)
     : (await gql('event-processing', VALIDATE_DETECTION_RULES, { rules })).validateDetectionRules;
   const warnings = result.warnings.map((w) => ({ code: w.code, params: w.params, message: w.message }));
   if (result.valid) return { ok: true, message: null, warnings };

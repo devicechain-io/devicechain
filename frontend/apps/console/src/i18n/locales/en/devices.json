@@ -149,6 +149,7 @@
   "noEvents": "No events received from this device yet.",
   "noLocationRecorded": "This device has not reported a position.",
   "noMeasurements": "No measurements received from this device yet.",
+  "readingTextAfterUpgrade": "Text reading shown after the upgrade completes",
   "noStateRecorded": "No state recorded for this device yet.",
   "noTargetsFound": "No targets found.",
   "occurredColumn": "Occurred",

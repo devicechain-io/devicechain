@@ -111,9 +111,9 @@ export const SCHEMAS = [
     source: 'backend/services/update-management/graphql/schema.graphql',
     area: 'update-management',
     publish: false,
-    note: 'Over-the-air updates: the artifact catalogue and the assignment of artifacts to '
-      + 'devices. Not published yet: the API is still being built out (there is no fleet '
-      + 'rollout), so a reference page would document a surface that is about to change.',
+    note: 'Over-the-air updates: the artifact catalogue, per-device assignments and capped '
+      + 'group rollouts. Not published as a reference page yet; the operations are listed on '
+      + 'the GraphQL API page.',
   },
   { source: 'backend/services/user-management/graphql/admin_schema.graphql', area: 'user-management' },
   {

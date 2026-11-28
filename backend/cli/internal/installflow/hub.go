@@ -223,7 +223,9 @@ func (h *Hub) RunID() string { return h.runID }
 func (h *Hub) Done() <-chan struct{} { return h.done }
 
 // AddSecret registers value for redaction from every text the hub carries
-// from now on.
+// from now on, wherever it occurs. It never refuses an identifier for containing
+// it: a value a person chose can be a word of dcctl's own vocabulary (see
+// redactor).
 func (h *Hub) AddSecret(value string) error {
 	if !h.red.add(value) {
 		return ErrSecretTooShort
@@ -232,11 +234,23 @@ func (h *Hub) AddSecret(value string) error {
 	return nil
 }
 
+// AddGeneratedSecret registers a value dcctl generated at random (a root key, a
+// minted password) as AddSecret does, and also refuses, from now on, any event
+// with an identifier that contains it: a random value cannot be a word of dcctl's
+// vocabulary by coincidence, so an identifier holding it is a leak.
+func (h *Hub) AddGeneratedSecret(value string) error {
+	if !h.red.addGenerated(value) {
+		return ErrSecretTooShort
+	}
+	h.out.add(value)
+	return nil
+}
+
 // AddRedaction registers value for redaction as a whole token from every text
 // the hub carries from now on (with Options.TokensOnlyInErrors, from Redact and
-// RedactError only). Unlike AddSecret it never refuses an identifier for
-// containing it, and never redacts it inside a longer word: it is for values
-// dcctl found rather than made, which can be ordinary words. It takes values
+// RedactError only). Like AddSecret it never refuses an identifier for
+// containing it; unlike it, it never redacts it inside a longer word: it is for
+// values dcctl found rather than made, which can be ordinary words. It takes values
 // down to MinRedactionBytes.
 func (h *Hub) AddRedaction(value string) error {
 	if !h.out.addToken(value) {

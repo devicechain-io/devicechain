@@ -90,6 +90,31 @@ title: 指标参考
 | `resolve_measurement_dropped_total{reason}` | 解析时被丢弃、而同一事件的其余部分已被存储的测量条目：`undeclared_non_numeric`（配置文件未声明的键携带文本值或布尔字面量）、`undeclared_unstorable`（未声明的键携带 `NaN`、无穷大或超出范围的数值）和 `declared_not_storable`（已声明的键，其数据类型无法存储，或 `STRING` 值超过 4,096 字节、不是有效的 UTF-8 或包含 NUL 字节）。设备会收到正常的确认，也不会进入死信队列，因此这是设备载荷正在丢失数据的信号。该指标不带租户、设备或指标标签；日志行（每个设备和指标一条）会指明它们，控制台中的设备页面也会列出。在配置文件中声明该指标即可存储。 |
 | `resolve_not_gateway_child_total` | 因[网关](./edge-services.md#gateway-identity)为未分配给它的设备或不存在的设备发布事件，或网关已停用而被拒绝的事件数。每个事件连同载荷记录到 `failed-events` 流（原因 `NotGatewayChild`），不会重试，并通过网关的通知主题告知网关。该指标不带租户或网关标签；日志行（每个网关和设备每分钟最多一条）会指明它们。增长通常意味着某台设备从未分配给其网关，或被分配给了另一个网关。 |
 
+### 批量变更 {#bulk-changes}
+
+这些序列属于[批量变更](../guides/bulk-changes.md)，只有提供该功能的构建才会注册。除 `bulk_change_reconciler_lag_seconds` 外，每个序列从启动起即以零存在；该序列以 NaN（未测量）开始，因为零是它的健康读数。这些仪表是整个实例范围的，在每个副本上读数相同，因此告警用 `max()` 读取。告警说明见[告警手册](./alert-runbook.md#bulkchangesnotadvancing)。
+
+| 指标 | 含义 |
+| --- | --- |
+| `bulk_change_post_attempts_total{kind, result}` | 计数器。应用一条批量变更行的尝试次数，按类型和结果：`posted`、`refused`、`skipped`、`busy`（另一个写入方占用了该设备）、`lost_race`、`fence_refused`、`fence_busy`、`lease_expired`、`not_activated` 或 `retryable`（以会被重试的方式失败）。 |
+| `bulk_change_post_duration_seconds{kind}` | 直方图。一次应用行的尝试所用的时间。 |
+| `bulk_change_pacer_permits_total{result}` | 计数器。向共享的每秒节流器申请的发送许可，`granted` 或 `denied`。 |
+| `bulk_change_lines_settled_total{settlement, basis}` | 计数器。得到结算的行，按结算和决定它的证据（`REPORT_LOG`、`LATEST_STATE`，截止期限或人工裁定时为 `NONE`）。 |
+| `bulk_change_transitions_total{to, reason}` | 计数器。已提交的控制转换，按进入的分发状态和原因（无原因时为 `none`）。 |
+| `bulk_change_operations{dispatch}` | 仪表。本版本可驱动的批量变更，按分发状态。 |
+| `bulk_change_holds{code}` | 仪表。在过去 60 秒内报告了暂挂的运行中批量变更，按暂挂代码。`AUTHORITY_UNAVAILABLE` 大于零会触发 `BulkChangesAuthorityUnavailable`。 |
+| `bulk_change_oldest_runnable_line_age_seconds` | 仪表。在仍有待应用行且没有阻塞性暂挂的运行中批量变更中，最长一次未应用任何行的时间，按数据库时钟计；没有等待时为 0。由 `BulkChangesNotAdvancing` 和 `BulkChangesStalled` 读取。 |
+| `bulk_change_deadline_lag_seconds` | 仪表。最早的未结算已应用行超过其结算期限的时长；没有时为 0。由 `BulkChangesSettlementLagging` 读取。 |
+| `bulk_change_reconciler_lag_seconds` | 仪表。可以结算某个已应用行但尚未结算的最早设备报告的时长，每分钟测量一次。在本 Pod 测量之前、上次测量失败时以及由其他 Pod 测量期间为 NaN。由 `BulkChangesSettlementLagging` 读取。 |
+| `bulk_change_driver_last_pass_timestamp_seconds` | 仪表。本 Pod 的批量变更驱动程序最近一次完成轮次的 Unix 时间；首次轮次前为 0。由 `BulkChangesDriverSilent` 读取。 |
+| `bulk_change_authority_decisions_total{result}` | 计数器。为批量变更的受权方请求的新鲜授权答复：`qualified`、`revoked`（明确拒绝）或 `unavailable`（无答复，这会暂挂该操作）。 |
+| `bulk_change_fence_wait_seconds{action}` | 直方图。批量变更事务等待其操作屏障的时间，按动作。 |
+| `bulk_change_fence_pending_total{action}` | 计数器。因进行中的发送未能及时排空而以 `FENCE_PENDING` 应答的控制请求，按动作。由 `BulkChangesFencePending` 读取。 |
+| `bulk_change_admission_refusals_total{reason}` | 计数器。在准入时被拒绝的创建、启动和恢复：`quota`（`QUOTA_EXCEEDED`）或 `busy`（`ADMISSION_BUSY`）。 |
+| `bulk_change_redaction_repairs_total{table}` | 计数器。修复轮次为未经修复就被删除的设备而脱敏的批量变更行，按表。 |
+| `bulk_change_retention_rows_deleted_total{table}` | 计数器。被保留策略删除的批量变更行，按表。 |
+| `bulk_change_activated` | 仪表。数据库强制执行批量变更所依据的设备属性写入协议时为 1，未强制执行或无法读取时为 0。由 `BulkChangesNotActivated` 读取。 |
+
 ## 事件处理：检测 {#event-processing-detect}
 
 前缀：`devicechain_eventprocessing_`。
@@ -171,6 +196,7 @@ title: 指标参考
 | `react_actions_not_enabled_total{action}` | 被识别但因此部署没有对应接收端而丢弃的 REACT 动作，按动作类型区分：未配置指令投递时的 sendCommand，或未启用出站连接器时的 httpCall/publish。告警接收端总是已接通，因此 raiseAlarm/clearAlarm 不应出现在这里。 |
 | `react_connector_egress_shed_total{action}` | 因超过租户出站速率而在源头被丢弃的连接器分发尝试（`httpCall`、`publish`），按动作类型区分。按尝试计数：重投递可能先被丢弃、后又接纳同一动作，所以这不是被永久丢弃动作的数量。 |
 | `react_command_refused_total{reason,result}` | 规则尝试发送、但在到达 command-delivery 之前被拒绝的命令，按原因区分，`result` 始终为 `"unwanted"`。`command_rate_limited`：租户超过其出站速率。`command_loop`：该规则在一分钟内已向该设备发送 120 条命令。`command_guard_full`：循环防护跟踪的规则与设备组合已达上限。每次拒绝还会在死信预算内记录为原因为 `shed` 的死信。 |
+| `react_command_governance_unresolved_admissions_total{cause}` | 规则发送的命令中，因租户自身上限未知而按平台默认值放行的命令，按原因区分（`pending`、`unreachable`、`unknown-tenant`）。与连接器动作的 `governance_unresolved_admissions_total` 分开计数。没有任何告警读取它：`TenantsMeteredAtPlatformDefault` 只监视 `<area>_governance_unresolved_admissions_total` 序列。 |
 | `react_connector_shed_dead_lettered_total{action}` | 在源头被拒绝（超过租户出站速率的连接器动作，以及因 `react_command_refused_total` 中任一原因被拒绝的命令），并以原因 shed 记录为单独死信的动作，按动作类型区分（`httpCall`、`publish`、`sendCommand`）。 |
 | `react_derived_in_flight` | REACT 已从流中取出但尚未处理完的派生事件：正在等待其设备的工作者，或正在分发。通常最多为 `react_workers`；当有投递等待超过其确认期限时会更多。 |
 | `react_dispatch_lag_seconds` | REACT 分发落后于派生事件流的程度：每个事件从被消息代理存储到开始分发时的时长。这是一次检测的告警、命令和连接器调用在 REACT 上等待的时间。 |
@@ -201,6 +227,7 @@ title: 指标参考
 | `rollup_hour_backfill_complete_from_timestamp_seconds` | Gauge。已完全刷新的最早小时边界（Unix 秒）。更早的小时在补齐前继续使用分钟汇总。仅在此副本首次获得回填锁并读取进度后导出。 |
 | `rollup_hour_backfill_remaining_windows` | Gauge。直到最早源数据块、分钟汇总或汇总保留边界之间仍需补齐的小时窗口数。零表示已补齐。仅在首次持锁读取进度后导出。 |
 | `rollup_hour_backfill_windows_total` | Counter。此副本已刷新并记录完成的小时窗口数。与刷新策略发生锁冲突时，窗口留待下一轮重试。 |
+| `analytics_reconcile_newer_surface_skips_total` | 计数器。本 Pod 发现分析（SQL/BI）视图已处于比其自身版本更新的代次并保持原样的协调轮次。仅在升级滚动期间出现；在所有 Pod 运行同一版本后仍持续增长，说明仍有旧版本 Pod 在运行。 |
 | `failed_events_recorded_total{source,reason}` | [失败事件索引](../guides/why-isnt-my-data-showing-up.md)读取到的、平台拒绝或无法存储的事件记录数，按写入该记录的区域和原因划分。每条记录都计数，包括被洪泛上限并入已有行的记录，因此它是平台拒绝事件的真实速率。`FailedEventsSustained` 依据它触发。 |
 | `failed_events_suppressed_total{reason}` | 因设备或原因达到每小时上限而并入已有行计数、未新增行的记录数。持续偏高说明某个设备或某种原因在大量拒绝事件。 |
 | `failed_events_unindexed_total{cause}` | 索引完全没有存储的记录数：`no_tenant`（主题未指明租户）、`undecodable`（记录无法解码）、`erased`（该租户的数据已被擦除）、`gave_up`（存储在每次投递时都拒绝了该记录）。只有 `gave_up` 值得排查；该记录会保留在失败流中，直到被滚动淘汰。 |

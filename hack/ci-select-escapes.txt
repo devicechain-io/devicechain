@@ -154,6 +154,7 @@ backend/services/lwm2m-ingest/downlink/documents_test.go
 backend/services/mcp/server/alarm_suppression_test.go
 backend/services/mcp/server/command_cause_test.go
 backend/services/mcp/server/documents_test.go
+backend/services/mcp/server/tools_device_rolling_test.go
 backend/services/notification-management/processor/alarm_lookup_wire_test.go
 backend/services/notification-management/processor/documents_test.go
 backend/services/notification-management/processor/suppression_rolling_matrix_test.go
@@ -162,6 +163,7 @@ backend/services/outbound-connectors/lpwan/chirpstack_test.go
 backend/services/outbound-connectors/lpwan/documents_test.go
 backend/services/outbound-connectors/lpwan/tts_test.go
 backend/services/sparkplug-ingest/downlink/reasons_test.go
+backend/services/update-management/download/headers_test.go
 backend/services/update-management/model/edge_lockstep_test.go
 backend/services/update-management/profilecheck/documents_test.go
 backend/services/user-management/basemap/catalog_test.go

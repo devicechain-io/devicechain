@@ -51,7 +51,12 @@ func TestCommandReproducesValuesWithoutACredential(t *testing.T) {
 		{"restore-rdb-from", "dc-rdb"},
 		{"restore-rdb-from", "https://host/a@b/archive"},
 		{"restore-rdb-from", "s3://bucket/a%2540b"},
-		{"registry", "localhost:5001/org@x"},
+		// Real registry references with no credential: no '@' at all, or an '@' that
+		// introduces an image digest.
+		{"registry", "localhost:5001/org/img:tag"},
+		{"registry", "ghcr.io/org/img"},
+		{"registry", "localhost:5001/org/img@sha256:0d1f8a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7"},
+		{"registry", "ghcr.io/org/img@sha256:0d1f8a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7"},
 		{"alert-email", "ops@example.test"},
 	} {
 		c := Choices{Given: Presence{tc.flag: true}}
@@ -69,6 +74,27 @@ func TestCommandReproducesValuesWithoutACredential(t *testing.T) {
 		}
 		if got.Template || !strings.Contains(got.Line, tc.value) {
 			t.Errorf("--%s=%s was not reproduced as given: %q (template %v)", tc.flag, tc.value, got.Line, got.Template)
+		}
+	}
+}
+
+// 🔴 AMBIGUOUS, SO HIDDEN. "localhost:5001/org@x" is written exactly as
+// "admin:5001/org@x" is — a user "admin" whose password "5001/org" holds a raw '/',
+// at the host "x" — and nothing in the value tells the two apart: only an image
+// digest after the '@' ("…@sha256:<hex>") marks it as a path. So it is templated
+// rather than reproduced, failing closed: a registry reference carries a tag after a
+// ':' and a digest after an '@', and neither form is affected.
+func TestCommandTemplatesAnAmbiguousNamePortPathAt(t *testing.T) {
+	for _, value := range []string{"localhost:5001/org@x", "admin:5001/dcPwZX@registry.example"} {
+		c := Choices{Given: Presence{"registry": true}, Registry: value}
+		for _, shell := range []Shell{POSIX, PowerShell} {
+			got, err := (Plan{choices: c}).Command(shell, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !got.Template || strings.Contains(got.Line+strings.Join(got.Argv, " "), value) {
+				t.Errorf("--registry=%s was reproduced as given: %q (template %v)", value, got.Line, got.Template)
+			}
 		}
 	}
 }

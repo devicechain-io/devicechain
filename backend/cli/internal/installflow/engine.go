@@ -115,7 +115,11 @@ type Reporter interface {
 	// Finish sends the one run.summary. A second call is ErrFinished.
 	Finish(Summary) error
 	// AddSecret registers a value to redact from every text the hub carries.
+	// It never refuses an identifier that contains it.
 	AddSecret(value string) error
+	// AddGeneratedSecret registers a value dcctl generated at random: redacted
+	// as AddSecret's is, and an identifier that contains it is refused.
+	AddGeneratedSecret(value string) error
 	// AddRedaction registers a value to redact from every text the hub
 	// carries without refusing identifiers that contain it.
 	AddRedaction(value string) error

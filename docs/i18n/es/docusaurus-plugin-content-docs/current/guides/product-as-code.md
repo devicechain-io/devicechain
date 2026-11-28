@@ -185,8 +185,11 @@ necesita una credencial y cuya variable no está definida bloquea el plan. Quita
 archivo de un conector elimina la credencial almacenada.
 
 El token de portador de una integración de entrada lo genera el servidor cuando se crea la
-integración. `apply` no lo solicita, de modo que nunca se recibe, se imprime ni se guarda. Rota el
-token de la integración en la consola para emitir uno.
+integración. `apply` no lo solicita, de modo que nunca se recibe, se imprime ni se guarda. Para
+emitir uno, ejecuta
+[`dcctl product rotate-integration-token <integration-token>`](../reference/dcctl.md#dcctl-product-rotate-integration-token)
+(imprime solo el token nuevo en stdout, y el anterior deja de funcionar de inmediato), o rótalo en la
+consola.
 
 ## Cómo converge apply {#apply}
 
