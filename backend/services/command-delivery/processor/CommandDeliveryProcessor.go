@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicechain-io/dc-command-delivery/config"
@@ -236,6 +237,23 @@ type CommandDeliveryProcessor struct {
 	// device-state is not deployed in this instance's profile, which is a supported
 	// configuration, not a misconfiguration.
 	Presence presence.Reader
+
+	// PresenceGateOff names the configuration whose absence switched the presence gate off
+	// at startup ("infrastructure.serviceAuth.secret", "infrastructure.deviceState.port", ...),
+	// and is empty when the gate is wired. It is not read from Presence because the HTTP pull
+	// channel layers a reader over a nil one, so a non-nil Presence does not mean presence is
+	// being asked.
+	//
+	// 🔴 OFF MUST STAY LOUD FOR AS LONG AS IT COSTS SOMETHING. Off still means deliver -- see
+	// Presence -- but a single WARN at startup scrolls away within the hour, and from then on
+	// an ungated command looks exactly like a gated one. Every command the sweep or a nudge
+	// dispatches while this is set is counted (PresenceGateOffDispatches) and the WARN is
+	// repeated, naming the missing keys, at most once per presenceGateOffWarnEvery.
+	PresenceGateOff string
+
+	// presenceGateOffWarned is when the repeated gate-off WARN last fired, in unix
+	// nanoseconds; the sweep and the nudge workers race for it, hence the atomic.
+	presenceGateOffWarned atomic.Int64
 
 	// SparkplugCommands is the deployment's derived capability flag: some Sparkplug source
 	// publishes commands. FALSE (the zero value) is the behaviour that predates the feature,
@@ -636,12 +654,42 @@ func (cproc *CommandDeliveryProcessor) deliverTenantBatch(ctx context.Context, b
 		case presence.Undeliverable:
 			cproc.failUndeliverable(tenantCtx, cmd)
 		default:
+			cproc.noteUngatedDispatch(time.Now())
 			if err := cproc.deliverCommand(ctx, cmd, path, routingOf(state.Known, state.Source)); err != nil {
 				log.Error().Err(err).Uint("command", cmd.ID).Str("device", cmd.DeviceToken).
 					Msg("unable to deliver command")
 			}
 		}
 	}
+}
+
+// presenceGateOffWarnEvery bounds how often the gate-off WARN repeats while commands keep
+// being dispatched without a presence check: often enough that it is on the page of log an
+// operator reads, rarely enough that a busy fleet does not bury everything else under it.
+const presenceGateOffWarnEvery = time.Hour
+
+// noteUngatedDispatch records one command about to be dispatched with no presence check
+// because the gate is switched off, and repeats the startup WARN when it is due. A no-op
+// while the gate is wired.
+func (cproc *CommandDeliveryProcessor) noteUngatedDispatch(now time.Time) {
+	if cproc.PresenceGateOff == "" {
+		return
+	}
+	incr(cproc.PresenceGateOffDispatches, 1)
+	last := cproc.presenceGateOffWarned.Load()
+	if last != 0 && now.Sub(time.Unix(0, last)) < presenceGateOffWarnEvery {
+		return
+	}
+	// One winner per period: a racing worker that loses the swap has been beaten to the
+	// same WARN, not denied one of its own.
+	if !cproc.presenceGateOffWarned.CompareAndSwap(last, now.UnixNano()) {
+		return
+	}
+	log.Warn().Str("missing", cproc.PresenceGateOff).
+		Msg("The presence gate is still OFF because its configuration is missing; commands are being " +
+			"dispatched without a presence check, so those to offline devices are published and dropped " +
+			"by the broker. Set the missing keys and restart command-delivery. " +
+			"Counted in command_delivery_presence_gate_off_dispatches_total.")
 }
 
 // distinctDevices reduces a batch to the devices it targets. A tenant with a hundred
