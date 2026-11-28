@@ -36,4 +36,5 @@ var Migrations = []*gormigrate.Migration{
 	NewRolloutTargetIncarnationSchema(),
 	NewRolloutSafetySchema(),
 	NewInstalledComponentsSchema(),
+	NewAttemptUpdatedObservedAtSchema(),
 }

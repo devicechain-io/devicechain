@@ -216,7 +216,7 @@ func TestARetriedUpdatedReportRestoresAnInstalledVersionThatFailedToWrite(t *tes
 	require.Equal(t, "3.1.0", got.Version)
 	require.Equal(t, v.Attempt.TargetDigest, got.Digest)
 	require.Equal(t, InstalledSourceUpdated, got.Source)
-	require.True(t, got.ObservedAt.Equal(updatedAt), "repair keeps the attempt's completion time")
+	require.True(t, got.ObservedAt.Equal(updatedAt.Add(-time.Second)), "repair keeps the completing report's broker time")
 }
 
 func TestAResentUpdatedReportDoesNotOverwriteANewerInstalledVersion(t *testing.T) {
@@ -258,6 +258,87 @@ func TestAResentUpdatedReportDoesNotOverwriteANewerInstalledVersion(t *testing.T
 			require.Equal(t, ota.VerdictDuplicate, verdict)
 			require.Equal(t, before, installed(t, e, "acme", "dev-1")["firmware"], "the newer installed observation must stay unchanged")
 		})
+	}
+}
+
+func TestARepairDoesNotOutrankANewerBrokerObservationUnderClockSkew(t *testing.T) {
+	e := newUpdateEnv(t)
+	ctx := tenantCtx("acme")
+	t0 := e.clock
+	// The replica is ahead of the broker, whose timestamps order installed observations.
+	e.advance(10 * time.Minute)
+	e.availableArtifact(t, "acme", "fw-2", "2.0.0", []byte("firmware two"))
+	a, err := e.api.AssignArtifact(ctx, "dev-1", "fw-2")
+	require.NoError(t, err)
+	e.mustApply(t, "acme", "dev-1", progress(a, 1, ota.StageInstalling, "b"), ota.VerdictApplied)
+	report := running(a, 2, "b2")
+	completed := WithObservedAt(ctx, t0)
+	verdict, err := e.api.ApplyReport(completed, "dev-1", report)
+	require.NoError(t, err)
+	require.Equal(t, ota.VerdictApplied, verdict)
+	got := installed(t, e, "acme", "dev-1")["firmware"]
+	require.Equal(t, "2.0.0", got.Version)
+	require.True(t, got.ObservedAt.Equal(t0))
+
+	// A later broker observation supersedes the completed update despite replica skew.
+	verdict, err = e.api.ApplyReport(WithObservedAt(ctx, t0.Add(2*time.Minute)), "dev-1", inventoryOf("firmware", "1.0.0", ""))
+	require.NoError(t, err)
+	require.Equal(t, ota.VerdictLate, verdict)
+	before := installed(t, e, "acme", "dev-1")["firmware"]
+	require.Equal(t, "1.0.0", before.Version)
+	require.True(t, before.ObservedAt.Equal(t0.Add(2*time.Minute)))
+
+	// Redelivery keeps the completing report's original broker time.
+	verdict, err = e.api.ApplyReport(completed, "dev-1", report)
+	require.NoError(t, err)
+	require.Equal(t, ota.VerdictDuplicate, verdict)
+	got = installed(t, e, "acme", "dev-1")["firmware"]
+	require.Equal(t, "1.0.0", got.Version, "duplicate repair must not outrank a newer broker observation")
+	require.Equal(t, before, got)
+
+	// So does a device resend of the same final report, a new message with a later append time.
+	verdict, err = e.api.ApplyReport(WithObservedAt(ctx, t0.Add(3*time.Minute)), "dev-1", report)
+	require.NoError(t, err)
+	require.Equal(t, ota.VerdictDuplicate, verdict)
+	require.Equal(t, before, installed(t, e, "acme", "dev-1")["firmware"], "a resend must not outrank a newer broker observation")
+}
+
+func TestAResentUpdatedReportForASupersededAssignmentDoesNotOverwriteANewerVersionUnderClockSkew(t *testing.T) {
+	e := newUpdateEnv(t)
+	ctx := tenantCtx("acme")
+	t0 := e.clock
+	// The replica runs ahead of the broker throughout.
+	e.advance(10 * time.Minute)
+	e.availableArtifact(t, "acme", "fw-2", "2.0.0", []byte("firmware two"))
+	a, err := e.api.AssignArtifact(ctx, "dev-1", "fw-2")
+	require.NoError(t, err)
+	e.mustApply(t, "acme", "dev-1", progress(a, 1, ota.StageInstalling, "b"), ota.VerdictApplied)
+	old := running(a, 2, "b2")
+	oldCtx := WithObservedAt(ctx, t0)
+	verdict, err := e.api.ApplyReport(oldCtx, "dev-1", old)
+	require.NoError(t, err)
+	require.Equal(t, ota.VerdictApplied, verdict)
+
+	e.availableArtifact(t, "acme", "fw-3", "3.0.0", []byte("firmware three"))
+	b, err := e.api.AssignArtifact(ctx, "dev-1", "fw-3")
+	require.NoError(t, err)
+	verdict, err = e.api.ApplyReport(WithObservedAt(ctx, t0.Add(time.Minute)), "dev-1", progress(b, 1, ota.StageInstalling, "b2"))
+	require.NoError(t, err)
+	require.Equal(t, ota.VerdictApplied, verdict)
+	verdict, err = e.api.ApplyReport(WithObservedAt(ctx, t0.Add(2*time.Minute)), "dev-1", running(b, 2, "b3"))
+	require.NoError(t, err)
+	require.Equal(t, ota.VerdictApplied, verdict)
+	before := installed(t, e, "acme", "dev-1")["firmware"]
+	require.Equal(t, "3.0.0", before.Version)
+	require.True(t, before.ObservedAt.Equal(t0.Add(2*time.Minute)))
+
+	// The superseded assignment's final report arrives again: redelivered with its own broker time,
+	// and resent by the device as a new message appended after the newer completion.
+	for _, at := range []context.Context{oldCtx, WithObservedAt(ctx, t0.Add(3*time.Minute))} {
+		verdict, err = e.api.ApplyReport(at, "dev-1", old)
+		require.NoError(t, err)
+		require.Equal(t, ota.VerdictDuplicate, verdict)
+		require.Equal(t, before, installed(t, e, "acme", "dev-1")["firmware"], "a superseded assignment must not overwrite a newer version")
 	}
 }
 
