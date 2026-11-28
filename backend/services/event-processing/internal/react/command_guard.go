@@ -65,8 +65,9 @@ type commandLoopExpiry struct {
 // idempotency token collapses it downstream if it did) but never enters this state
 // or the outbound gate. A backlog that startup replay applies for the first time is
 // not a re-derivation and is governed like live input. Preview has no live sinks and
-// evaluation uses recording sinks with WithCommandSimulation. It uses the server
-// clock, never device event time (a device must not advance its own allowance).
+// evaluation uses recording sinks with WithCommandSimulation. It meters on the
+// detection's platform trigger time capped at the server clock (loopMeteringTime),
+// never device event time (a device must not advance its own allowance).
 //
 // HA: state is PER REPLICA, not shared or checkpointed. REACT's DETECT term gate
 // normally leaves only the lease holder dispatching. Restart/failover starts a
@@ -201,11 +202,32 @@ func WithCommandSimulation() Option {
 // never have been delivered, not a fresh trigger, and the idempotency token is what
 // stops it from actuating twice. DETECT marks only detections of events an earlier
 // term was handed; a backlog no term ever saw arrives unmarked and is charged here.
+// loopMeteringTime is the time the loop guard charges an attempt at: the detection's
+// platform trigger time, the same clock the rate gate meters on, never later than
+// the dispatch's own clock. Live traffic is triggered moments before it is
+// dispatched, so it is metered at the dispatch time to within the pipeline's latency.
+// A backlog drained after an outage is metered on the timeline it was produced on:
+// charged at drain time, minutes of compliant traffic would land in one window, so
+// every distinct rule/device pair of those minutes would hold a slot at once
+// (command_guard_full, and across tenants a full table) and a device commanded
+// every few seconds would read as a loop (command_loop). A loop inside the backlog
+// still sends faster than the allowance on its own timeline, and is still cut.
+//
+// The guard clamps every time to its mark, so its windows open in order. While a
+// backlog and live traffic drain together, the live traffic pushes the mark to now
+// and the backlog is metered there, as it was before.
+func loopMeteringTime(ev runtime.DerivedEvent, sentAt time.Time) time.Time {
+	if ev.TriggeredAt.IsZero() || ev.TriggeredAt.After(sentAt) {
+		return sentAt
+	}
+	return ev.TriggeredAt
+}
+
 func (d *Dispatcher) commandRefusal(ev runtime.DerivedEvent, sentAt time.Time) string {
 	if d.commandSimulation || ev.Replayed {
 		return ""
 	}
-	if code := d.commandLoop.admit(ev.Tenant, ev.RuleID, ev.Series, sentAt); code != "" {
+	if code := d.commandLoop.admit(ev.Tenant, ev.RuleID, ev.Series, loopMeteringTime(ev, sentAt)); code != "" {
 		return code
 	}
 	if d.commandRate != nil && !d.commandRate.AllowAt(ev.Tenant, ev.TriggeredAt) {

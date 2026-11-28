@@ -91,6 +91,94 @@ func TestReplayedCommandIsSentWithoutSpendingEitherBudget(t *testing.T) {
 	}
 }
 
+// A backlog drained after an outage is metered on the timeline it was produced on.
+// Six minutes of compliant traffic, each command to its own device, is more rule and
+// device pairs than a tenant's share holds in one window, and a device commanded
+// every two seconds receives more than a loop's allowance in six minutes. Charged at
+// drain time both would be refused; on their own timeline neither is. A device that
+// really is looping inside the backlog is still cut.
+func TestCommandBacklogIsGuardedOnItsOwnTimeline(t *testing.T) {
+	sink := &fakeSink{}
+	produced := evt().OccurredTime
+	drain := produced.Add(time.Hour)
+	d := NewDispatcher(fakeResolver{rule: governedCommandRule(), found: true}, sink, nil, nil, nil, newFakeMetrics(),
+		WithCommandRateGate(&fakeGate{admit: true}), WithClock(func() time.Time { return drain }))
+	refused := map[string]map[string]int{}
+	dispatch := func(device string, at time.Time) {
+		ev := evt()
+		ev.Series, ev.OccurredTime, ev.TriggeredAt = device, at, at
+		for _, shed := range d.Dispatch(context.Background(), ev).Shed {
+			if refused[shed.Code] == nil {
+				refused[shed.Code] = map[string]int{}
+			}
+			refused[shed.Code][device]++
+		}
+	}
+	const minutes, perSecond = 6, 60
+	loopStart := produced.Add(3 * time.Minute)
+	for s := 0; s < minutes*60; s++ {
+		at := produced.Add(time.Duration(s) * time.Second)
+		for i := 0; i < perSecond; i++ {
+			dispatch(fmt.Sprintf("d-%d-%d", s, i), at)
+		}
+		if s%2 == 0 {
+			dispatch("steady", at)
+		}
+		// 200 commands to one device within ten seconds of the backlog: a loop.
+		if !at.Before(loopStart) && at.Before(loopStart.Add(10*time.Second)) {
+			for i := 0; i < 20; i++ {
+				dispatch("looping", at.Add(time.Duration(i)*time.Millisecond))
+			}
+		}
+	}
+	if n := len(refused[CommandGuardFull]); n != 0 {
+		t.Fatalf("a compliant backlog filled the guard: %d devices refused with %s", n, CommandGuardFull)
+	}
+	if refused[CommandLoop]["steady"] != 0 {
+		t.Fatalf("a device commanded every two seconds read as a loop: %d refusals", refused[CommandLoop]["steady"])
+	}
+	if got := refused[CommandLoop]["looping"]; got != 200-commandLoopSends || len(refused[CommandLoop]) != 1 {
+		t.Fatalf("the loop inside the backlog was not cut at its allowance: %v", refused[CommandLoop])
+	}
+}
+
+// Trigger times arrive out of order (redeliveries, lanes, groups draining together),
+// but the guard opens its windows at its mark, so the expiry queue stays in order and
+// a window that has ended is never hidden behind one that has not.
+func TestCommandLoopWindowsOpenInOrderUnderOutOfOrderTimes(t *testing.T) {
+	g := newCommandLoopGuard()
+	at := evt().OccurredTime
+	for i, offset := range []time.Duration{30 * time.Second, 0, 10 * time.Second, -time.Hour, 45 * time.Second, 5 * time.Second} {
+		if code := g.admit("acme", "acme/p@1/r1", fmt.Sprint(i), at.Add(offset)); code != "" {
+			t.Fatalf("key %d refused: %s", i, code)
+		}
+	}
+	for i := g.head + 1; i < len(g.expiry); i++ {
+		if g.expiry[i].until.Before(g.expiry[i-1].until) {
+			t.Fatalf("expiry queue out of order at %d: %v before %v", i, g.expiry[i].until, g.expiry[i-1].until)
+		}
+	}
+}
+
+// A trigger time is never trusted past the dispatch clock: a detection stamped in the
+// future is metered at the dispatch time, so it cannot open windows ahead of it.
+func TestCommandLoopNeverMetersPastTheDispatchClock(t *testing.T) {
+	now := evt().OccurredTime
+	ev := evt()
+	ev.TriggeredAt = now.Add(time.Hour)
+	if got := loopMeteringTime(ev, now); !got.Equal(now) {
+		t.Fatalf("a future trigger time was metered at %v, want the dispatch time %v", got, now)
+	}
+	ev.TriggeredAt = time.Time{}
+	if got := loopMeteringTime(ev, now); !got.Equal(now) {
+		t.Fatalf("a missing trigger time was metered at %v, want the dispatch time", got)
+	}
+	ev.TriggeredAt = now.Add(-time.Minute)
+	if got := loopMeteringTime(ev, now); !got.Equal(ev.TriggeredAt) {
+		t.Fatalf("a past trigger time was metered at %v, want %v", got, ev.TriggeredAt)
+	}
+}
+
 // A looping rule's refused attempts must not keep drawing on the tenant's outbound
 // budget: the loop guard is asked before the gate.
 func TestLoopRefusalDoesNotSpendTenantBudget(t *testing.T) {
