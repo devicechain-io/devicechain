@@ -145,5 +145,10 @@ var (
 		NewAgentPolicyMigration(),
 		NewAgentActuationOffMigration(),
 		NewAgentActuationGenerationMigration(),
+		// A password set through an invitation code admits a password sign-in only to the
+		// tenants that vouched for it: iam_identities.password_from_invitation and
+		// iam_memberships.admits_invited_password, with a backfill of the identities an
+		// invitation created and the memberships whose invitation was accepted.
+		NewInvitationPasswordScopeMigration(),
 	}
 )

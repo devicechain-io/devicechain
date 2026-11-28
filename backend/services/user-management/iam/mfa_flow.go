@@ -83,7 +83,9 @@ func (s *Store) ResetMfa(ctx context.Context, store secrets.SecretStore, id *Ide
 		}
 		fields := map[string]any{"session_epoch": epoch}
 		if newPasswordHash != "" {
+			// The operator set it, so the operator vouches for it (see SetPasswordHash).
 			fields["password_hash"] = newPasswordHash
+			fields["password_from_invitation"] = false
 		}
 		return tx.Model(id).Updates(fields).Error
 	})
@@ -93,6 +95,7 @@ func (s *Store) ResetMfa(ctx context.Context, store secrets.SecretStore, id *Ide
 	id.SessionEpoch = epoch
 	if newPasswordHash != "" {
 		id.PasswordHash = newPasswordHash
+		id.PasswordFromInvitation = false
 	}
 	return nil
 }

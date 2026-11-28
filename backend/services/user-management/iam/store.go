@@ -233,16 +233,53 @@ func (s *Store) SetIdentityEnabled(ctx context.Context, id *Identity, enabled bo
 // token minted before it. The two are one write on purpose: a reset that changed the
 // hash but left the epoch would let a stolen refresh token keep rotating for as long
 // as it is used, and no caller can forget a rotation that is not theirs to perform.
+//
+// It is the OPERATOR's way of setting a password, so it also clears PasswordFromInvitation:
+// the operator vouches for the password everywhere the identity is a member.
 func (s *Store) SetPasswordHash(ctx context.Context, id *Identity, hash string) error {
 	epoch := NewSessionEpoch()
 	if err := s.sys(ctx).Model(id).Updates(map[string]any{
-		"password_hash": hash,
-		"session_epoch": epoch,
+		"password_hash":            hash,
+		"session_epoch":            epoch,
+		"password_from_invitation": false,
 	}).Error; err != nil {
 		return err
 	}
 	id.PasswordHash = hash
 	id.SessionEpoch = epoch
+	id.PasswordFromInvitation = false
+	return nil
+}
+
+// SetInvitedPasswordHash sets the password of an identity redeeming an invitation code: the
+// hash, a fresh session epoch, PasswordFromInvitation, and the vouch of the accepting
+// membership alone. The password then admits a password sign-in only to that tenant until
+// another tenant vouches for it (AdmitInvitedPassword) or the operator sets a password.
+func (s *Store) SetInvitedPasswordHash(ctx context.Context, id *Identity, mem *Membership, hash string) error {
+	epoch := NewSessionEpoch()
+	if err := s.sys(ctx).Model(id).Updates(map[string]any{
+		"password_hash":            hash,
+		"session_epoch":            epoch,
+		"password_from_invitation": true,
+	}).Error; err != nil {
+		return err
+	}
+	if err := s.AdmitInvitedPassword(ctx, mem); err != nil {
+		return err
+	}
+	id.PasswordHash = hash
+	id.SessionEpoch = epoch
+	id.PasswordFromInvitation = true
+	return nil
+}
+
+// AdmitInvitedPassword records that a membership's tenant vouched for the identity's
+// invitation password.
+func (s *Store) AdmitInvitedPassword(ctx context.Context, mem *Membership) error {
+	if err := s.sys(ctx).Model(mem).Update("admits_invited_password", true).Error; err != nil {
+		return err
+	}
+	mem.AdmitsInvitedPassword = true
 	return nil
 }
 

@@ -192,6 +192,14 @@ type Identity struct {
 	// epoch is refused both at the mint and at every redemption.
 	SessionEpoch string `gorm:"not null;size:64;default:''" json:"-"`
 
+	// PasswordFromInvitation is true while the password was set by redeeming a tenant
+	// invitation code (identity.Manager.AcceptInvitation). Such a password proves only that
+	// whoever set it held a code a tenant administrator issued, and that administrator holds
+	// it too, so it admits a password sign-in only to the memberships whose tenant vouched
+	// for it (Membership.AdmitsInvitedPassword). Every other way a password is set (by the
+	// operator) clears it. The column defaults to false, so an older pod's insert is unscoped.
+	PasswordFromInvitation bool `gorm:"not null;default:false" json:"-"`
+
 	// System (instance-scoped) roles, e.g. superuser. Their authorities ride the
 	// identity token and gate the admin API.
 	SystemRoles []Role `gorm:"many2many:iam_identity_system_roles;"`
@@ -226,6 +234,12 @@ type Membership struct {
 	// the writers fold an empty list to nil — so "scoped to nothing" is not a state a
 	// membership can be in.
 	Scope []string `gorm:"type:jsonb;serializer:json"`
+
+	// AdmitsInvitedPassword is true when this tenant vouched for whoever set the identity's
+	// invitation password: its own invitation code set it, or one of its codes was accepted by
+	// signing in with it. It matters only while Identity.PasswordFromInvitation is true: a
+	// password sign-in of such an identity enters only the memberships that carry it.
+	AdmitsInvitedPassword bool `gorm:"not null;default:false"`
 
 	// Tenant (data-plane) roles for this identity in this tenant. Their
 	// authorities ride the tenant token and gate the data services.
