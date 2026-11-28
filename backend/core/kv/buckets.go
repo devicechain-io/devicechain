@@ -302,7 +302,11 @@ var All = []Bucket{
 			"sessions one device credential leaves in the broker's session store: a new id past the " +
 			"count evicts the least recently seen one's session first. A device on its plain client " +
 			"id writes nothing, so this scales with the devices that use a second session, not with " +
-			"the fleet. Entries do not age out in practice (the lifetime is ten years): a slot is " +
+			"the fleet: an entry is about 200 bytes for a device with one suffixed id and about 1.7 KB " +
+			"at the default 16, so the default 128 MiB State ceiling holds roughly 600k devices with " +
+			"one and 75k at the full count (the compact preset's 16 MiB an eighth of that). Its " +
+			"reservation is in the published JetStream sizing table. Entries do not age out in " +
+			"practice (the lifetime is ten years): a slot is " +
 			"released only by evicting the session it counts. A full or unreachable bucket refuses " +
 			"only connects with an id the device has not used before (fail closed, counted as " +
 			"callout_session_limited_total{reason=\"session_store_unavailable\"}).",

@@ -97,8 +97,8 @@ func TestTheReservationIsCheckedBeforeTheDeclarationIsWritten(t *testing.T) {
 }
 
 // The published sizing table (observability: JetStream sizing) names the volume that fits each
-// design rate. A stream added to the catalogue must not move a row: the 20,000 events/s row clears
-// its volume by under 50 MiB, so a Hot stream at its default ceiling (a gibibyte) would silently
+// design rate. A stream added to the catalogue must not move a row: the 10,000 events/s row clears
+// its volume by under 100 MiB, so a Hot stream at its default ceiling (a gibibyte) would silently
 // make the documented volume too small. Holds with fail-closed MQTT off (the table) and on.
 func TestThePublishedSizingTableRowsHold(t *testing.T) {
 	t.Parallel()
@@ -109,7 +109,7 @@ func TestThePublishedSizingTableRowsHold(t *testing.T) {
 		{1_000, 14, 15},
 		{5_000, 16, 18},
 		{10_000, 22, 25},
-		{20_000, 33, 40},
+		{20_000, 34, 40},
 	} {
 		for failClosed, want := range map[bool]int64{false: tc.off, true: tc.on} {
 			cfg := config.NewDefaultInstanceConfiguration()
