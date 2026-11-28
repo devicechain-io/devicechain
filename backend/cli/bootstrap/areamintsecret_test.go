@@ -334,3 +334,89 @@ func TestTheChartMountsAreaMintCredentials(t *testing.T) {
 		}
 	})
 }
+
+// A mint Secret left by a previous generation of this instance name is refused, never adopted; one
+// dcctl did not write (the operator's own) is used as it is; this generation's is used.
+func TestAreaMintSecretFromAPreviousGenerationIsRefused(t *testing.T) {
+	standInAreaBound(t, "mcp")
+	ctx := context.Background()
+	st := mintState(t)
+	ns := InstanceNamespace(st.Instance)
+	cred := strings.Repeat("k", 43)
+	secret := func(owner *secretOwner) *corev1.Secret {
+		s := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: areaMintSecretName(st.Instance, "mcp"), Namespace: ns},
+			Data:       map[string][]byte{areaMintCredentialKey: []byte(cred)},
+		}
+		if owner != nil {
+			setAnnotations(s, *owner, "2026-01-01T00:00:00Z")
+		}
+		return s
+	}
+	previous := instanceOwner(st.Instance, "99999999-9999-9999-9999-999999999999")
+	current := instanceOwner(st.Instance, st.InstanceUID)
+	cluster := clusterOwner("c-uid")
+
+	for name, tc := range map[string]struct {
+		owner   *secretOwner
+		refused bool
+	}{
+		"a previous generation's":  {&previous, true},
+		"stamped as the cluster's": {&cluster, true},
+		"this generation's":        {&current, false},
+		"the operator's own":       {nil, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := fake.NewSimpleClientset(secret(tc.owner))
+			err := ensureAreaMintSecrets(ctx, c, st)
+			if tc.refused {
+				if err == nil {
+					t.Fatal("the Secret was adopted")
+				}
+				if !strings.Contains(err.Error(), areaMintSecretName(st.Instance, "mcp")) {
+					t.Errorf("the refusal does not name the Secret: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("a usable Secret was refused: %v", err)
+			}
+			s, _ := c.CoreV1().Secrets(ns).Get(ctx, areaMintSecretName(st.Instance, "mcp"), metav1.GetOptions{})
+			if string(s.Data[areaMintCredentialKey]) != cred || len(s.StringData) != 0 {
+				t.Fatal("the Secret was rewritten")
+			}
+		})
+	}
+}
+
+// Usability is measured after trimming, as both readers measure it: a credential that is only long
+// enough with its surrounding whitespace is refused here rather than failing at every mint.
+func TestAreaMintSecretUsabilityIsMeasuredTrimmed(t *testing.T) {
+	standInAreaBound(t, "mcp")
+	ctx := context.Background()
+	st := mintState(t)
+	ns := InstanceNamespace(st.Instance)
+	short := strings.Repeat("x", auth.MinAreaCredentialLen-1)
+	for name, tc := range map[string]struct {
+		value string
+		ok    bool
+	}{
+		"one short plus a newline": {short + "\n", false},
+		"all spaces":               {strings.Repeat(" ", auth.MinAreaCredentialLen), false},
+		"padded on both sides":     {"  " + short + " \t", false},
+		"exactly long enough":      {short + "x", true},
+		"long enough plus newline": {short + "x\n", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := fake.NewSimpleClientset(&corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: areaMintSecretName(st.Instance, "mcp"), Namespace: ns},
+				Data:       map[string][]byte{areaMintCredentialKey: []byte(tc.value)},
+			})
+			err := ensureAreaMintSecrets(ctx, c, st)
+			if tc.ok && err != nil {
+				t.Fatalf("a usable credential was refused: %v", err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatal("a credential the readers would reject was accepted")
+			}
+		})
+	}
+}
