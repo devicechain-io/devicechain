@@ -768,6 +768,14 @@ Las alertas de las instantáneas se describen en
 - **Puertos libres 80, 443 y 1883 del host** para un clúster local de kind, que los publica para
   la consola, HTTPS y MQTT. `dcctl preflight local` falla, nombrando el contenedor que ocupa uno,
   en lugar de dejar que la creación del clúster falle con el error de enlace de Docker.
+- **Accesible solo desde esta máquina, salvo que pida otra cosa.** El clúster de kind que crea
+  `dcctl install local` publica esos puertos en `127.0.0.1`, de modo que la consola y el broker MQTT
+  responden en esta máquina y en ninguna otra. Para llegar a ellos desde otra máquina de su red (un
+  dispositivo, un teléfono, otro ordenador), cree el clúster con `dcctl install local --expose-lan`
+  (o `dcctl setup local --expose-lan`), que los publica en todas las interfaces. Hágalo solo en una
+  red de confianza, y no con `--no-tls` ni `--dev`, que sirven el inicio de sesión de la consola por
+  HTTP sin cifrar. kind fija los puertos de un clúster al crearlo, así que la opción no cambia nada
+  en un clúster que ya existe: elimine el clúster y vuelva a crearlo para cambiarlo.
 - **En Linux, un límite de inotify más alto.** `dcctl preflight local` exige `fs.inotify.max_user_instances` de al menos 256 para un clúster local de kind, y Ubuntu 24.04 de serie trae 128, por lo que falla e imprime el comando que hay que ejecutar. La primera línea sube el límite (la segunda, `max_user_watches`, es solo un aviso) y `/etc/sysctl.d` lo conserva tras los reinicios:
 
   ```bash
@@ -1968,7 +1976,8 @@ instancia a través del ingress del clúster. El superusuario es `superuser@devi
 y no hay contraseña por defecto. El arranque genera una para la instancia, la guarda en el
 Secret `dci-<instance>-superuser` del namespace de la instancia y la imprime una sola vez, al
 final de la ejecución que la generó (o de la que termina un arranque inicial que falló antes de
-imprimirla). Para volver a leerla:
+imprimirla). Solo se imprime cuando esa salida es un terminal: la salida canalizada o redirigida,
+como un registro de CI, nombra el Secret en su lugar. Para volver a leerla, o desde un script:
 
 ```bash
 kubectl -n dci-my-instance get secret dci-my-instance-superuser -o jsonpath='{.data.password}' | base64 -d

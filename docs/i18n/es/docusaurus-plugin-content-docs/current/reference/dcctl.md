@@ -2047,6 +2047,7 @@ dcctl install <provider> [flags]
       --database-toleration strings        let the databases run on nodes with this taint, written as kubectl taint writes it: key=value:Effect, or key:Effect for any value (repeatable). Needs --database-node-selector
       --dev                                local-developer preset: --build --yes (builds the operator image from this source checkout); rejects contradictory flags
       --dry-run                            print what would happen without applying changes
+      --expose-lan                         local provider: create the kind cluster with its ports (80, 443 and the MQTT ports 1883-1885) published on every host interface instead of 127.0.0.1 only, so other machines on the network can reach the console and the broker. Off by default: a local install is reachable only from this machine. Applies only when the cluster is created
       --ha                                 a replicated relational store (3 CloudNativePG instances, synchronous), and every instance bootstrapped on this cluster HA too: a 3-server NATS cluster with replicated streams and a replicated event store. Needs at least 3 schedulable nodes; database volumes are sized per instance
   -h, --help                               help for install
       --kube-context string                install into this existing cluster instead of a local kind cluster (never created or deleted by dcctl)
@@ -3139,6 +3140,7 @@ dcctl setup local [flags]
 ```
       --cluster string        Preview. Start from this local kind cluster, created if it does not exist; it can be changed on screen (default "devicechain")
       --compact               Preview. Start with the small-footprint cluster preset (as dcctl install --compact); it can be changed on screen
+      --expose-lan            Preview. local provider: create the kind cluster with its ports (80, 443 and the MQTT ports 1883-1885) published on every host interface instead of 127.0.0.1 only, so other machines on the network can reach the console and the broker. Off by default: a local install is reachable only from this machine. Applies only when the cluster is created (as dcctl install --expose-lan)
       --ha                    Preview. Start with the HA cluster topology (as dcctl install --ha); it can be changed on screen
   -h, --help                  help for local
       --kube-context string   Preview. Start from this existing cluster instead of a local kind cluster (never created or deleted by dcctl); it can be changed on screen

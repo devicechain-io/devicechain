@@ -44,12 +44,19 @@ var (
 	installRemoveLegacy        bool
 	installAWSNLB              string
 	installMQTTGateway         bool
+	installExposeLAN           bool
 )
 
 func installChoices(cmd *cobra.Command) (installchoice.Choices, error) {
 	cmd.InitDefaultHelpFlag()
 	return installchoice.FromFlags(cmd.Flags())
 }
+
+// exposeLANUsage is --expose-lan's help, the same on install and setup local.
+const exposeLANUsage = "local provider: create the kind cluster with its ports (80, 443 and the MQTT ports 1883-1885) " +
+	"published on every host interface instead of 127.0.0.1 only, so other machines on the network can reach the " +
+	"console and the broker. Off by default: a local install is reachable only from this machine. Applies only " +
+	"when the cluster is created"
 
 // installCmd prepares a cluster for DeviceChain instances.
 var installCmd = &cobra.Command{
@@ -179,6 +186,7 @@ func init() {
 	installCmd.Flags().StringVar(&installKubeContext, "kube-context", "", "install into this existing cluster instead of a local kind cluster (never created or deleted by dcctl)")
 	installCmd.Flags().StringVar(&installCluster, "cluster", bootstrap.DefaultClusterName, "local provider: the kind cluster to create or use")
 	installCmd.Flags().BoolVar(&installDryRun, "dry-run", false, "print what would happen without applying changes")
+	installCmd.Flags().BoolVar(&installExposeLAN, "expose-lan", false, exposeLANUsage)
 	installCmd.Flags().BoolVarP(&installAssumeYes, "yes", "y", false, "assume yes for prompts")
 	installCmd.Flags().BoolVar(&installSkipPreflight, "skip-preflight", false, "skip the local-system preflight checks")
 	installCmd.Flags().BoolVar(&installDev, "dev", false, "local-developer preset: --build --yes (builds the operator image from this source checkout); rejects contradictory flags")
