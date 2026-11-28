@@ -364,6 +364,7 @@ func TestEveryTenantScopedBucketIsInTheInventory(t *testing.T) {
 	for _, want := range []string{
 		kv.BucketDeviceByToken, kv.BucketRelationshipsBySource, kv.BucketMembershipsByEntity,
 		kv.BucketProfileResolutionByType, kv.BucketScopedGroupsExist,
+		kv.BucketMqttSessionDiscriminators,
 		// Retired this release and still purged for one more — see tenantScopedBuckets.
 		"metric-defs-by-type", "profile-scope-by-type",
 	} {
@@ -415,6 +416,8 @@ func TestEveryBucketInTheInventoryIsActuallyReached(t *testing.T) {
 		{"device-management", kv.BucketScopedGroupsExist},
 		{"device-management", "metric-defs-by-type"},
 		{"device-management", "profile-scope-by-type"},
+		// Not a cache: per instance, so its name carries no area.
+		{"", kv.BucketMqttSessionDiscriminators},
 	}
 	require.Len(t, tenantScopedBuckets, len(expected),
 		"the inventory gained or lost a bucket; this test's independent list has to follow, and "+
@@ -423,6 +426,9 @@ func TestEveryBucketInTheInventoryIsActuallyReached(t *testing.T) {
 	stores := map[string]nats.KeyValue{}
 	for _, e := range expected {
 		bucket := CacheBucketName(purgeInstance, e.area, e.logical)
+		if e.logical == kv.BucketMqttSessionDiscriminators {
+			bucket = MqttSessionDiscriminatorsBucketName(purgeInstance)
+		}
 		// scoped-groups-exist keys on the bare tenant; every other bucket on tenant|rest.
 		// Seeding each with ITS OWN layout is the point — one layout everywhere would let
 		// the bare-tenant bucket pass on a key it never actually holds.

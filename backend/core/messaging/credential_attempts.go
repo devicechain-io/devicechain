@@ -54,3 +54,17 @@ func (nmgr *NatsManager) PartitionPlacementStore() (nats.KeyValue, error) {
 	return nmgr.KeyValueStore(kv.BucketPartitionPlacement,
 		PartitionPlacementBucketName(nmgr.Microservice.InstanceId), b.TTL)
 }
+
+// MqttSessionDiscriminatorStore returns the instance's bucket of the MQTT client-id discriminators
+// each device has connected with (device-management's auth callout), which bounds how many
+// persistent sessions one device can hold. Keys are MqttSessionDiscriminatorKey.
+func (nmgr *NatsManager) MqttSessionDiscriminatorStore() (nats.KeyValue, error) {
+	return nmgr.KeyValueStore(kv.BucketMqttSessionDiscriminators,
+		MqttSessionDiscriminatorsBucketName(nmgr.Microservice.InstanceId), kv.MqttSessionDiscriminatorTTL)
+}
+
+// MqttSessionDiscriminatorKey is the key of one device's entry in MqttSessionDiscriminatorStore:
+// "{tenant}|{device}", encoded like every other tenant-scoped key, so a tenant purge finds it.
+func MqttSessionDiscriminatorKey(tenant, deviceToken string) string {
+	return kvKey(tenant + kvTenantSeparator + deviceToken)
+}

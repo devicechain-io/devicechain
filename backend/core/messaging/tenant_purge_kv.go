@@ -34,6 +34,22 @@ import (
 // Otherwise the boundary byte is smeared across a shared sextet and the prefix silently
 // stops matching. Decode, then compare.
 
+// tenantScopedBucket is one bucket a tenant purge scans.
+type tenantScopedBucket struct {
+	area, logical string
+	// perInstance, when set, is the concrete bucket name for a bucket that is not a per-area
+	// cache. Nil means CacheBucketName(instanceId, area, logical).
+	perInstance func(instanceId string) string
+}
+
+// bucket is the concrete name of b on an instance.
+func (b tenantScopedBucket) bucket(instanceId string) string {
+	if b.perInstance != nil {
+		return b.perInstance(instanceId)
+	}
+	return CacheBucketName(instanceId, b.area, b.logical)
+}
+
 // tenantScopedBuckets are the cache buckets whose keys carry a tenant, with the functional
 // area that creates them — the concrete bucket name folds the area in, so it cannot be
 // derived from the logical name alone.
@@ -44,14 +60,18 @@ import (
 // a bucket with no matching keys is indistinguishable from one that was already clean. That
 // is why the membership test below is equality OR prefix, and why it is one function rather
 // than a rule per bucket.
-var tenantScopedBuckets = []struct{ area, logical string }{
-	{"device-management", kv.BucketDeviceByToken},
-	{"device-management", kv.BucketRelationshipsBySource},
-	{"device-management", kv.BucketMembershipsByEntity},
-	{"device-management", kv.BucketProfileResolutionByType},
-	{"device-management", kv.BucketScopedGroupsExist},
-	{"device-management", retiredBucketMetricDefsByType},
-	{"device-management", retiredBucketProfileScopeByType},
+//
+// One of them is not a cache: dc_mqtt_session_discriminators is a per-instance State bucket, keyed
+// "{tenant}|{device}" like the caches, whose concrete name has no area in it (perInstance).
+var tenantScopedBuckets = []tenantScopedBucket{
+	{area: "device-management", logical: kv.BucketMqttSessionDiscriminators, perInstance: MqttSessionDiscriminatorsBucketName},
+	{"device-management", kv.BucketDeviceByToken, nil},
+	{"device-management", kv.BucketRelationshipsBySource, nil},
+	{"device-management", kv.BucketMembershipsByEntity, nil},
+	{"device-management", kv.BucketProfileResolutionByType, nil},
+	{"device-management", kv.BucketScopedGroupsExist, nil},
+	{"device-management", retiredBucketMetricDefsByType, nil},
+	{"device-management", retiredBucketProfileScopeByType, nil},
 }
 
 // The two per-device-type caches that profile-resolution-by-type replaced. Nothing creates
@@ -102,7 +122,7 @@ func PurgeTenantKv(ctx context.Context, js nats.JetStreamContext, instanceId, te
 	}
 
 	for _, b := range tenantScopedBuckets {
-		bucket := CacheBucketName(instanceId, b.area, b.logical)
+		bucket := b.bucket(instanceId)
 		n, err := purgeBucket(ctx, js, bucket, tenant)
 		if err != nil {
 			return res, err
@@ -205,7 +225,7 @@ const kvSubjectPrefix = "$KV."
 func TenantScopedBucketStreams(instanceId string) []string {
 	out := make([]string, 0, len(tenantScopedBuckets))
 	for _, b := range tenantScopedBuckets {
-		out = append(out, KvStreamName(CacheBucketName(instanceId, b.area, b.logical)))
+		out = append(out, KvStreamName(b.bucket(instanceId)))
 	}
 	return out
 }
@@ -345,7 +365,7 @@ func BroadcastTenantCacheEviction(nc *nats.Conn, instanceId, tenant string) erro
 	}
 	names := []string{DeviceCredentialCacheName}
 	for _, b := range tenantScopedBuckets {
-		if b.area == tenantCacheArea && b.logical != retiredBucketMetricDefsByType &&
+		if b.area == tenantCacheArea && b.perInstance == nil && b.logical != retiredBucketMetricDefsByType &&
 			b.logical != retiredBucketProfileScopeByType {
 			names = append(names, b.logical)
 		}

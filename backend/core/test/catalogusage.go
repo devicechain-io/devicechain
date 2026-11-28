@@ -63,6 +63,7 @@ var useMethods = map[string]useCall{
 	"CredentialAttemptStore":         {role: useBucket, arg: -1, bucket: "dc_credential_attempts"},
 	"DeviceCredentialAttemptStore":   {role: useBucket, arg: -1, bucket: "dc_device_credential_attempts"},
 	"PartitionPlacementStore":        {role: useBucket, arg: -1, bucket: "dc_partition_placement"},
+	"MqttSessionDiscriminatorStore":  {role: useBucket, arg: -1, bucket: "dc_mqtt_session_discriminators"},
 	"SparkplugCommandsAwaitingStore": {role: useBucket, arg: -1, bucket: "dc_sparkplug_commands_awaiting"},
 }
 

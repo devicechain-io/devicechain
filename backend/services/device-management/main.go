@@ -1501,6 +1501,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		if err = wireCalloutCertificateRegistration(CalloutResponder, Api, Configuration, infra); err != nil {
 			return err
 		}
+		// The per-device session bounds: a cap on the distinct MQTT client ids one device may
+		// connect with, and a per-device connect rate.
+		if err = wireCalloutSessionBounds(CalloutResponder, NatsManager, Configuration); err != nil {
+			return err
+		}
 		// The OCSP check of a certificate connect, for the anchors that ask for it. Off instance-wide
 		// unless the fixed configuration turns it on.
 		if err = wireCalloutOcsp(CalloutResponder, OcspMetrics, Configuration, infra); err != nil {

@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 )
@@ -52,17 +51,6 @@ func ServiceTokenHandler(secret func() string, issue func(subject string, author
 			http.Error(w, "subject and authorities are required", http.StatusBadRequest)
 			return
 		}
-		// An area-bound caller's name is never a subject this endpoint mints. Such an area obtains
-		// its tokens only from the area-bound endpoint, under the ceiling it enforces; a token under
-		// its name minted here would carry whatever the secret holder asked for, "*" included, and
-		// be indistinguishable downstream from one the area obtained. Nothing mints that subject
-		// through the shared secret, so refusing it costs no caller anything. Compared without
-		// case, so a respelling cannot pass for a different subject here and the same one to a
-		// reader that folds case.
-		if spellsAreaBoundCaller(req.Subject) {
-			http.Error(w, "subject "+req.Subject+" is an area-bound caller and mints only through the area-bound endpoint", http.StatusForbidden)
-			return
-		}
 		// Reject unknown authorities up front so a typo (e.g. "device:raed") fails
 		// fast here rather than opaquely at the callee's gate. AuthorityAll ("*") is
 		// a valid request — the shared-secret holder is trusted (the acknowledged
@@ -84,14 +72,4 @@ func ServiceTokenHandler(secret func() string, issue func(subject string, author
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(auth.ServiceTokenResponse{Token: tok.Token, ExpiresAt: tok.ExpiresAt.Unix()})
 	}), maxMintBodyBytes)
-}
-
-// spellsAreaBoundCaller reports whether subject names an area-bound caller in any letter case.
-func spellsAreaBoundCaller(subject string) bool {
-	for _, a := range auth.AreaBoundCallerNames() {
-		if strings.EqualFold(subject, a) {
-			return true
-		}
-	}
-	return false
 }

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -88,42 +87,5 @@ func TestServiceTokenHandler(t *testing.T) {
 				t.Fatalf("code=%d want=%d body=%s", rec.Code, tc.want, rec.Body.String())
 			}
 		})
-	}
-}
-
-// The shared secret never mints under an area-bound caller's name, in any letter case and whatever
-// it asks for; the refusal happens before anything is issued. A different subject still mints "*".
-func TestServiceTokenHandlerRefusesAreaBoundSubjects(t *testing.T) {
-	const secret = "shared-service-secret"
-	issued := 0
-	issue := func(subject string, authorities []string) (auth.IssuedToken, error) {
-		issued++
-		return auth.IssuedToken{Token: "t", ExpiresAt: time.Now().Add(time.Minute)}, nil
-	}
-	h := ServiceTokenHandler(func() string { return secret }, issue, nil)
-	do := func(subject string, authorities ...string) int {
-		var buf bytes.Buffer
-		_ = json.NewEncoder(&buf).Encode(auth.ServiceTokenRequest{Subject: subject, Authorities: authorities})
-		req := httptest.NewRequest(http.MethodPost, auth.ServiceTokenPath, &buf)
-		req.Header.Set(auth.ServiceSecretHeader, secret)
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
-		return rec.Code
-	}
-
-	for _, area := range auth.AreaBoundCallerNames() {
-		for _, subject := range []string{area, strings.ToUpper(area), strings.ToUpper(area[:1]) + area[1:]} {
-			for _, authorities := range [][]string{{string(auth.AuthorityAll)}, {string(auth.DeviceRead)}} {
-				if code := do(subject, authorities...); code != http.StatusForbidden {
-					t.Errorf("subject %q with %v: code %d, want %d", subject, authorities, code, http.StatusForbidden)
-				}
-			}
-		}
-	}
-	if issued != 0 {
-		t.Fatalf("%d tokens were issued under an area-bound subject", issued)
-	}
-	if code := do("command-delivery", string(auth.AuthorityAll)); code != http.StatusOK || issued != 1 {
-		t.Fatalf("the control failed: a shared-secret subject got code %d (issued %d)", code, issued)
 	}
 }

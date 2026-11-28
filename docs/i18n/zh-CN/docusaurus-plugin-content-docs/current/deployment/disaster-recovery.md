@@ -370,6 +370,7 @@ dcctl secrets escrow show ~/backups/my-instance-rootkey.escrow
 | `dc_mfa_challenges` | bucket | transient | a second-factor challenge that lives five minutes |
 | `dc_credential_attempts` | bucket | transient | sign-in backoff counters that expire after ten minutes |
 | `dc_device_credential_attempts` | bucket | transient | device connect backoff counters that expire after ten minutes |
+| `dc_mqtt_session_discriminators` | bucket | transient | the MQTT session ids a device has used recently; a lost entry only lets each device record its ids again |
 | `dc_locks` | bucket | transient | held locks that expire after thirty seconds |
 | `dc_sparkplug_commands_awaiting` | bucket | transient | commands in flight inside a confirm window of at most two hours |
 | `dc_partition_placement` | bucket | rebuildable | a mirror of the placement table in the user-management database, rewritten every few minutes |

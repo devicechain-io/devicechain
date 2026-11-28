@@ -321,9 +321,13 @@ func catalogBoot(t *testing.T, failStage string) {
 		require.NotEmpty(t, registeredSeries(t, reg, series), "%s is not registered", series)
 	}
 	for _, series := range []string{"callout_in_flight", "callout_refused_busy_total", "callout_plaintext_requests_total",
-		"callout_x509_total", "callout_jit_in_flight"} {
+		"callout_x509_total", "callout_jit_in_flight", "callout_session_limited_total"} {
 		require.NotEmpty(t, registeredSeries(t, reg, series), "%s is not registered", series)
 	}
+	// The per-device session bounds are attached, over the bucket the broker administrator made.
+	maxSessions, burst, perMinute := CalloutResponder.SessionBounds()
+	require.Equal(t, []int{16, 20, 60}, []int{maxSessions, burst, perMinute},
+		"the callout runs without its per-device session bounds, or not with the defaults")
 	// The certificate connect counter exists at zero for EVERY result, so an alert on a rate
 	// sees a zero series on a healthy instance rather than none. The results are stated here
 	// as literals, independently of the processor's list.

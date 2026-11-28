@@ -286,6 +286,27 @@ var All = []Bucket{
 			"DeviceCredentialAttemptStoreFull alert fires on it.",
 	},
 	{
+		Name:    BucketMqttSessionDiscriminators,
+		Tier:    State,
+		TTL:     MqttSessionDiscriminatorTTL,
+		Writers: []string{"device-management"},
+		Readers: []string{"device-management"},
+
+		BackupClass:   durability.BackupEphemeral,
+		Durability:    durability.Transient,
+		DurabilityWhy: "the MQTT session ids a device has used recently; a lost entry only lets each device record its ids again",
+		Why: "The distinct MQTT client-id discriminators each device has connected with, one entry " +
+			"per (tenant, device) that ever used one, keyed tenant|device and holding a short hash " +
+			"and a last-seen time per discriminator, at most callout.maxSessionsPerDevice of them. " +
+			"It is what bounds how many persistent sessions one device credential can leave in the " +
+			"broker's session store. A device connecting with the plain client id writes nothing, " +
+			"so this scales with the devices that use a second session, not with the fleet. An " +
+			"entry ages out 30 days after its last write. A full or unreachable bucket refuses only " +
+			"connects with a discriminator the device has not used before (fail closed, counted as " +
+			"callout_session_limited_total{reason=\"session_store_unavailable\"}); a known one is " +
+			"still admitted when it can be read.",
+	},
+	{
 		Name:    BucketLocks,
 		Tier:    State,
 		TTL:     30 * time.Second, // the longest of the lifetimes its openers asked for before this was declared
@@ -430,6 +451,10 @@ var All = []Bucket{
 	},
 }
 
+// MqttSessionDiscriminatorTTL is the lifetime of an entry in BucketMqttSessionDiscriminators, and
+// how long a discriminator a device stopped using stays counted against its cap.
+const MqttSessionDiscriminatorTTL = 30 * 24 * time.Hour
+
 // CacheTTL is the entry lifetime of every cache bucket. It is what the device-management cache
 // settings defaulted to (300 seconds); those settings now bound only how long a replica keeps a
 // value in its own memory, which never exceeds the bucket's lifetime.
@@ -450,6 +475,9 @@ const (
 	// purpose: see its entry in All.
 	BucketDeviceCredentialAttempts = "dc_device_credential_attempts"
 	BucketLocks                    = "dc_locks"
+	// BucketMqttSessionDiscriminators bounds the persistent MQTT sessions one device can hold.
+	// See its entry in All.
+	BucketMqttSessionDiscriminators = "dc_mqtt_session_discriminators"
 	// BucketSparkplugCommandsAwaiting holds the Sparkplug commands sparkplug-ingest has published
 	// and is still waiting to hear an outcome for. See its entry in All.
 	BucketSparkplugCommandsAwaiting = "dc_sparkplug_commands_awaiting"

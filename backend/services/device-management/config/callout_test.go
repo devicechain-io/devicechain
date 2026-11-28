@@ -21,6 +21,9 @@ func TestCalloutDefaultsAndLoad(t *testing.T) {
 	assert.Equal(t, DefaultCalloutIssuerPinRefresh, cfg.Callout.IssuerPinRefreshDuration())
 	assert.Equal(t, DefaultCalloutIssuerPinMinRefresh, cfg.Callout.IssuerPinMinRefreshDuration())
 	assert.Equal(t, DefaultCalloutIssuerPinGatherWindow, cfg.Callout.IssuerPinGatherWindowDuration())
+	assert.Equal(t, 16, cfg.Callout.MaxSessionsPerDevice)
+	assert.Equal(t, 20, cfg.Callout.ConnectBurstPerDevice)
+	assert.Equal(t, 60, cfg.Callout.ConnectsPerMinutePerDevice)
 
 	cfg = &DeviceManagementConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(`{"callout":{"jitMaxInFlight":4,"jitSourceTrusted":true}}`), cfg))
@@ -44,6 +47,17 @@ func TestCalloutFailsClosed(t *testing.T) {
 		{"the gather window over the lookup timeout", `{"callout":{"issuerPinGatherWindow":"3s"}}`, "callout.issuerPinGatherWindow must be a duration"},
 		{"a valid pin tuning", `{"callout":{"issuerPinRefresh":"1m","issuerPinMinRefresh":"5s","issuerPinGatherWindow":"1s"}}`, ""},
 		{"the pin switched off", `{"callout":{"issuerPinDisabled":true}}`, ""},
+		{"negative session cap", `{"callout":{"maxSessionsPerDevice":-1}}`, "callout.maxSessionsPerDevice must be between 1 and 1024"},
+		{"session cap over the ceiling", `{"callout":{"maxSessionsPerDevice":1025}}`, "callout.maxSessionsPerDevice must be between 1 and 1024"},
+		{"session cap at the ceiling", `{"callout":{"maxSessionsPerDevice":1024}}`, ""},
+		{"session cap at the floor", `{"callout":{"maxSessionsPerDevice":1}}`, ""},
+		{"a misspelled session key", `{"callout":{"maxSessionPerDevice":4}}`, `unknown field "maxSessionPerDevice"`},
+		{"negative connect burst", `{"callout":{"connectBurstPerDevice":-1}}`, "callout.connectBurstPerDevice must be between 1 and 10000"},
+		{"connect burst over the ceiling", `{"callout":{"connectBurstPerDevice":10001}}`, "callout.connectBurstPerDevice must be between 1 and 10000"},
+		{"negative connect rate", `{"callout":{"connectsPerMinutePerDevice":-5}}`, "callout.connectsPerMinutePerDevice must be between 1 and 60000"},
+		{"connect rate over the ceiling", `{"callout":{"connectsPerMinutePerDevice":60001}}`, "callout.connectsPerMinutePerDevice must be between 1 and 60000"},
+		{"a connect rate that is not a number", `{"callout":{"connectsPerMinutePerDevice":"lots"}}`, "connectsPerMinutePerDevice"},
+		{"valid session bounds", `{"callout":{"maxSessionsPerDevice":64,"connectBurstPerDevice":5,"connectsPerMinutePerDevice":10}}`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := core.LoadConfiguration([]byte(tc.doc), &DeviceManagementConfiguration{})

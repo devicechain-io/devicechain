@@ -31,6 +31,14 @@ const (
 	// MaxCalloutIssuerPinGatherWindow sits under the callout's lookup timeout (3 s): the window is
 	// spent inside a connect.
 	MaxCalloutIssuerPinGatherWindow = 2 * time.Second
+
+	// The per-device session bounds. Defaults equal processor.Default*, kept so by a test.
+	DefaultCalloutMaxSessionsPerDevice       = 16
+	MaxCalloutMaxSessionsPerDevice           = 1024
+	DefaultCalloutConnectBurstPerDevice      = 20
+	MaxCalloutConnectBurstPerDevice          = 10000
+	DefaultCalloutConnectsPerMinutePerDevice = 60
+	MaxCalloutConnectsPerMinutePerDevice     = 60000
 )
 
 // CalloutConfiguration is the fixed configuration of the device auth callout's certificate
@@ -74,6 +82,21 @@ type CalloutConfiguration struct {
 
 	// Ocsp bounds the OCSP check of a certificate connect (off instance-wide by default).
 	Ocsp OcspConfiguration
+
+	// MaxSessionsPerDevice is how many distinct MQTT client ids one device may connect with: its
+	// plain id plus up to this many ids with a discriminator appended ("{plain}:{anything}").
+	// Each is a broker session of its own, and a persistent one stays stored until it is
+	// cleaned. An id the device has connected with before is always admitted; a new one past
+	// the count is refused as not authorized. An id unused for 30 days stops counting. 1 to
+	// 1024, default 16.
+	MaxSessionsPerDevice int
+	// ConnectBurstPerDevice and ConnectsPerMinutePerDevice bound how often one device may
+	// connect, per device-management replica: at most ConnectBurstPerDevice connects at once,
+	// refilling ConnectsPerMinutePerDevice a minute. A connect over it is refused as not
+	// authorized and the device retries on its own backoff. Burst 1 to 10000, default 20; rate
+	// 1 to 60000 a minute, default 60.
+	ConnectBurstPerDevice      int
+	ConnectsPerMinutePerDevice int
 }
 
 // ApplyDefaults fills what the document left out.
@@ -89,6 +112,15 @@ func (c *CalloutConfiguration) ApplyDefaults() {
 	}
 	if c.IssuerPinGatherWindow == "" {
 		c.IssuerPinGatherWindow = DefaultCalloutIssuerPinGatherWindow.String()
+	}
+	if c.MaxSessionsPerDevice == 0 {
+		c.MaxSessionsPerDevice = DefaultCalloutMaxSessionsPerDevice
+	}
+	if c.ConnectBurstPerDevice == 0 {
+		c.ConnectBurstPerDevice = DefaultCalloutConnectBurstPerDevice
+	}
+	if c.ConnectsPerMinutePerDevice == 0 {
+		c.ConnectsPerMinutePerDevice = DefaultCalloutConnectsPerMinutePerDevice
 	}
 	c.Revocation.ApplyDefaults()
 	c.Ocsp.ApplyDefaults()
@@ -128,6 +160,18 @@ func (c CalloutConfiguration) Validate() error {
 	if err != nil || window < MinCalloutIssuerPinGatherWindow || window > MaxCalloutIssuerPinGatherWindow {
 		return fmt.Errorf("callout.issuerPinGatherWindow must be a duration between %s and %s, got %q",
 			MinCalloutIssuerPinGatherWindow, MaxCalloutIssuerPinGatherWindow, c.IssuerPinGatherWindow)
+	}
+	if c.MaxSessionsPerDevice < 1 || c.MaxSessionsPerDevice > MaxCalloutMaxSessionsPerDevice {
+		return fmt.Errorf("callout.maxSessionsPerDevice must be between 1 and %d, got %d",
+			MaxCalloutMaxSessionsPerDevice, c.MaxSessionsPerDevice)
+	}
+	if c.ConnectBurstPerDevice < 1 || c.ConnectBurstPerDevice > MaxCalloutConnectBurstPerDevice {
+		return fmt.Errorf("callout.connectBurstPerDevice must be between 1 and %d, got %d",
+			MaxCalloutConnectBurstPerDevice, c.ConnectBurstPerDevice)
+	}
+	if c.ConnectsPerMinutePerDevice < 1 || c.ConnectsPerMinutePerDevice > MaxCalloutConnectsPerMinutePerDevice {
+		return fmt.Errorf("callout.connectsPerMinutePerDevice must be between 1 and %d, got %d",
+			MaxCalloutConnectsPerMinutePerDevice, c.ConnectsPerMinutePerDevice)
 	}
 	if err := c.Revocation.Validate(); err != nil {
 		return err

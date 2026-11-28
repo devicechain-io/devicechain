@@ -1726,6 +1726,14 @@ functionalAreas:
       #     issuerPinRefresh: 30s   # how often the live servers are re-learned, 5s to 10m.
       #     issuerPinMinRefresh: 2s # least time between two server pings, 100ms up to issuerPinRefresh.
       #     issuerPinGatherWindow: 750ms # how long one ping waits for answers, 100ms to 2s.
+      #     maxSessionsPerDevice: 16 # distinct MQTT client ids with a suffix ("{plain}:{suffix}") one
+      #                             # device may connect with, 1 to 1024. Each is a broker session of
+      #                             # its own. An id used before always connects; a new one past the
+      #                             # count is refused (callout_session_limited_total); an id unused
+      #                             # for 30 days stops counting. The plain id is never counted.
+      #     connectBurstPerDevice: 20 # connects one device may make at once, per replica, 1 to 10000...
+      #     connectsPerMinutePerDevice: 60 # ...refilling this many a minute, 1 to 60000. Over it a
+      #                             # connect is refused as not authorized and the device retries.
       #     revocation:             # bounds of the CA revocation lists an operator uploads (CRLs).
       #       maxCrlBytes: 2097152  # one CRL as submitted, 64 KiB to 32 MiB. An upload peaks at ~20-30x this in heap:
       #                             # size it against the pod's memory limit. Checked before parsing and

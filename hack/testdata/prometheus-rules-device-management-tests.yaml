@@ -1058,3 +1058,84 @@ tests:
       - eval_time: 14m
         alertname: AlarmEventRelayStalled
         exp_alerts: []
+
+  # Per-device session bounds refusing steadily: one a second by the connect rate fires and names
+  # the bound; the cap refusing 1 a minute on the same pod stays under the line, and the
+  # store-unavailable reason is not this alert's. The 15m hold is asserted at 12m.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_session_limited_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="connect_rate"}'
+        values: '0+60x60'
+      - series: 'devicechain_devicemanagement_callout_session_limited_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="sessions_per_device"}'
+        values: '0+1x60'
+      - series: 'devicechain_devicemanagement_callout_session_limited_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="session_store_unavailable"}'
+        values: '0+600x60'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: DeviceMqttSessionLimitSustained
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: DeviceMqttSessionLimitSustained
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              reason: connect_rate
+            exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicemqttsessionlimitsustained"
+              summary: "Devices are being refused for connecting with too many client ids or too often"
+              description: "For 15m device-management has refused device connects at 1/s by the connect_rate bound. sessions_per_device means a device connected with a new MQTT client id after it had already used callout.maxSessionsPerDevice distinct ones (each is a broker session of its own; ids it used before keep working); connect_rate means a device connected faster than callout.connectBurstPerDevice and callout.connectsPerMinutePerDevice allow. The debug log of device-management names the tenant and device. Usually it is firmware that makes up a new client id on every connect, or reconnects with no backoff, or one credential shared by several clients. Fix the device; raise the bound only if the devices are right."
+
+  # The cap refusing new client ids steadily fires on its own reason; an idle counter does not.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_session_limited_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="sessions_per_device"}'
+        values: '0+12x60'
+      - series: 'devicechain_devicemanagement_callout_session_limited_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="connect_rate"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: DeviceMqttSessionLimitSustained
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              reason: sessions_per_device
+            exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicemqttsessionlimitsustained"
+              summary: "Devices are being refused for connecting with too many client ids or too often"
+              description: "For 15m device-management has refused device connects at 200m/s by the sessions_per_device bound. sessions_per_device means a device connected with a new MQTT client id after it had already used callout.maxSessionsPerDevice distinct ones (each is a broker session of its own; ids it used before keep working); connect_rate means a device connected faster than callout.connectBurstPerDevice and callout.connectsPerMinutePerDevice allow. The debug log of device-management names the tenant and device. Usually it is firmware that makes up a new client id on every connect, or reconnects with no backoff, or one credential shared by several clients. Fix the device; raise the bound only if the devices are right."
+
+  # The session-record bucket failing: fires after its hold on any refusal; an idle service and the
+  # other reasons do not.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_session_limited_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="session_store_unavailable"}'
+        values: '0 0 0 0 0 5 10 15 20 25 30 35 40 45 50 55 60 65 70 75 80 85 90 95 100 105 110 115 120 125 130'
+      - series: 'devicechain_devicemanagement_callout_session_limited_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="connect_rate"}'
+        values: '0+600x30'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DeviceMqttSessionStoreUnavailable
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DeviceMqttSessionStoreUnavailable
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: DeviceMqttSessionStoreUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicemqttsessionstoreunavailable"
+              summary: "Devices connecting with a new client id are refused because the session record cannot be written"
+              description: "For 10m device-management has refused device connects that use a client id the device had not used before (50 in the last 10m), because the key-value bucket that records each device's client ids could not be read or written. Devices on their plain client id, and ids already recorded, still connect. Check the broker's JetStream health and the fill of the dc_mqtt_session_discriminators bucket; the device-management log names the error."
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_session_limited_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="session_store_unavailable"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: DeviceMqttSessionStoreUnavailable
+        exp_alerts: []
