@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/installplain"
 )
 
 // errRevealLost is the run's failure when a one-time disclosure could not be shown at all.
@@ -27,9 +28,15 @@ var errRevealLost = errors.New("a one-time disclosure could not be shown after t
 // afterwards goes to plain output directly. A disclosure that cannot be shown even there
 // (the writer failed, or the offer has no plain form) is recorded, and the run is not
 // counted a success.
+//
+// 🔴 PLAIN OUTPUT THAT IS NOT A TERMINAL NEVER CARRIES THE VALUE. Redirected output is a CI
+// log or a file; there the Secret the value is kept in is named instead, which is not a
+// loss: the value is still where the report says it is.
 type fallbackReveals struct {
 	inbox *RevealInbox
 	w     io.Writer
+	// terminal answers whether w is a person's terminal. Nil asks w itself.
+	terminal func() bool
 
 	mu    sync.Mutex
 	plain bool
@@ -70,6 +77,19 @@ func (r *fallbackReveals) show(o installflow.RevealOffer, late bool) {
 		return
 	}
 	w := &checkedWriter{w: r.w}
+	atTerminal := r.terminal
+	if atTerminal == nil {
+		atTerminal = func() bool { return installplain.IsTerminal(r.w) }
+	}
+	if !atTerminal() {
+		o.Reveal.Discard()
+		fmt.Fprintf(w, "dcctl: a one-time value is not printed to output that is not a terminal; "+
+			"read it from Secret %s/%s, key %s\n", o.Where.Namespace, o.Where.Name, o.Where.Key)
+		if w.err != nil {
+			r.lost = true
+		}
+		return
+	}
 	if late {
 		fmt.Fprintln(w, "dcctl: the terminal UI stopped before it showed this one-time value; it is shown here, once:")
 	}

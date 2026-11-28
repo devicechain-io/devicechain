@@ -100,7 +100,7 @@ func TestInstallChoicesCobraRoundTrip(t *testing.T) {
 		{"recovery", []string{"--restore-rdb-from=dc-rdb", "--restore-rdb-at=2026-01-02T03:04:05Z", "--relational-store-max-wal-mib=2048", "--max-connections=900"}},
 		{"dev", []string{"--dev", "--compact", "--ha", "--dry-run"}},
 		{"size alias", []string{"--size=compact", "--no-tls=false"}},
-		{"remaining flags", []string{"--allow-legacy-db-removal=false", "--aws-nlb=traefik", "--build=false", "--clear-alert-routing=false", "--compact=false", "--dev=false", "--dry-run=false", "--ha=false", "--help=false", "--no-cnpg=false", "--no-monitoring=false", "--no-tls=false", "--remove-legacy-ingress=false", "--alert-webhook=", "--alert-watchdog-webhook=", "--version=v1.9.0", "-y"}},
+		{"remaining flags", []string{"--allow-legacy-db-removal=false", "--aws-nlb=traefik", "--build=false", "--clear-alert-routing=false", "--compact=false", "--dev=false", "--dry-run=false", "--expose-lan=false", "--ha=false", "--help=false", "--no-cnpg=false", "--no-monitoring=false", "--no-tls=false", "--remove-legacy-ingress=false", "--alert-webhook=", "--alert-watchdog-webhook=", "--version=v1.9.0", "-y"}},
 		{"empty repeatable", []string{"--alert-email=", "--database-node-selector=", "--database-toleration="}},
 		{"unicode spaces before a trailing backslash", []string{"--kube-context=team prod\\",
 			"--registry=registry.example.test/team lab\\"}},

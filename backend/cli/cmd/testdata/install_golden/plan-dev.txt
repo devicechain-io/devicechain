@@ -6,7 +6,7 @@ dev mode: --build --yes
 
 -- stderr (0 bytes) --
 
--- engine (1659 bytes) --
+-- engine (1683 bytes) --
 {
   "Provider": "local",
   "Options": {
@@ -14,6 +14,7 @@ dev mode: --build --yes
     "KubeContext": "",
     "Cluster": "devicechain",
     "CreateCluster": false,
+    "ExposeLAN": false,
     "Profile": "",
     "DryRun": false,
     "AssumeYes": true,

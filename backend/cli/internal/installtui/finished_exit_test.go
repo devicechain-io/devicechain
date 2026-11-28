@@ -166,7 +166,7 @@ func seedOffer(value string) installflow.RevealOffer {
 func TestAFallbackShowsTheOneTimeDisclosuresInPlainOutput(t *testing.T) {
 	out := &syncBuffer{}
 	inbox := &RevealInbox{}
-	r := &fallbackReveals{inbox: inbox, w: out}
+	r := &fallbackReveals{inbox: inbox, w: out, terminal: func() bool { return true }}
 	b := &bridge{reveals: r}
 	r.Offer(seedOffer("before-the-fallback"))
 	if out.String() != "" {
@@ -199,7 +199,7 @@ func TestADisclosurePlainOutputCannotShowIsLost(t *testing.T) {
 		"a short write":    {w: shortWriter{}, offer: seedOffer("x")},
 	} {
 		t.Run(name, func(t *testing.T) {
-			r := &fallbackReveals{inbox: &RevealInbox{}, w: tc.w}
+			r := &fallbackReveals{inbox: &RevealInbox{}, w: tc.w, terminal: func() bool { return true }}
 			r.fallBack()
 			r.Offer(tc.offer)
 			if !r.wasLost() {
@@ -406,5 +406,26 @@ func TestARevealPlainOutputCannotShowFailsTheRun(t *testing.T) {
 	next <- struct{}{}
 	if err := h.result(done); !errors.Is(err, errRevealLost) {
 		t.Fatalf("a disclosure shown nowhere: the run returned %v", err)
+	}
+}
+
+// 🔴 OFF A TERMINAL THE VALUE IS NOT PRINTED, and the Secret that keeps it is named in its
+// place: that is not a lost disclosure, so the run still succeeds.
+func TestAFallbackToOutputThatIsNotATerminalNamesTheSecret(t *testing.T) {
+	out := &syncBuffer{}
+	r := &fallbackReveals{inbox: &RevealInbox{}, w: out}
+	r.fallBack()
+	o := seedOffer("never-printed")
+	o.Where = installflow.SecretRef{Namespace: "dci-acme", Name: "dci-acme-superuser", Key: "password"}
+	r.Offer(o)
+	got := out.String()
+	if strings.Contains(got, "never-printed") {
+		t.Fatalf("the value reached output that is not a terminal:\n%s", got)
+	}
+	if !strings.Contains(got, "Secret dci-acme/dci-acme-superuser, key password") {
+		t.Errorf("the Secret is not named:\n%s", got)
+	}
+	if !o.Reveal.Consumed() || r.wasLost() {
+		t.Fatalf("consumed=%v lost=%v; want the reveal discarded and the run not failed", o.Reveal.Consumed(), r.wasLost())
 	}
 }

@@ -1590,7 +1590,10 @@ jobs:
   # chunks, columnar compression, a real catalog, a real second database.
   #
   # The critical path was one 51-minute job. Now each heavy module has its own leg and all
-  # small modules share one leg, so the slowest leg sets the integration critical path.
+  # small modules share one leg, so the slowest leg sets the integration critical path. Within a
+  # module a leg runs only the packages whose test binary the tag changes: every other package
+  # builds the same binary without it, which the go job already runs (hack/integration-tests.sh
+  # tag_changed; it took integration (core) from ~21 min, the last job of the run, to a few).
   # The container, the module discovery and the per-module verdicts all live in the script, so
   # a maintainer runs exactly what CI runs — and a module that GAINS an integration test is
   # covered the day it does, with no list here to fall out of step with go.work.

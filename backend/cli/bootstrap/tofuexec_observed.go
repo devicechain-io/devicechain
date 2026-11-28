@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/devicechain-io/dcctl/internal/secretenv"
 	"github.com/hashicorp/terraform-exec/tfexec"
 )
 
@@ -141,7 +142,8 @@ func observedApplyEnv() []string {
 	for key, value := range env {
 		result = append(result, key+"="+value)
 	}
-	return result
+	// tofu writes all of this to its log under TF_LOG=trace, and hands it to every provider.
+	return secretenv.Scrub(result)
 }
 
 var terraformExecUserAgent = func() string {
