@@ -118,6 +118,8 @@ var urlSecretCases = []struct {
 	{"name, port, path and a non-digest @", "localhost:5001/org@x", "REDACTED@x", []string{"5001/org", "localhost"}},
 	{"colon in the password, ipv6 host", "oci://dcUser:dc:CanaryPw@[2001:db8::1]:5000/org", "oci://REDACTED@[2001:db8::1]:5000/org",
 		[]string{"dcUser", "CanaryPw"}},
+	{"quote in the password", "https://hook:it's@alerts.example/x", "https://REDACTED@alerts.example/x",
+		[]string{"hook", "it's"}},
 }
 
 // Values with no credential must come back BYTE FOR BYTE: every golden of a run
@@ -140,6 +142,7 @@ var urlCleanCases = []string{
 	"http://[::1]/x", "http://[::1]:8080",
 	"https://[fe80::1%25eth0]:9000/a@b/x", "http://[fe80::1%25eth0]/x", "http://[fe80::1%eth0]:8080/x",
 	"registry.example:5000/org/img@sha256+b64u:LCa0a2j_xo_5m0U8HTBBNBNCLXBkg7-g-YpeiGJm564",
+	"https://host/it's/a@b/archive",
 }
 
 func TestRedactURLHidesEveryCredentialPart(t *testing.T) {
@@ -214,6 +217,17 @@ func TestRedactURLsInTextHidesCredentialsInFreeText(t *testing.T) {
 		{`from s3://AKIDZX:/wJalrZX@bucket/archive`, `from s3://REDACTED@bucket/archive`},
 		{`pushing admin:2024/dcPwZX@reg.example/x failed`, `pushing REDACTED@reg.example/x failed`},
 		{`pushing admin:2024/dcPwZX@[fe80::1%25eth0]/x failed`, `pushing REDACTED@[fe80::1%25eth0]/x failed`},
+		// A ' is legal in a userinfo: it does not end the word that holds one.
+		{`push https://hook:it's@alerts.example/x failed`, `push https://REDACTED@alerts.example/x failed`},
+		{`input = 's3://u:dc'PwZX@bucket/archive'`, `input = 's3://REDACTED@bucket/archive'`},
+		{`--url='https://u:'dcPwZX@h.example/x'`, `--url='https://REDACTED@h.example/x'`},
+		{`get https://u:dcPwZX'@h.example/x`, `get https://REDACTED@h.example/x`},
+		{`get https://u:dc@Pw'ZX@h.example/x`, `get https://REDACTED@h.example/x`},
+		{`pushing user:dc'PwZX@reg.example/x failed`, `pushing REDACTED@reg.example/x failed`},
+		// The quotes a tool puts around a value are still quotes.
+		{`pushing 'user:dcPwZX@reg.example/x' failed`, `pushing 'REDACTED@reg.example/x' failed`},
+		{`--url='https://u:dcPwZX@h.example/x'`, `--url='https://REDACTED@h.example/x'`},
+		{`get 'https://h.example/x?sig=dcSigZX', 403`, `get 'https://h.example/x?REDACTED', 403`},
 	} {
 		if got := RedactURLsInText(tc.in); got != tc.want {
 			t.Errorf("RedactURLsInText(%q) = %q, want %q", tc.in, got, tc.want)
@@ -232,6 +246,9 @@ func TestRedactURLsInTextLeavesOrdinaryTextAlone(t *testing.T) {
 		"see https://kind.sigs.k8s.io/docs/user/quick-start/",
 		"at 12:00:00 the archive https://host/a@b/archive was read",
 		"pushed localhost:5001/frontend@sha256:def.",
+		"the archive 'https://host/a@b/archive' isn't there",
+		"don't mail 'ops@example.com' about it's 12:00 run",
+		"o'brien@example.com can't push 'localhost:5001/frontend@sha256:def'",
 	} {
 		if got := RedactURLsInText(in); got != in {
 			t.Errorf("RedactURLsInText(%q) = %q: ordinary text changed", in, got)
@@ -269,6 +286,27 @@ func TestURLRedactingWriterFiltersWholeLines(t *testing.T) {
 	_, _ = w.Write([]byte(long))
 	if !strings.HasPrefix(big.String(), "REDACTED@reg/x ") {
 		t.Errorf("an over-long line was held or passed on unfiltered (%d bytes out)", big.Len())
+	}
+}
+
+// A line that passes the bound is passed on up to its last whitespace: the word being
+// written at the cut may be a credential URL whose rest has not arrived, and a half
+// handed on unfiltered is a credential half shown.
+func TestURLRedactingWriterDoesNotSplitAURLAtTheBound(t *testing.T) {
+	var b strings.Builder
+	w := NewURLRedactingWriter(&b)
+	head := strings.Repeat("y ", maxHeldLine/2) + "see https://user:dcPw"
+	if _, err := w.Write([]byte(head)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("ZX@host.example/x\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(b.String(), "dcPw") || !strings.HasSuffix(b.String(), "see https://REDACTED@host.example/x\n") {
+		t.Errorf("a URL split at the bound was shown: tail %q", b.String()[max(0, b.Len()-60):])
 	}
 }
 
