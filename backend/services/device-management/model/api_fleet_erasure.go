@@ -22,6 +22,10 @@ const fleetMaintenanceChunk = 10000
 // so a test can walk a window through a handful of lines.
 var fleetErasureRepairWindow = fleetMaintenanceChunk
 
+// fleetErasureRepairChunk is how many candidate lines one repair pass takes from its window. A
+// variable only so a test can fill it with a handful of orphans.
+var fleetErasureRepairChunk = fleetMaintenanceChunk
+
 // fleetErasureCursor is, per tenant, the last device the repair pass has examined the lines of.
 // Like the maintenance cursor it is advisory, process-local state: a replica that takes the pass
 // over starts its tenants from the beginning, which costs one cycle, never a missed line.
@@ -158,8 +162,11 @@ func fleetMaintenanceProtocol(db *gorm.DB) *gorm.DB {
 // cursor, along the (tenant_id, target_id) index, and the cursor wraps at the end: every line is
 // examined once a cycle, so an orphan made at any time, of a line of any age, is repaired within
 // one cycle of the tenant's passes. The window ends at a whole device, so a device's lines are
-// never split between passes. The cursor does not move past a window the pass did not finish (a
-// full chunk of candidates, or a device whose repair failed), so that window is read again.
+// never split between passes. The cursor does not move past a window whose candidates filled a
+// whole chunk, since the pass did not reach all of them; it does move past a device whose repair
+// failed. That failure is the pass's error (the maintenance task reports it), and the device is
+// tried again when the cursor next reaches it, one cycle later: a device that keeps failing must
+// not hold the cursor and leave every orphan after it unvisited.
 func (api *Api) RepairFleetErasure(ctx context.Context) error {
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok || core.IsSystemContext(ctx) {
@@ -188,7 +195,7 @@ func (api *Api) RepairFleetErasure(ctx context.Context) error {
 	}
 	var candidates []FleetOperationLine
 	if err := window.Select("id", "target_id").Where("redacted_at IS NULL AND target_id IS NOT NULL").
-		Where("NOT EXISTS (?)", devices).Where("EXISTS (?)", ops).Order("target_id, id").Limit(fleetMaintenanceChunk).Find(&candidates).Error; err != nil {
+		Where("NOT EXISTS (?)", devices).Where("EXISTS (?)", ops).Order("target_id, id").Limit(fleetErasureRepairChunk).Find(&candidates).Error; err != nil {
 		return err
 	}
 	var failures []error
@@ -222,7 +229,7 @@ func (api *Api) RepairFleetErasure(ctx context.Context) error {
 			bulkMetrics.maintained(bulkMetrics.repairs, table, n)
 		}
 	}
-	if len(failures) == 0 && len(candidates) < fleetMaintenanceChunk {
+	if len(candidates) < fleetErasureRepairChunk {
 		api.fleetErasureCursor.set(tenant, next)
 	}
 	// Report rows a previous-minor delete leaves behind are not this pass's:

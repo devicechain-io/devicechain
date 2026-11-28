@@ -69,9 +69,10 @@ func TestFleetErasureRepairWalksAWindowOfLinesAndWraps(t *testing.T) {
 	}
 }
 
-// A window the pass did not finish is read again: a device whose repair fails keeps the cursor
-// where it was, so the orphan is not skipped for a whole cycle.
-func TestFleetErasureRepairRereadsAWindowItCouldNotFinish(t *testing.T) {
+// A device whose repair keeps failing does not hold the cursor: the pass reports the failure and
+// moves on, so an orphan after it is still repaired, and the failing device is tried again when the
+// cursor comes back round to it.
+func TestFleetErasureRepairMovesPastADeviceThatKeepsFailing(t *testing.T) {
 	api, ctx := fleetFixture(t, 3)
 	prev := fleetErasureRepairWindow
 	fleetErasureRepairWindow = 1
@@ -79,21 +80,74 @@ func TestFleetErasureRepairRereadsAWindowItCouldNotFinish(t *testing.T) {
 	var devs []Device
 	require.NoError(t, api.RDB.DB(ctx).Order("id").Find(&devs).Error)
 	op := seedExpiryOperation(t, api, ctx, "erasure-retry", FleetDispatchDispatched, time.Now())
-	line := FleetOperationLine{OperationId: int64(op.ID), Ordinal: 2, Posting: FleetPostingPosted,
-		TargetId: sql.NullInt64{Int64: int64(devs[0].ID), Valid: true}, TargetKey: devs[0].Token}
-	require.NoError(t, api.RDB.DB(ctx).Create(&line).Error)
-	require.NoError(t, api.RDB.DB(ctx).Unscoped().Delete(&devs[0]).Error)
-
+	lines := map[uint]uint{}
+	for i, d := range devs[:2] {
+		line := FleetOperationLine{OperationId: int64(op.ID), Ordinal: int32(i + 2), Posting: FleetPostingPosted,
+			TargetId: sql.NullInt64{Int64: int64(d.ID), Valid: true}, TargetKey: d.Token}
+		require.NoError(t, api.RDB.DB(ctx).Create(&line).Error)
+		lines[d.ID] = line.ID
+	}
+	// Both devices are deleted by a previous-minor pod; the first one's repair always fails.
+	for _, d := range devs[:2] {
+		require.NoError(t, api.RDB.DB(ctx).Unscoped().Delete(&d).Error)
+	}
+	failing := lines[devs[0].ID]
+	// The repair re-reads its device inside the transaction; that read fails for the first device.
 	const hook = "test:erasure-fail"
-	require.NoError(t, api.RDB.Database.Callback().Update().Before("gorm:update").Register(hook, func(tx *gorm.DB) {
-		if tx.Statement.Table == "fleet_operation_lines" {
-			_ = tx.AddError(fmt.Errorf("redaction unavailable"))
+	require.NoError(t, api.RDB.Database.Callback().Query().After("gorm:query").Register(hook, func(tx *gorm.DB) {
+		if tx.Statement.Table != "devices" || !strings.Contains(strings.ToLower(tx.Statement.SQL.String()), "count(") {
+			return
+		}
+		for _, v := range tx.Statement.Vars {
+			if fmt.Sprint(v) == fmt.Sprint(devs[0].ID) {
+				_ = tx.AddError(fmt.Errorf("repair unavailable"))
+			}
 		}
 	}))
-	require.Error(t, api.RepairFleetErasure(ctx))
-	require.NoError(t, api.RDB.Database.Callback().Update().Remove(hook))
+	redacted := func(id uint) bool {
+		var l FleetOperationLine
+		require.NoError(t, api.RDB.DB(ctx).First(&l, id).Error)
+		return l.RedactedAt.Valid
+	}
+
+	require.Error(t, api.RepairFleetErasure(ctx), "the failing device's repair is the pass's error")
+	require.False(t, redacted(failing))
 	require.NoError(t, api.RepairFleetErasure(ctx))
-	var got FleetOperationLine
-	require.NoError(t, api.RDB.DB(ctx).First(&got, line.ID).Error)
-	require.True(t, got.RedactedAt.Valid, "the failed window is read again on the next pass, not after a cycle")
+	require.True(t, redacted(lines[devs[1].ID]), "the orphan after a failing device is repaired on the next pass")
+
+	// The failure clears; the cursor comes back round (device 3's window, then the wrap) to it.
+	require.NoError(t, api.RDB.Database.Callback().Query().Remove(hook))
+	for range 3 {
+		_ = api.RepairFleetErasure(ctx)
+	}
+	require.True(t, redacted(failing), "the failed device is tried again within one cycle")
+}
+
+// A window whose orphans fill a whole chunk of candidates is read again before the cursor moves:
+// the pass did not reach the rest of them.
+func TestFleetErasureRepairRereadsAWindowWhoseCandidatesFilledTheChunk(t *testing.T) {
+	api, ctx := fleetFixture(t, 3)
+	prevWindow, prevChunk := fleetErasureRepairWindow, fleetErasureRepairChunk
+	fleetErasureRepairWindow, fleetErasureRepairChunk = 3, 1
+	t.Cleanup(func() { fleetErasureRepairWindow, fleetErasureRepairChunk = prevWindow, prevChunk })
+	var devs []Device
+	require.NoError(t, api.RDB.DB(ctx).Order("id").Find(&devs).Error)
+	op := seedExpiryOperation(t, api, ctx, "erasure-chunk", FleetDispatchDispatched, time.Now())
+	var lines []uint
+	for i, d := range devs {
+		line := FleetOperationLine{OperationId: int64(op.ID), Ordinal: int32(i + 2), Posting: FleetPostingPosted,
+			TargetId: sql.NullInt64{Int64: int64(d.ID), Valid: true}, TargetKey: d.Token}
+		require.NoError(t, api.RDB.DB(ctx).Create(&line).Error)
+		lines = append(lines, line.ID)
+	}
+	// Two orphans in the one window, a chunk of one: each pass repairs one and stays.
+	for _, d := range devs[:2] {
+		require.NoError(t, api.RDB.DB(ctx).Unscoped().Delete(&d).Error)
+	}
+	for range 2 {
+		require.NoError(t, api.RepairFleetErasure(ctx))
+	}
+	var l FleetOperationLine
+	require.NoError(t, api.RDB.DB(ctx).First(&l, lines[1]).Error)
+	require.True(t, l.RedactedAt.Valid, "the second orphan of a full chunk's window is repaired on the next pass, not a cycle later")
 }
