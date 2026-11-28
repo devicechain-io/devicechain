@@ -122,7 +122,7 @@ func backfillInvitationPasswords(tx *gorm.DB) error {
 				return err
 			}
 		}
-		if err := tx.Model(&invitationPasswordIdentitySnapshot{}).Where("id = ?", id.ID).
+		if err := tx.Model(&invitationPasswordIdentitySnapshot{ID: id.ID}).Where("id = ?", id.ID).
 			Update("password_from_invitation", true).Error; err != nil {
 			return err
 		}
