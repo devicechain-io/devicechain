@@ -62,6 +62,8 @@ func TestAliasedLoginsPayOneCompare(t *testing.T) {
 // in for any document the counter misreads — the request still pays one compare.
 func TestBudgetHoldsWhateverTheRootFieldCount(t *testing.T) {
 	t.Setenv(gqlcore.EnvGraphQLMaxMutationRootFields, "2000")
+	// ...and the alias ceiling, which would otherwise refuse 1500 names for one field.
+	t.Setenv(gqlcore.EnvGraphQLMaxFieldAliases, "2000")
 	f := newLoginFixture(t, generousFree)
 
 	_, resp := f.post(t, aliasedLogins(1500))

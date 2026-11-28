@@ -22,8 +22,10 @@ import (
 // What each one bounds, because they are easy to over-read: the body and length
 // ceilings bound bytes, the depth ceiling bounds nesting, and the root-field ceilings
 // bound how many resolvers an operation starts at its root — which is what bounds the
-// SERIAL work one mutation request can buy through aliases. None of them bounds
-// aliasing of a nested field; see Schema.
+// SERIAL work one mutation request can buy through aliases. The cost and alias
+// ceilings bound nested work: the cost ceiling the fields one operation selects,
+// multiplied by the page sizes they sit under, and the alias ceiling how many names one
+// field can be selected under at one level (cost.go).
 //
 // All of them are operator-tunable per service via env, and can be tuned in either
 // direction, but none can be weakened to unlimited: a missing, unparseable, or below-1
@@ -48,6 +50,11 @@ const (
 	// EnvGraphQLMaxCredentialChecks overrides how many credential checks (password or
 	// client-secret compares) one request may make.
 	EnvGraphQLMaxCredentialChecks = "DC_GRAPHQL_MAX_CREDENTIAL_CHECKS"
+	// EnvGraphQLMaxQueryCost overrides the maximum cost of one operation (see cost.go).
+	EnvGraphQLMaxQueryCost = "DC_GRAPHQL_MAX_QUERY_COST"
+	// EnvGraphQLMaxFieldAliases overrides how many different names (aliases) one field
+	// may be selected under at one level of an operation.
+	EnvGraphQLMaxFieldAliases = "DC_GRAPHQL_MAX_FIELD_ALIASES"
 
 	// DefaultGraphQLExecTimeoutSeconds bounds one query or mutation's execution. The
 	// request context is cancelled at the deadline, and the database driver cancels the
@@ -101,6 +108,18 @@ const (
 	// the root-field ceilings it does not read the document, so it holds even for a
 	// document the root-field count misreads (see credential.WithRequestBudget).
 	DefaultGraphQLMaxCredentialChecks = 1
+	// DefaultGraphQLMaxQueryCost caps one operation's cost: every field it selects costs
+	// 1, multiplied by the page size of each page the field sits under (cost.go). The
+	// costliest document a first-party client sends is measured, at the largest page
+	// sizes it can send, by TestRealClientDocumentsAreWithinTheCostCeiling; the default
+	// sits well above it, and far below the tens of thousands of resolver calls an
+	// aliased nested field under a page of results could otherwise run.
+	DefaultGraphQLMaxQueryCost = 100_000
+	// DefaultGraphQLMaxFieldAliases caps how many different names one field may be
+	// selected under at one level. First-party clients alias a field a handful of times
+	// at most (measured by the same test); the root level is already capped by the
+	// root-field ceilings.
+	DefaultGraphQLMaxFieldAliases = 20
 )
 
 // maxDepth resolves the effective selection-depth ceiling (see EnvGraphQLMaxDepth).
@@ -139,6 +158,18 @@ func maxMutationRootFields() int {
 // EnvGraphQLMaxCredentialChecks).
 func maxCredentialChecks() int {
 	return envPositiveInt(EnvGraphQLMaxCredentialChecks, DefaultGraphQLMaxCredentialChecks)
+}
+
+// maxQueryCost resolves the effective operation-cost ceiling (see
+// EnvGraphQLMaxQueryCost).
+func maxQueryCost() int {
+	return envPositiveInt(EnvGraphQLMaxQueryCost, DefaultGraphQLMaxQueryCost)
+}
+
+// maxFieldAliasesLimit resolves the effective per-level alias ceiling (see
+// EnvGraphQLMaxFieldAliases).
+func maxFieldAliasesLimit() int {
+	return envPositiveInt(EnvGraphQLMaxFieldAliases, DefaultGraphQLMaxFieldAliases)
 }
 
 // maxBodyBytes resolves the effective HTTP request-body ceiling in bytes (see

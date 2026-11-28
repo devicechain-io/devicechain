@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/devicechain-io/dc-microservice/credential"
 	graphql "github.com/graph-gophers/graphql-go"
@@ -29,11 +30,12 @@ import (
 // database lookups, bcrypt compares and audit writes, serially, bounded only by the raw
 // query length. The byte ceiling cannot bound that: 100KB holds the whole attack.
 //
-// ⚠️ WHAT IT DOES NOT BOUND, stated so nobody reads more into it. It counts ROOT fields
-// only. Aliases of a NESTED field — a thousand aliases of an expensive child under one
-// root query — are untouched, and still run under graphql-go's parallelism limit. This
-// bounds serial mutation work and root fan-out per request, not per-request work in
-// general.
+// NESTED WORK IS BOUNDED BY THE COST COUNT, applied in the same place. Root fields alone
+// left aliases of a NESTED field untouched — a few hundred aliases of an expensive child
+// under one page of results ran once per alias per row. Every operation is also refused
+// above a cost ceiling (every field costs 1, multiplied by the page size of each page it
+// sits under; cost.go) and above a ceiling on how many names one field is selected under
+// at one level (maxFieldAliases). cost.go says what the count does not see.
 //
 // 🔴 EXEC IS ALSO WHERE AN INTEGRITY REFUSAL (a taken unique value, a refused reference,
 // a refused value) GETS ITS CODE, for the same reason the limit lives here: it is the
@@ -50,6 +52,11 @@ type Schema struct {
 	maxQueryLength   int
 	maxQueryRoots    int
 	maxMutationRoots int
+	// maxCost and maxAliases are the cost and alias ceilings, and model the served
+	// schema as the cost count reads it (which fields serve pages).
+	maxCost    int64
+	maxAliases int
+	model      *costModel
 	// maxCredChecks is the credential-check budget every execution carries (see
 	// execContext).
 	maxCredChecks int
@@ -73,7 +80,7 @@ func (s *Schema) execContext(ctx context.Context) context.Context {
 // exactly as graphql-go's Schema.Exec would. A document over the limit gets a
 // request-level error and no data; no resolver runs.
 func (s *Schema) Exec(ctx context.Context, query, operationName string, variables map[string]any) *graphql.Response {
-	if err := s.checkWork(query); err != nil {
+	if err := s.checkWork(query, variables); err != nil {
 		return &graphql.Response{Errors: []*gqlerrors.QueryError{err}}
 	}
 	resp := s.inner.Exec(s.execContext(ctx), query, operationName, variables)
@@ -91,7 +98,7 @@ func (s *Schema) Exec(ctx context.Context, query, operationName string, variable
 // errors. Unlike Exec it does not answer integrity refusals on what it returns: its caller reads
 // the channel and does (see the Schema doc).
 func (s *Schema) Subscribe(ctx context.Context, query, operationName string, variables map[string]any) (<-chan any, error) {
-	if err := s.checkWork(query); err != nil {
+	if err := s.checkWork(query, variables); err != nil {
 		ch := make(chan any, 1)
 		ch <- &graphql.Response{Errors: []*gqlerrors.QueryError{err}}
 		close(ch)
@@ -112,27 +119,82 @@ func (s *Schema) Inspect() *introspection.Schema {
 	return s.inner.Inspect()
 }
 
-// checkWork applies the root-field ceilings with this schema's resolved limits.
-func (s *Schema) checkWork(query string) *gqlerrors.QueryError {
-	return checkWork(query, s.maxQueryLength, s.maxQueryRoots, s.maxMutationRoots)
+// checkWork applies the work ceilings with this schema's resolved limits and cost
+// model, and counts a refusal by the ceiling that made it.
+func (s *Schema) checkWork(query string, variables map[string]any) *gqlerrors.QueryError {
+	qerr := checkWorkWith(query, variables, s.model, s.limits())
+	if qerr != nil {
+		observeRefusal(qerr)
+	}
+	return qerr
 }
 
-// CheckWork reports whether a document is within the root-field ceilings a service
-// resolves from its environment. It is exported for the client-document sweeps, which
-// assert that every document a first-party client sends passes it: that turns "no
-// legitimate client exceeds the cap" into a standing test rather than a number in prose.
-func CheckWork(query string) error {
-	if err := checkWork(query, maxQueryLength(), maxQueryRootFields(), maxMutationRootFields()); err != nil {
+func (s *Schema) limits() workLimits {
+	return workLimits{
+		maxLen: s.maxQueryLength, maxQueryRoots: s.maxQueryRoots, maxMutationRoots: s.maxMutationRoots,
+		maxCost: s.maxCost, maxAliases: s.maxAliases,
+	}
+}
+
+// CheckWork reports whether a document, with these variables, is within this schema's
+// work ceilings, exactly as Exec would decide it. It is for the client-document sweeps
+// that hold the served SDL: parse it with MustParseSchema (a nil resolver is enough) and
+// every document a first-party client sends is checked against the same cost model the
+// server uses.
+func (s *Schema) CheckWork(query string, variables map[string]any) error {
+	if err := checkWorkWith(query, variables, s.model, s.limits()); err != nil {
 		return err
 	}
 	return nil
 }
 
-// workLimitCode is the extensions code a refused document carries, so a client can
-// recognize the refusal without matching the message text.
+// CheckWork reports whether a document is within the work ceilings a service resolves
+// from its environment. It is exported for the client-document sweeps, which assert
+// that every document a first-party client sends passes it: that turns "no legitimate
+// client exceeds the cap" into a standing test rather than a number in prose.
+//
+// It holds no schema, so its cost count reads only the page sizes the document writes:
+// a page whose size comes from a variable, or is left out, is counted as one row. A
+// sweep that holds the served SDL should use Schema.CheckWork, which counts what the
+// server counts.
+func CheckWork(query string) error {
+	if err := checkWorkWith(query, nil, nil, envLimits()); err != nil {
+		return err
+	}
+	return nil
+}
+
+// envLimits are the work ceilings a service resolves from its environment.
+func envLimits() workLimits {
+	return workLimits{
+		maxLen: maxQueryLength(), maxQueryRoots: maxQueryRootFields(), maxMutationRoots: maxMutationRootFields(),
+		maxCost: int64(maxQueryCost()), maxAliases: maxFieldAliasesLimit(),
+	}
+}
+
+// workLimitCode is the extensions code a document refused by the root-field ceiling
+// carries, so a client can recognize the refusal without matching the message text.
 const workLimitCode = "TOO_MANY_ROOT_FIELDS"
 
-// checkWork is the limit itself.
+// workLimits are the ceilings checkWorkWith applies.
+type workLimits struct {
+	maxLen, maxQueryRoots, maxMutationRoots int
+	maxCost                                 int64
+	maxAliases                              int
+}
+
+// checkWork applies the length and root-field ceilings only, with no cost or alias
+// ceiling. It is what the root-field tests (and the fuzzers that hold the reader to
+// graphql-go) drive, so their verdicts stay about the root count alone; the serving
+// path is checkWorkWith.
+func checkWork(query string, maxLen, maxQueryRoots, maxMutationRoots int) *gqlerrors.QueryError {
+	return checkWorkWith(query, nil, nil, workLimits{
+		maxLen: maxLen, maxQueryRoots: maxQueryRoots, maxMutationRoots: maxMutationRoots,
+		maxCost: costSaturation, maxAliases: math.MaxInt,
+	})
+}
+
+// checkWorkWith is the limit itself.
 //
 // 🔴 THE LENGTH CEILING IS CHECKED FIRST, BEFORE ANYTHING IS READ (readDocument does
 // both, in that order). graphql-go applies its own MaxQueryLength inside Exec — which
@@ -157,34 +219,44 @@ const workLimitCode = "TOO_MANY_ROOT_FIELDS"
 // A document the reader cannot read is refused. graphql-go would refuse nearly all of
 // them too, and where it would not, refusing is the direction that cannot run an
 // uncounted document.
-func checkWork(query string, maxLen, maxQueryRoots, maxMutationRoots int) *gqlerrors.QueryError {
-	ops, fragments, qerr := readDocument(query, maxLen)
+//
+// After the root fields, each operation is collected as execution collects it
+// (normalize, under its own bound on selections visited), and the collected tree is
+// costed (treeCost) and checked for the most names one field is selected under at one
+// level (treeAliases).
+func checkWorkWith(query string, vars map[string]any, model *costModel, lim workLimits) *gqlerrors.QueryError {
+	ops, fragments, qerr := readDocument(query, lim.maxLen)
 	if qerr != nil {
 		return qerr
 	}
 	for _, op := range ops {
-		var limit int
+		limit := -1
 		switch op.kind {
 		case opMutation:
-			limit = maxMutationRoots
+			limit = lim.maxMutationRoots
 		case opQuery:
-			limit = maxQueryRoots
-		default:
-			// A subscription is limited to ONE root field by graphql-go's own
-			// validation, which is stricter than anything set here.
-			continue
+			limit = lim.maxQueryRoots
 		}
-		n := countRootKeys(op.roots, fragments)
-		if n > limit {
-			name := op.name
-			if name == "" {
-				name = "(anonymous)"
+		// A subscription has no root-field ceiling here: graphql-go's own validation
+		// limits it to ONE root field, which is stricter than anything set here.
+		if limit >= 0 {
+			if n := countRootKeys(op.roots, fragments); n > limit {
+				return &gqlerrors.QueryError{
+					Message: fmt.Sprintf("%s %s selects %d root fields; the maximum is %d",
+						op.kind, displayName(op.name), n, limit),
+					Extensions: map[string]any{"code": workLimitCode},
+				}
 			}
-			return &gqlerrors.QueryError{
-				Message: fmt.Sprintf("%s %s selects %d root fields; the maximum is %d",
-					op.kind, name, n, limit),
-				Extensions: map[string]any{"code": workLimitCode},
-			}
+		}
+		nodes, ok := normalize(op, fragments, model, vars, maxSelectionVisits)
+		if !ok {
+			return selectionsRefusal(op.kind, op.name)
+		}
+		if cost := treeCost(nodes); cost > lim.maxCost {
+			return costRefusal(op.kind, op.name, cost, lim.maxCost)
+		}
+		if n := treeAliases(nodes); n > lim.maxAliases {
+			return aliasRefusal(op.kind, op.name, n, lim.maxAliases)
 		}
 	}
 	return nil

@@ -92,6 +92,8 @@ func lexSchema(limit int) *Schema {
 		maxQueryLength:   DefaultGraphQLMaxQueryLength,
 		maxQueryRoots:    limit,
 		maxMutationRoots: limit,
+		maxCost:          DefaultGraphQLMaxQueryCost,
+		maxAliases:       DefaultGraphQLMaxFieldAliases,
 	}
 }
 

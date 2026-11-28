@@ -1006,6 +1006,8 @@ default: none of them can be switched off.
 | Nesting depth | 15 | `DC_GRAPHQL_MAX_DEPTH` | Selections nested deeper than this. |
 | Root fields per query | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | A query operation selecting more top-level fields than this. |
 | Root fields per mutation | 5 | `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` | A mutation operation selecting more top-level fields than this. |
+| Query cost | 100,000 | `DC_GRAPHQL_MAX_QUERY_COST` | An operation whose cost is above this (see [Query cost](#query-cost)). |
+| Names for one field | 20 | `DC_GRAPHQL_MAX_FIELD_ALIASES` | An operation that selects one field under more names (aliases) than this at any one level. |
 | Credential checks per request | 1 | `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` | Password checks in one request beyond this number (see [below](#credential-checks-per-request)). |
 
 Apart from the body limit, the execution-time limit and the credential-check limit, a refused request gets HTTP 200 with a
@@ -1034,8 +1036,37 @@ refusal carries `extensions.code` set to `TOO_MANY_ROOT_FIELDS`:
 The mutation limit is the tight one because mutation fields run one after another. Without it, a
 single request could carry hundreds of aliased copies of an expensive mutation. The console, the
 dashboard app, the SDKs, `dcctl` and the MCP server send one mutation field per request and at most
-two query fields. The limit applies to top-level fields only; aliases of a nested field are not
-counted.
+two query fields. The root-field limits count top-level fields only; work below the top level is
+bounded by the query cost.
+
+### Query cost {#query-cost}
+
+Before it runs, every operation, subscriptions included, is given a cost. It is refused when the
+cost is above `DC_GRAPHQL_MAX_QUERY_COST` (100,000 by default):
+
+- Every selected field costs 1.
+- Everything selected under a field that returns a page of results costs as many times over as the
+  page holds. The page size is the one the request names, in the query or in its variables. A page
+  size that is left out counts as the default the schema declares for it, or as 1,000, the most any
+  page returns, when it declares none. A page size that is not a positive number, or is above
+  1,000, counts as 1,000.
+- Everything selected under a lookup that takes a list, such as a list of tokens, costs as many
+  times over as the list is long.
+- The operation is costed as it runs. Fields reached through a fragment count as if they were
+  written out, a selection that `@skip` or `@include` leaves out costs nothing, and fields that run
+  as one field (the same name, alias and arguments, written twice or reached through several
+  fragments) count once.
+
+For example, a page of 100 devices with 5 fields each costs about 600. The costliest document the
+console, the dashboard app, the SDKs, `dcctl` and the MCP server send costs about 72,000 at the
+largest page size it can ask for.
+
+A refusal carries `extensions.code` set to `QUERY_TOO_COSTLY`. An operation that selects one field
+under more than `DC_GRAPHQL_MAX_FIELD_ALIASES` names (20 by default) at any one level is refused
+with `TOO_MANY_ALIASES`. To fit under the cost limit, ask for smaller pages or fewer nested fields.
+Each service counts the requests these limits and the root-field limits refuse in the
+`devicechain_graphql_work_refused_total` metric, labeled `limit="root_fields"`, `"cost"` or
+`"aliases"`.
 
 ### Size bounds on lists, inputs and aggregations {#size-bounds}
 
