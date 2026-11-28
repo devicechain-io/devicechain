@@ -147,17 +147,26 @@ func TestKubeconfigSecretsAreRedactedFromTheStream(t *testing.T) {
 func TestKubeconfigPluginSettingsInJSONAndTUIEvents(t *testing.T) {
 	for _, mode := range []string{"json", "tui"} {
 		t.Run(mode, func(t *testing.T) {
+			const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZSJ9.c2lnbmF0dXJl"
 			writeKubeconfig(t, validKubeconfig("", "    auth-provider:\n      name: oidc\n      config:\n"+
-				"        mode: default\n        region: us-east-1\n"+
+				"        mode: default\n        region: us-east-1\n        namespace: devicechain-production-namespace\n"+
 				"        opaque: ProviderCredential1234567890\n        client-secret: cs4x\n"+
 				"    exec:\n      apiVersion: client.authentication.k8s.io/v1\n      command: aws\n"+
-				"      env:\n      - name: AWS_PROFILE\n        value: default\n"+
+				"      env:\n      - name: HTTPS_PROXY\n        value: http://alice:Pr0xy-pw@proxy:3128\n"+
+				"      - name: SESSION\n        value: "+jwt+"\n"+
+				"      - name: OPAQUE\n        value: Long.p4ss:Phrase-7Qw2Er9Ty4\n"+
+				"      - name: AWS_PROFILE\n        value: default\n"+
+				"      - name: AUTH_MODE\n        value: default\n"+
+				"      - name: COMPASS_REGISTRY\n        value: eu.gcr.io\n"+
+				"      - name: KUBE_VERSION\n        value: 1.27.3\n"+
+				"      - name: DB_PASS\n        value: Pw4short\n"+
 				"      - name: AWS_REGION\n        value: us-east-1\n"+
 				"      - name: OPAQUE\n        value: EnvCredential1234567890\n"+
 				"      - name: API_TOKEN\n        value: tk4x\n"))
 			lines := []string{"docker context default", "namespace default", "helm default us-east-1",
-				"env EnvCredential1234567890", "provider ProviderCredential1234567890",
-				"typed env tk4x", "typed provider cs4x"}
+				"proxy password Pr0xy-pw", "session " + jwt, "opaque Long.p4ss:Phrase-7Qw2Er9Ty4",
+				"namespace devicechain-production-namespace", "env EnvCredential1234567890", "provider ProviderCredential1234567890",
+				"typed env tk4x", "typed provider cs4x", "registry eu.gcr.io", "kubectl 1.27.3", "db pass Pw4short"}
 			e := &InstallEngine{
 				Provider: &fakeProvider{name: "local"}, Options: InstallOptions{Options: Options{AssumeYes: true}}, SkipPreflight: true,
 				Cluster: func(ctx context.Context, _ Provider, _ InstallOptions) error {
@@ -216,7 +225,9 @@ func TestKubeconfigPluginSettingsInJSONAndTUIEvents(t *testing.T) {
 				}
 			}
 			for _, want := range []string{"docker context default", "namespace default", "helm default us-east-1",
-				"env [redacted]", "provider [redacted]", "typed env [redacted]", "typed provider [redacted]"} {
+				"proxy password [redacted]", "session [redacted]", "opaque [redacted]",
+				"namespace devicechain-production-namespace", "env [redacted]", "provider [redacted]", "typed env [redacted]", "typed provider [redacted]",
+				"registry eu.gcr.io", "kubectl 1.27.3", "db pass [redacted]"} {
 				if !logs[want] {
 					t.Errorf("missing log %q; got %v", want, logs)
 				}
@@ -497,5 +508,54 @@ func TestTheUncoveredWarningNeverReachesTextOutput(t *testing.T) {
 	}
 	if strings.Contains(stdout.String()+stderr.String(), "warning") {
 		t.Errorf("text output carries the warning:\nstdout %q\nstderr %q", stdout.String(), stderr.String())
+	}
+}
+
+// The names a credential hides under: a strong word anywhere, or a weak one ("pass",
+// "auth") whose value is not an ordinary word.
+func TestAdditionalCredentialPredicates(t *testing.T) {
+	for _, name := range []string{"PASS", "PassPhrase", "AUTH", "Bearer", "db-pass", "reauthorize"} {
+		if !sensitiveFlag(name) {
+			t.Errorf("%s must name a credential", name)
+		}
+	}
+	for _, c := range []struct {
+		name, value string
+		want        bool
+	}{
+		{"BEARER", "default", true}, {"PASSPHRASE", "us-east-1", true}, // a strong word is the name's own say
+		{"DB_PASS", "Pw4short", true}, {"BASIC_AUTH", "alice:pw", true},
+		{"AUTH_MODE", "default", false}, {"BYPASS_REGION", "us-east-1", false},
+		{"AUTHORITY_HOST", "login.example.com", false}, {"REGION", "Pw4short", false},
+	} {
+		if got := sensitiveSetting(c.name, c.value); got != c.want {
+			t.Errorf("sensitiveSetting(%q, %q) = %v, want %v", c.name, c.value, got, c.want)
+		}
+	}
+	for _, value := range []string{"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZSJ9.c2lnbmF0dXJl", "Long-p4ssPhrase-7Qw2Er9Ty4",
+		"alpha7bravo-charlie9delta-echo", "long--namespace-identifier", "Long.p4ss:Phrase-7Qw2Er9Ty4",
+		"AKIAEXAMPLE1234567890:wJalrXUtnFEMIK7MDENG", "long mixed passphrase with spaces", "two secret words"} {
+		if !credentialShaped(value) {
+			t.Errorf("%q must be redacted without a sensitive name", value)
+		}
+	}
+	// 🔴 Each value accepted becomes a token blanked wherever it stands alone, so none
+	// of these may be: short punctuated values, names, hosts, versions and paths.
+	for _, value := range []string{"default", "us-east-1", "devicechain-production-namespace", "eu.gcr.io", "1.27.3",
+		"x:y4", "a@b9", "localhost:8080", "C.UTF-8", "sts.us-east-1.amazonaws.com", "kubernetes.default.svc.cluster",
+		"/home/operator/.kube/aws-config", "a b", "production-cluster-01", "https://login.example.com/oauth2/v2.0/token"} {
+		if credentialShaped(value) {
+			t.Errorf("ordinary setting %q must remain visible", value)
+		}
+	}
+}
+
+func TestExecOpaqueArgumentsAndURLPasswords(t *testing.T) {
+	jwt := "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZSJ9.c2lnbmF0dXJl"
+	got := execArgSecrets([]string{"http://alice:ArgProxyPW@proxy:3128", "--endpoint=http://alice:InlineProxyPW@proxy:3128",
+		"--session=" + jwt, "--auth-mode", "default", "--pass=Pw4short", "--cluster=eu.gcr.io"})
+	want := []string{"ArgProxyPW", "InlineProxyPW", jwt, "Pw4short"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

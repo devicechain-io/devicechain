@@ -390,7 +390,7 @@ func init() {
 	upgradeCmd.Flags().BoolVar(&upgradeDropLegacyIngress, "drop-legacy-ingress", false, dropLegacyIngressUsage)
 	upgradeAlerts.register(upgradeCmd)
 	upgradeCmd.Flags().BoolVar(&upgradeResetValues, "reset-values", false, "remove the tuning overlay recorded on the instance: it returns to the values dcctl computes. Cannot be combined with --values")
-	upgradeCmd.Flags().StringVar(&upgradeEscrowPass, "escrow-passphrase-file", "", "read the escrow passphrase from this file (or $"+bootstrap.EscrowPassphraseEnv+"). Only needed to WRITE an escrow for an instance that has none — checking an existing one needs no passphrase")
+	upgradeCmd.Flags().StringVar(&upgradeEscrowPass, "escrow-passphrase-file", "", "read the escrow passphrase from this file (or $"+bootstrap.EscrowPassphraseEnv+"). Needed to write a missing escrow or open an existing one; without it, only the cleartext header is checked")
 
 	rootCmd.AddCommand(upgradeCmd)
 }

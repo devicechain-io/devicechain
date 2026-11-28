@@ -137,7 +137,7 @@ func reconcileUpgradeEscrow(st *State, rootKeyBase64 string, opts UpgradeOptions
 	if pass == "" {
 		fmt.Printf("  %s %s\n", color.WhiteString("Root-key escrow:"), color.YellowString(
 			"present at %s and names the running key, but not opened (no passphrase was given).\n"+
-				"     Check that it opens: dcctl secrets escrow verify %s --instance %s", path, path, st.Instance))
+				"     Check that it opens: dcctl secrets escrow verify %s --instance %s --open", path, path, st.Instance))
 		return escrowPresentNotOpened
 	}
 	if err := openMatchesKey(art, pass, key); err != nil {
