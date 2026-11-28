@@ -12,7 +12,7 @@ exit: 1
 -- stderr (30 bytes) --
 Error: the fake engine failed
 
--- engine (1671 bytes) --
+-- engine (1695 bytes) --
 {
   "Provider": "local",
   "Options": {
@@ -20,6 +20,7 @@ Error: the fake engine failed
     "KubeContext": "",
     "Cluster": "devicechain",
     "CreateCluster": false,
+    "ExposeLAN": false,
     "Profile": "",
     "DryRun": false,
     "AssumeYes": true,

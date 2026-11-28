@@ -188,7 +188,7 @@ func TestAnUpgradeFindsAnEscrowAtTheRecordedCustomPath(t *testing.T) {
 	escrowAt(t, custom, key)
 	writeRecord(t, InstanceRecord{Instance: testInstance, Provider: "local", EscrowPath: custom})
 
-	if got := reconcileUpgradeEscrow(aBootstrapOf(testInstance), key, UpgradeOptions{}); got != escrowVerified {
+	if got := reconcileUpgradeEscrow(aBootstrapOf(testInstance), key, UpgradeOptions{}); got != escrowPresentNotOpened {
 		t.Fatalf("the upgrade reported %q for an escrow sitting at the recorded path", got)
 	}
 }
@@ -225,7 +225,7 @@ func TestAnUpgradeStillFindsTheDefaultEscrow(t *testing.T) {
 	key := aRootKey(t)
 	escrowAt(t, def, key)
 	writeRecord(t, InstanceRecord{Instance: testInstance, Provider: "local"})
-	if got := reconcileUpgradeEscrow(aBootstrapOf(testInstance), key, UpgradeOptions{}); got != escrowVerified {
+	if got := reconcileUpgradeEscrow(aBootstrapOf(testInstance), key, UpgradeOptions{}); got != escrowPresentNotOpened {
 		t.Fatalf("the upgrade reported %q for an escrow at the default path", got)
 	}
 }
@@ -241,7 +241,7 @@ func TestAnExplicitEscrowFileWinsAndIsRemembered(t *testing.T) {
 	writeRecord(t, InstanceRecord{Instance: testInstance, Provider: "local",
 		EscrowPath: filepath.Join(t.TempDir(), "stale.escrow")})
 
-	if got := reconcileUpgradeEscrow(aBootstrapOf(testInstance), key, UpgradeOptions{EscrowFile: custom}); got != escrowVerified {
+	if got := reconcileUpgradeEscrow(aBootstrapOf(testInstance), key, UpgradeOptions{EscrowFile: custom}); got != escrowPresentNotOpened {
 		t.Fatalf("reported %q", got)
 	}
 	rec, err := ReadInstanceRecord(testInstance)
@@ -251,14 +251,14 @@ func TestAnExplicitEscrowFileWinsAndIsRemembered(t *testing.T) {
 	if rec.EscrowPath != custom {
 		t.Errorf("recorded escrow path %q; want %q", rec.EscrowPath, custom)
 	}
-	if got := reconcileUpgradeEscrow(aBootstrapOf(testInstance), key, UpgradeOptions{}); got != escrowVerified {
+	if got := reconcileUpgradeEscrow(aBootstrapOf(testInstance), key, UpgradeOptions{}); got != escrowPresentNotOpened {
 		t.Errorf("the next upgrade, given no flag, reported %q", got)
 	}
 
 	other := "other"
 	oPath := filepath.Join(t.TempDir(), "o.escrow")
 	escrowAt(t, oPath, key)
-	if got := reconcileUpgradeEscrow(aBootstrapOf(other), key, UpgradeOptions{EscrowFile: oPath}); got != escrowVerified {
+	if got := reconcileUpgradeEscrow(aBootstrapOf(other), key, UpgradeOptions{EscrowFile: oPath}); got != escrowPresentNotOpened {
 		t.Fatalf("reported %q for an artifact that is there", got)
 	}
 	if _, err := ReadInstanceRecord(other); err != ErrNoInstanceRecord {

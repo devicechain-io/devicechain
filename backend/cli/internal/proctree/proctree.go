@@ -30,6 +30,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/devicechain-io/dcctl/internal/secretenv"
 )
 
 // Run is RunWith with no options.
@@ -93,7 +95,7 @@ func mark(cmd *exec.Cmd) string {
 	}
 	marked := make([]string, 1, len(env)+1)
 	marked[0] = m
-	for _, kv := range env {
+	for _, kv := range secretenv.Scrub(env) {
 		if !strings.HasPrefix(kv, sweepEnv+"=") {
 			marked = append(marked, kv)
 		}

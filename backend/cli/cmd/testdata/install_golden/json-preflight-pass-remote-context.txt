@@ -24,7 +24,7 @@ exit: 0
 
 -- stderr (0 bytes) --
 
--- engine (1676 bytes) --
+-- engine (1700 bytes) --
 {
   "Provider": "local",
   "Options": {
@@ -32,6 +32,7 @@ exit: 0
     "KubeContext": "prod",
     "Cluster": "devicechain",
     "CreateCluster": false,
+    "ExposeLAN": false,
     "Profile": "",
     "DryRun": false,
     "AssumeYes": false,

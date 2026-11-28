@@ -214,6 +214,7 @@ func TestTheReportShowsTheSeedPasswordOnlyWhenThisRunGeneratedIt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st := aWritableState()
 			tc.mutate(st)
+			pretendStdoutIsATerminal(t)
 			out := captureStdout(t, func() { printSuperuserReport(context.Background(), st) })
 			if got := strings.Contains(out, "superuser-pw"); got != tc.showValue {
 				t.Errorf("the report shows the password = %t, want %t:\n%s", got, tc.showValue, out)
@@ -438,6 +439,7 @@ func TestTheBootstrapReportShowsTheGeneratedPasswordExactlyOnce(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st := aWritableState()
 			tc.mutate(st)
+			pretendStdoutIsATerminal(t)
 			out := captureStdout(t, func() {
 				if err := stepReport(t.Context(), st); err != nil {
 					t.Fatalf("stepReport: %v", err)

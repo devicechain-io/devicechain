@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/secrets/escrow"
+	"github.com/devicechain-io/dcctl/internal/secretenv"
 	"github.com/fatih/color"
 )
 
@@ -26,6 +27,12 @@ const (
 	escrowProtectsADifferentKey escrowOutcome = "protects a different key"
 	escrowUnreadable            escrowOutcome = "unreadable"
 	escrowNoRootKey             escrowOutcome = "no root key"
+	// escrowPresentNotOpened is an artifact whose header names the running key, which this run
+	// had no passphrase to open. The header is cleartext: it is not proof the artifact opens.
+	escrowPresentNotOpened escrowOutcome = "present, not opened (no passphrase was given to open it)"
+	// escrowDoesNotOpen is an artifact whose header names the running key, which the passphrase
+	// given did not open to that key: damaged, or written under another passphrase.
+	escrowDoesNotOpen escrowOutcome = "does not open"
 )
 
 // reconcileUpgradeEscrow checks that the instance's root-key escrow still protects
@@ -42,11 +49,13 @@ const (
 // every stored secret permanently unreadable, including from a database backup,
 // because no DeviceChain backup contains etcd.
 //
-// 🔑 VERIFICATION IS FREE, AND THAT MAKES IT BETTER HERE THAN IT WAS. An artifact
-// records a FINGERPRINT of the key it protects, so checking that it still matches
-// needs no passphrase at all — only writing one does. So an upgrade verifies every
-// time, without asking for anything, which is more often than the old re-run managed
-// and with less ceremony.
+// 🔑 THE FINGERPRINT CHECK IS FREE; VERIFICATION IS NOT. An artifact records a
+// FINGERPRINT of the key it protects in cleartext, so every upgrade checks, without
+// asking for anything, that it still names the running key, and catches the orphan.
+// But the fingerprint is a claim: damage to the ciphertext leaves it intact. So the
+// artifact is called verified only when the upgrade was given its passphrase (a file or
+// the environment, never a prompt) and it opened to the running key; without one it is
+// "present, not opened".
 //
 // 🔴 IT WARNS AND DOES NOT FAIL. An escrow problem is about a future disaster; the
 // upgrade in front of it is about the running instance. Blocking a security patch
@@ -123,9 +132,24 @@ func reconcileUpgradeEscrow(st *State, rootKeyBase64 string, opts UpgradeOptions
 			path))
 		return escrowProtectsADifferentKey
 	}
-	fmt.Printf("  %s %s\n", color.WhiteString("Root-key escrow:"),
-		color.GreenString("verified against the running key"))
 	rememberEscrowPath(st.Instance, path, opts.EscrowFile)
+	pass := escrowPassphraseWithoutAsking(opts.EscrowPassphraseFile)
+	if pass == "" {
+		fmt.Printf("  %s %s\n", color.WhiteString("Root-key escrow:"), color.YellowString(
+			"present at %s and names the running key, but not opened (no passphrase was given).\n"+
+				"     Check that it opens: dcctl secrets escrow verify %s --instance %s", path, path, st.Instance))
+		return escrowPresentNotOpened
+	}
+	if err := openMatchesKey(art, pass, key); err != nil {
+		fmt.Println(color.YellowString(
+			"  ⚠️  The escrow artifact at %s names the root key this instance is running on, but %v.\n"+
+				"     Its header matches; what it protects could not be confirmed, so as it stands it may\n"+
+				"     recover nothing. Check the passphrase, or move the file aside and re-run with\n"+
+				"     --escrow-passphrase-file to write a fresh one.", path, err))
+		return escrowDoesNotOpen
+	}
+	fmt.Printf("  %s %s\n", color.WhiteString("Root-key escrow:"),
+		color.GreenString("verified: it opened to the running key"))
 	return escrowVerified
 }
 
@@ -250,10 +274,7 @@ func escrowPassphraseWithoutAsking(file string) string {
 		// nothing when typed by hand later.
 		return strings.TrimRight(string(raw), "\r\n")
 	}
-	if pass, ok := os.LookupEnv(EscrowPassphraseEnv); ok {
-		// Unset immediately, for the reason the bootstrap path does: what follows
-		// inherits this environment.
-		os.Unsetenv(EscrowPassphraseEnv)
+	if pass, ok := secretenv.LookupEscrowPassphrase(); ok {
 		return pass
 	}
 	return ""

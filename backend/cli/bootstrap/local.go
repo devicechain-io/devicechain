@@ -71,6 +71,11 @@ func (localProvider) EnsureCluster(ctx context.Context, opts Options) (ClusterBi
 	binding := ClusterBinding{Cluster: clusterName, KubeContext: kubeContext, Managed: true}
 	if containsString(names, kubeContext) {
 		c.println(color.WhiteString("Using kind cluster %s.", color.GreenString(kubeContext)))
+		if opts.ExposeLAN {
+			// kind fixes a node's port bindings when it creates it; nothing can widen them now.
+			c.println(color.YellowString("--expose-lan applies only to a cluster this install creates; kind cluster "+
+				"%q already exists and keeps the bindings it was created with.", clusterName))
+		}
 		return binding, nil
 	}
 
@@ -92,7 +97,7 @@ func (localProvider) EnsureCluster(ctx context.Context, opts Options) (ClusterBi
 				"install into an existing cluster", clusterName)
 	}
 	runFrom(ctx).mayChange()
-	if err := createKindCluster(ctx, clusterName); err != nil {
+	if err := createKindCluster(ctx, clusterName, opts.ExposeLAN); err != nil {
 		return ClusterBinding{}, err
 	}
 	return binding, nil
@@ -119,10 +124,14 @@ var runKindCommand = (*exec.Cmd).Run
 
 // createKindCluster creates a kind cluster from the embedded topology (the same
 // config in deploy/local/kind-cluster.yaml). kind streams its own progress.
-func createKindCluster(ctx context.Context, name string) error {
+func createKindCluster(ctx context.Context, name string, exposeLAN bool) error {
 	c := out(ctx)
 	if _, err := exec.LookPath("kind"); err != nil {
 		return fmt.Errorf("kind not found on PATH; install it (https://kind.sigs.k8s.io) and re-run")
+	}
+	rendered, err := kindClusterConfig(exposeLAN)
+	if err != nil {
+		return err
 	}
 
 	cfg, err := os.CreateTemp("", "dcctl-kind-*.yaml")
@@ -130,15 +139,19 @@ func createKindCluster(ctx context.Context, name string) error {
 		return err
 	}
 	defer os.Remove(cfg.Name())
-	// Strip the config's hard-coded cluster name so --name governs.
-	if _, err := cfg.Write(stripClusterName(assets.KindClusterConfig())); err != nil {
+	if _, err := cfg.Write(rendered); err != nil {
 		return err
 	}
 	if err := cfg.Close(); err != nil {
 		return err
 	}
 
-	c.println(color.WhiteString("Creating kind cluster %q:", name))
+	if exposeLAN {
+		c.println(color.YellowString("Creating kind cluster %q with its ports published on EVERY host interface "+
+			"(--expose-lan): anything on this machine's networks can reach the console and the MQTT broker.", name))
+	} else {
+		c.println(color.WhiteString("Creating kind cluster %q:", name))
+	}
 	cmd := exec.CommandContext(ctx, "kind", "create", "cluster",
 		"--name", name, "--config", cfg.Name(), "--wait", "90s")
 	var flush func()
@@ -149,6 +162,34 @@ func createKindCluster(ctx context.Context, name string) error {
 		return fmt.Errorf("creating kind cluster %q: %w", name, err)
 	}
 	return nil
+}
+
+// kindLoopbackListen is the listen address every host port mapping in the embedded kind
+// config carries, and kindLANListen the one --expose-lan puts in its place.
+const (
+	kindLoopbackListen = `listenAddress: "127.0.0.1"`
+	kindLANListen      = `listenAddress: "0.0.0.0"`
+)
+
+// kindClusterConfig is the embedded topology as kind is given it: the cluster name left
+// to --name, and the host ports published on loopback, or on every interface when
+// exposeLAN.
+//
+// 🔴 IT REFUSES A CONFIG WHOSE MAPPINGS IT CANNOT ALL ACCOUNT FOR. kind publishes a
+// mapping with no listenAddress on every interface, so a mapping added to the file
+// without one would quietly put that port on the LAN of every default install. Each
+// mapping must carry exactly the loopback line this swaps.
+func kindClusterConfig(exposeLAN bool) ([]byte, error) {
+	cfg := string(stripClusterName(assets.KindClusterConfig()))
+	mappings := strings.Count(cfg, "hostPort:")
+	if n := strings.Count(cfg, kindLoopbackListen); n != mappings {
+		return nil, fmt.Errorf("the embedded kind config publishes %d host ports but %d of them carry %s; "+
+			"every mapping must, or it is published on every interface", mappings, n, kindLoopbackListen)
+	}
+	if exposeLAN {
+		cfg = strings.ReplaceAll(cfg, kindLoopbackListen, kindLANListen)
+	}
+	return []byte(cfg), nil
 }
 
 // stripClusterName drops the top-level `name:` field from the kind config so the

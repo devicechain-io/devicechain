@@ -12,7 +12,7 @@ exit: 1
 -- stderr (83 bytes) --
 Error: creating kind cluster "devicechain": kind create cluster: signal: interrupt
 
--- engine (1671 bytes) --
+-- engine (1695 bytes) --
 {
   "Provider": "local",
   "Options": {
@@ -20,6 +20,7 @@ Error: creating kind cluster "devicechain": kind create cluster: signal: interru
     "KubeContext": "",
     "Cluster": "devicechain",
     "CreateCluster": false,
+    "ExposeLAN": false,
     "Profile": "",
     "DryRun": false,
     "AssumeYes": true,

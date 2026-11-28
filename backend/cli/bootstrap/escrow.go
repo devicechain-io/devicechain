@@ -4,6 +4,7 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -20,6 +21,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/secrets/escrow"
 	"github.com/devicechain-io/dcctl/dcdir"
 	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/secretenv"
 	"github.com/fatih/color"
 	"golang.org/x/term"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -50,8 +52,9 @@ import (
 // one-word answer for a throwaway, and --dev implies it.
 const (
 	// EscrowPassphraseEnv supplies the passphrase to an automated bootstrap that has
-	// no terminal to prompt at.
-	EscrowPassphraseEnv = "DCCTL_ESCROW_PASSPHRASE"
+	// no terminal to prompt at. dcctl takes it out of its own environment at process
+	// start (secretenv.Capture), so no child it starts inherits it.
+	EscrowPassphraseEnv = secretenv.EscrowPassphrase
 
 	// EscrowFileExt is the artifact suffix. destroy keys on it to decide what to
 	// spare, so it is a constant rather than a literal in two places.
@@ -450,12 +453,10 @@ func resolveEscrowPassphrase(f EscrowFlags, q escrowQuestion) (string, error) {
 	// LookupEnv, not Getenv: an empty DCCTL_ESCROW_PASSPHRASE is a broken pipeline
 	// (an unset CI secret expands to ""), not a request for an empty passphrase, and
 	// falling through to a prompt would hang a job instead of failing it.
-	if pass, ok := os.LookupEnv(EscrowPassphraseEnv); ok {
-		// Unset immediately. Bootstrap goes on to exec docker, kind, ko and tofu, all
-		// of which inherit the environment, and tofu dumps its whole environment under
-		// TF_LOG=trace. The passphrase has been read; there is no reason for it to stay
-		// reachable by every child process for the next ten minutes.
-		os.Unsetenv(EscrowPassphraseEnv)
+	// Taken from memory, not the environment: the process's entry point moved it there
+	// before any command ran, so docker, kind, ko and tofu (which dumps its whole
+	// environment under TF_LOG=trace) never inherit it. See secretenv.
+	if pass, ok := secretenv.LookupEscrowPassphrase(); ok {
 		if pass == "" {
 			return "", fmt.Errorf("%s is set but empty; unset it to use another source, or give it a value", EscrowPassphraseEnv)
 		}
@@ -961,7 +962,12 @@ func parseDeployedConfig(raw []byte, instanceId, secretName string) (*config.Ins
 //
 // Three cases, and each says something different:
 //   - an artifact that matches the running key: nothing to do, and saying so is the
-//     "is my escrow current?" check happening for free on every re-run.
+//     "is my escrow current?" check happening on every re-run. 🔴 The header's
+//     fingerprint is only a CLAIM: it is cleartext, outside what the passphrase
+//     protects, so a truncated or altered ciphertext keeps it intact. "verified" is
+//     said only of an artifact OPENED with this run's passphrase that gave back the
+//     running key; one that does not open is refused, and with no passphrase in hand
+//     it is "present, not opened", never verified.
 //   - an artifact that does NOT match: refuse. It is an ORPHAN — it protects a key
 //     this instance no longer uses — and quietly leaving it would mean the operator
 //     holds a file they believe is their recovery path and is not.
@@ -977,7 +983,7 @@ func ReconcileEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.T
 			if err := WriteEscrow(plan, rootKeyBase64, instance, now); err != nil {
 				return "", err
 			}
-			return "written", nil
+			return string(escrowWritten), nil
 		}
 		return "", fmt.Errorf("reading the existing escrow artifact: %w", err)
 	}
@@ -998,7 +1004,33 @@ func ReconcileEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.T
 			"  `dcctl secrets escrow show %s` that it is not the only copy of a key you still need",
 			plan.Path, instance, plan.Path)
 	}
-	return "verified", nil
+	if plan.Passphrase == "" {
+		return string(escrowPresentNotOpened), nil
+	}
+	if err := openMatchesKey(art, plan.Passphrase, key); err != nil {
+		return "", fmt.Errorf("the escrow artifact at %s names the root key instance %q is running, but %w.\n"+
+			"  Its header matches; what it protects could not be confirmed, so as it stands it may recover\n"+
+			"  nothing. Re-run with the passphrase it was written with, or check it with\n"+
+			"  `dcctl secrets escrow verify %s --instance %s`; if it is damaged, move it aside to have a\n"+
+			"  correct one written",
+			plan.Path, instance, err, plan.Path, instance)
+	}
+	return string(escrowVerified), nil
+}
+
+// openMatchesKey opens art with passphrase and reports whether it gives back key. The
+// header's fingerprint (Artifact.Matches) needs no passphrase and is never proof on its
+// own: it is cleartext, so damage to the ciphertext leaves it intact.
+func openMatchesKey(art *escrow.Artifact, passphrase string, key []byte) error {
+	opened, err := escrow.Open(art, passphrase)
+	if err != nil {
+		return fmt.Errorf("it does not open with the passphrase given (%v)", err)
+	}
+	defer zeroBytes(opened)
+	if !bytes.Equal(opened, key) {
+		return errors.New("it does not open to that key")
+	}
+	return nil
 }
 
 // DeployedRootKey reads the instance root key out of the config Secret the pods
