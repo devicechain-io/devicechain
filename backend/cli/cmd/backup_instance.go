@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/devicechain-io/dc-k8s/functionalarea"
@@ -184,13 +185,25 @@ func restoreObjects(ctx context.Context, opts backupOptions, overwrite bool) err
 		return backup.ExportBlobs(ctx, bc, opts.InstanceID, w)
 	}
 	_, err = opts.RestorePlan.ApplyObjects(ctx, export, target, overwrite, opts.PlanOutput)
-	// A missing instance directory is refused, never read as an empty store: a
-	// mistyped mount path looks exactly like it. A freshly provisioned volume has
-	// none until its first upload, so say what to do when that is the case.
-	if errors.Is(err, fs.ErrNotExist) && bc.Directory != "" {
-		return fmt.Errorf("%w\nIf %s is the instance's freshly provisioned blob volume, create the directory %q in it and run the restore again", err, bc.Directory, opts.InstanceID)
+	if bc.Backend == "" || bc.Backend == blob.BackendFilesystem {
+		return withInstanceDirectoryHint(err, bc.Directory, opts.InstanceID)
 	}
 	return err
+}
+
+// withInstanceDirectoryHint explains a refusal caused by the target volume
+// having no instance directory. That is refused, never read as an empty store:
+// a mistyped mount path looks exactly like it. A freshly provisioned volume has
+// none until its first upload, so say what to do in that case, and only that
+// one: any other missing file (a backup-set file that vanished) is its own error.
+func withInstanceDirectoryHint(err error, root, instance string) error {
+	if err == nil || !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if _, statErr := os.Stat(filepath.Join(root, instance)); !errors.Is(statErr, fs.ErrNotExist) {
+		return err
+	}
+	return fmt.Errorf("%w\nIf %s is the instance's freshly provisioned blob volume, create the directory %q in it and run the restore again", err, root, instance)
 }
 
 // Match the diagnostic commands' transport policy: resolve TLS through the

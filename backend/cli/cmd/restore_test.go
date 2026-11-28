@@ -5,10 +5,39 @@ package cmd
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// The "create the directory" advice is given only when the target volume has
+// no instance directory, never for some other missing file.
+func TestInstanceDirectoryHintOnlyForTheInstanceDirectory(t *testing.T) {
+	missing := fmt.Errorf("target object store: %w", fs.ErrNotExist)
+	bare := t.TempDir()
+	if err := withInstanceDirectoryHint(missing, bare, "acme"); err == nil || !strings.Contains(err.Error(), `create the directory "acme"`) || !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("missing instance directory not explained: %v", err)
+	}
+	present := t.TempDir()
+	if err := os.Mkdir(filepath.Join(present, "acme"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	vanished := fmt.Errorf("open streams/x.snap: %w", fs.ErrNotExist)
+	if err := withInstanceDirectoryHint(vanished, present, "acme"); err != vanished {
+		t.Fatalf("hint attached to an unrelated missing file: %v", err)
+	}
+	other := errors.New("permission denied")
+	if err := withInstanceDirectoryHint(other, bare, "acme"); err != other {
+		t.Fatalf("hint attached to a non-missing error: %v", err)
+	}
+	if err := withInstanceDirectoryHint(nil, bare, "acme"); err != nil {
+		t.Fatalf("success turned into %v", err)
+	}
+}
 
 func TestRestoreValidationBeforeCluster(t *testing.T) {
 	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "absent"))

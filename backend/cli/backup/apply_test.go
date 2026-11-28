@@ -327,6 +327,83 @@ func TestApplyObjectsReadsTheTargetBack(t *testing.T) {
 	}
 }
 
+// A hard-killed restore leaves its staging files behind. The next run removes
+// exactly those, and still refuses the blob store's own in-flight uploads.
+func TestApplyObjectsSweepsItsOwnStagingFiles(t *testing.T) {
+	dir := objectBackupSet(t)
+	t.Run("own leftovers are removed and the run completes", func(t *testing.T) {
+		root, target, current := filesystemTarget(t, map[string]string{
+			"sample/acme/ota/firmware-1":            "firmware one",
+			"sample/acme/ota/.put-restore-0011aabb": "half a firm",
+			"sample/.put-restore-ffee":              "x",
+			"other/acme/ota/.put-restore-0011aabb":  "another instance's",
+		})
+		var progress bytes.Buffer
+		res, err := prepared(t, dir, "sample", false).ApplyObjects(context.Background(), current, target, false, &progress)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res != (ObjectRestore{Written: 2, Matched: 1}) || !strings.Contains(progress.String(), "removed 2 staging file(s)") {
+			t.Fatalf("result %+v, progress:\n%s", res, progress.String())
+		}
+		want := map[string]string{"other/acme/ota/.put-restore-0011aabb": "another instance's"}
+		for k, v := range sourceObjects {
+			want[k] = v
+		}
+		sameTree(t, readTree(t, root), want)
+	})
+	t.Run("an upload in flight is not this restore's to remove", func(t *testing.T) {
+		root, target, current := filesystemTarget(t, map[string]string{"sample/acme/ota/.put-123": "uploading"})
+		_, err := prepared(t, dir, "sample", false).ApplyObjects(context.Background(), current, target, false, nil)
+		if err == nil || !strings.Contains(err.Error(), "incomplete upload") {
+			t.Fatalf("in-flight upload accepted: %v", err)
+		}
+		sameTree(t, readTree(t, root), map[string]string{"sample/acme/ota/.put-123": "uploading"})
+	})
+}
+
+// An object too large for the target's single upload is refused before the
+// first write, not after part of the store has been restored.
+func TestApplyObjectsRefusesOversizedObjectsBeforeWriting(t *testing.T) {
+	dir := objectBackupSet(t)
+	limited := func(t *testing.T, files map[string]string) (string, *ObjectTarget, func(context.Context, io.Writer) error) {
+		root, target, current := filesystemTarget(t, files)
+		target.maxObject = int64(len("logo"))
+		return root, target, current
+	}
+	root, target, current := limited(t, nil)
+	_, err := prepared(t, dir, "sample", false).ApplyObjects(context.Background(), current, target, false, nil)
+	if err == nil || !strings.Contains(err.Error(), "multipart") {
+		t.Fatalf("oversized object accepted: %v", err)
+	}
+	if got := readTree(t, root); len(got) != 0 {
+		t.Fatalf("an oversized backup still wrote %v", got)
+	}
+	// Objects the target already holds are not written, so their size is no obstacle.
+	held := map[string]string{"sample/acme/ota/firmware-1": "firmware one", "sample/acme/ota/firmware-2": "firmware two"}
+	root, target, current = limited(t, held)
+	if _, err := prepared(t, dir, "sample", false).ApplyObjects(context.Background(), current, target, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	sameTree(t, readTree(t, root), sourceObjects)
+}
+
+func TestS3TargetIsLimitedToASinglePut(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	target, err := NewObjectTarget(context.Background(), blob.Config{Backend: blob.BackendS3, Bucket: "bucket", Endpoint: "http://127.0.0.1:1", UsePathStyle: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.maxObject != 5<<30 {
+		t.Fatalf("S3 target limit %d, want the 5 GiB single-put limit", target.maxObject)
+	}
+	fsTarget, err := NewObjectTarget(context.Background(), blob.Config{Directory: t.TempDir()})
+	if err != nil || fsTarget.maxObject != 0 {
+		t.Fatalf("filesystem target limited to %d: %v", fsTarget.maxObject, err)
+	}
+}
+
 func record(content string) objectRecord {
 	sum := sha256.Sum256([]byte(content))
 	return objectRecord{Ref: "blob://filesystem/sample/a/b/c", Size: int64(len(content)), SHA256: hex.EncodeToString(sum[:])}

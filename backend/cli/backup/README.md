@@ -133,5 +133,5 @@ temp beside the key and are committed with a hard link (no clobber) or, when
 replacing, a rename, all through `os.Root`; S3 objects are spooled to a local
 temp and put with the verified SHA-256 as `x-amz-checksum-sha256` and, for a
 new key, `If-None-Match: *`. The target is exported again at the end and must
-hold every backup object. A missing instance directory stays an error.
+hold every backup object. A missing instance directory stays an error. A run first removes `.put-restore-*` files a hard-killed run left under the instance directory (that prefix only, through `os.Root`; an in-flight blob-store `.put-*` is still refused). An S3 object larger than one PutObject (5 GiB) is refused before the first write; multipart restore is not implemented. The filesystem target must support hard links.
 `apply_minio_integration_test.go` (tag `integration`) runs it against MinIO.

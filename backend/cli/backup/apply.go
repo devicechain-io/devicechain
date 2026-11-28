@@ -34,7 +34,24 @@ type ObjectTarget struct {
 	// that exists by the time it commits: a restore never clobbers an object it
 	// did not see and judge.
 	write func(ctx context.Context, key string, want objectRecord, src io.Reader, replace bool) error
+	// maxObject is the largest object write can store, 0 for no limit. A backup
+	// holding a larger one is refused before the first write, not part way.
+	maxObject int64
+	// sweep removes the staging files an earlier, hard-killed restore left in
+	// the instance's object tree and returns how many; nil when the backend
+	// leaves none.
+	sweep func(instance string) (int, error)
 }
+
+// s3SinglePutLimit is the largest object one PutObject accepts. The platform
+// writes larger artifacts as multipart uploads; restoring those is not
+// implemented yet.
+const s3SinglePutLimit = 5 << 30
+
+// restoreTempPrefix names this restore's own staging files. It begins with
+// the blob store's in-flight prefix (".put-"), so backup refuses a tree that
+// still holds one, and only files with this whole prefix are ever swept.
+const restoreTempPrefix = ".put-restore-"
 
 // NewObjectTarget opens the target store described by cfg. A filesystem
 // Directory is the root of a WRITABLE local mount of the instance's blob volume
@@ -50,13 +67,13 @@ func NewObjectTarget(ctx context.Context, cfg blob.Config) (*ObjectTarget, error
 		if err != nil {
 			return nil, err
 		}
-		return &ObjectTarget{backend: blob.BackendFilesystem, write: filesystemWriter(root)}, nil
+		return &ObjectTarget{backend: blob.BackendFilesystem, write: filesystemWriter(root), sweep: filesystemSweeper(root)}, nil
 	case blob.BackendS3:
 		client, err := s3Client(ctx, cfg)
 		if err != nil {
 			return nil, err
 		}
-		return &ObjectTarget{backend: blob.BackendS3, write: s3Writer(client, cfg.Bucket)}, nil
+		return &ObjectTarget{backend: blob.BackendS3, write: s3Writer(client, cfg.Bucket), maxObject: s3SinglePutLimit}, nil
 	default:
 		return nil, fmt.Errorf("blob restore backend %q is unsupported", cfg.Backend)
 	}
@@ -114,6 +131,20 @@ func (p *RestorePlan) ApplyObjects(ctx context.Context, current func(context.Con
 		}
 	}
 
+	// A hard-killed earlier run (power loss, OOM, SIGKILL) cannot remove its
+	// own staging files, and the tree read below refuses any in-flight file. Only
+	// this restore's own prefix is removed, so a blob-store upload in flight is
+	// still refused rather than deleted.
+	if target.sweep != nil {
+		n, err := target.sweep(p.instance)
+		if err != nil {
+			return res, fmt.Errorf("removing staging files of an interrupted restore: %w", err)
+		}
+		if n > 0 {
+			fmt.Fprintf(progress, "%s %q: removed %d staging file(s) (%s*) left by an interrupted restore\n", entry.Kind, entry.Name, n, restoreTempPrefix)
+		}
+	}
+
 	live, err := targetObjects(ctx, current, p.instance)
 	if err != nil {
 		return res, fmt.Errorf("target object store: %w", err)
@@ -136,6 +167,16 @@ func (p *RestorePlan) ApplyObjects(ctx context.Context, current func(context.Con
 	for key, saved := range p.objects {
 		if obj, ok := live[key]; !ok || !sameObject(obj, saved) {
 			todo[key] = true
+		}
+	}
+	// Judged over everything this run would write, before it writes any of it:
+	// a run that stopped at the first oversized object would leave a part-restored
+	// store behind for a reason known from the start.
+	if target.maxObject > 0 {
+		for _, key := range sortedKeys(p.objects) {
+			if size := p.objects[key].Size; todo[key] && size > target.maxObject {
+				return res, fmt.Errorf("backup object %q is %d bytes, more than the %d a single upload to the target can store; restoring objects that large (multipart) is not implemented, and nothing was written", key, size, target.maxObject)
+			}
 		}
 	}
 	res.Matched, res.Kept = len(p.objects)-len(todo), len(extra)
@@ -274,7 +315,7 @@ func filesystemWriter(root *os.Root) func(context.Context, string, objectRecord,
 		if _, err := rand.Read(suffix[:]); err != nil {
 			return err
 		}
-		tmp := path.Join(dir, ".put-restore-"+hex.EncodeToString(suffix[:]))
+		tmp := path.Join(dir, restoreTempPrefix+hex.EncodeToString(suffix[:]))
 		f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
 			return err
@@ -309,6 +350,40 @@ func filesystemWriter(root *os.Root) func(context.Context, string, objectRecord,
 			return err
 		}
 		return nil
+	}
+}
+
+// filesystemSweeper removes regular files named restoreTempPrefix* under the
+// instance directory, through the same os.Root as the writer, and nothing
+// else: no other name, no directory, nothing outside the instance. A missing
+// instance directory is left for the export to refuse.
+func filesystemSweeper(root *os.Root) func(string) (int, error) {
+	return func(instance string) (int, error) {
+		if !fs.ValidPath(instance) || strings.Contains(instance, "/") || instance == "." {
+			return 0, fmt.Errorf("invalid instance %q", instance)
+		}
+		var stale []string
+		err := fs.WalkDir(root.FS(), instance, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.Type().IsRegular() && strings.HasPrefix(d.Name(), restoreTempPrefix) {
+				stale = append(stale, p)
+			}
+			return nil
+		})
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		for _, p := range stale {
+			if err := root.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return 0, err
+			}
+		}
+		return len(stale), nil
 	}
 }
 
