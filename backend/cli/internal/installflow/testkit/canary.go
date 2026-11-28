@@ -28,7 +28,8 @@ const Window = 12
 
 // Canaries returns one fake value per class of secret the installer handles.
 // The kubeconfig token is all lower case on purpose: it looks like an
-// identifier, so it exercises the refusal of secrets in identifier fields.
+// identifier, so registered as a generated value it exercises the refusal of
+// secrets in identifier fields.
 func Canaries() []Canary {
 	return []Canary{
 		{Label: "root-key", Value: "dcCANARYrootKEY7Qm2xV9pL4wZ8nB3tR6yH1cJ5kF0sA=",

@@ -134,14 +134,16 @@ func TestCanaryHarnessSeesALeak(t *testing.T) {
 }
 
 // TestASecretIsRefusedAsAnIdentifier: a lower-case secret fits the
-// identifier grammar, so a code that is a known secret is refused outright
-// rather than redacted into a meaningless code.
+// identifier grammar, so a code that holds a GENERATED secret — one dcctl made at
+// random, which no word of its vocabulary can match by chance — is refused
+// outright rather than redacted into a meaningless code.
 func TestASecretIsRefusedAsAnIdentifier(t *testing.T) {
 	f := newFixture(t, installflow.Options{})
 	must(t, testkit.RegisterCanaries(f.hub))
+	token := "dccanarykubetoken9w8x7v6u5t4s3r"
+	must(t, f.hub.AddGeneratedSecret(token))
 	must(t, f.hub.Emit(started(false, manifest("a"))))
 	must(t, f.hub.Emit(stepStart("a", 1)))
-	token := "dccanarykubetoken9w8x7v6u5t4s3r"
 	for _, ev := range []installflow.Event{
 		{Step: "a", Attempt: 1, Payload: installflow.StepFailed{Code: installflow.ErrorCode(token), Retry: installflow.RetryUnknown, Effect: installflow.EffectNoneObserved}},
 		{Step: "a", Payload: installflow.LogLine{Level: installflow.LogInfo, Source: token}},
@@ -161,6 +163,84 @@ func TestASecretIsRefusedAsAnIdentifier(t *testing.T) {
 	out := testkit.Dump(f.wait(t), f.hub.Projection())
 	out = append(out, []byte(fmt.Sprint(err))...)
 	testkit.AssertNoCanary(t, "stream and error text", out)
+}
+
+// 🔴 A SECRET A PERSON CHOSE NEVER BREAKS AN IDENTIFIER. An escrow passphrase
+// "bootstrap" or an SMTP password "install" is a substring of dcctl's own step ids,
+// codes and prompt ids. Registered with AddSecret it is cut out of every text, as a
+// substring, exactly as before — and every identifier that spells it is accepted:
+// refusing them made each later event of a run invalid, so a run that had done
+// everything it was asked exited 1. The same value registered as GENERATED is still
+// refused, which is the control: the identifiers below are the ones the refusal
+// reads.
+func TestAChosenSecretNeverRefusesAnIdentifier(t *testing.T) {
+	for _, generated := range []bool{false, true} {
+		f := newFixture(t, installflow.Options{})
+		for _, v := range []string{"install", "bootstrap", "escrow", "prompt"} {
+			if generated {
+				must(t, f.hub.AddGeneratedSecret(v))
+			} else {
+				must(t, f.hub.AddSecret(v))
+			}
+		}
+		var refused []string
+		emit := func(what string, err error) {
+			if errors.Is(err, installflow.ErrInvalidEvent) {
+				refused = append(refused, what)
+			} else if err != nil {
+				t.Fatalf("%s: %v", what, err)
+			}
+		}
+		steps := []installflow.StepID{installflow.StepInstallInputs, installflow.StepBootstrapEscrow}
+		emit("run.started", f.hub.Emit(started(false, manifest(steps...))))
+		emit("step.started", f.hub.Emit(installflow.Event{Step: installflow.StepBootstrapEscrow, Attempt: 1,
+			Payload: installflow.StepStarted{Message: installflow.MessageCode(installflow.StepBootstrapEscrow),
+				Params: []installflow.Param{{Name: "install", Value: installflow.Text("an install, password install")}}}}))
+		emit("prompt.requested", f.hub.Emit(installflow.Event{Step: installflow.StepBootstrapEscrow, Payload: installflow.PromptRequested{
+			ID: "prompt-1", Prompt: installflow.PromptSecret, Question: installflow.QuestionEscrowPassphrase}}))
+		emit("prompt.resolved", f.hub.Emit(installflow.Event{Step: installflow.StepBootstrapEscrow, Payload: installflow.PromptResolved{
+			ID: "prompt-1", Disposition: installflow.PromptProvided}}))
+		emit("log.line", f.hub.Emit(installflow.Event{Step: installflow.StepBootstrapEscrow, Payload: installflow.LogLine{
+			Level: installflow.LogInfo, Source: "install.tofu", Code: "bootstrap.escrow-written", Text: installflow.Text("escrow written")}}))
+		emit("step.finished", f.hub.Emit(installflow.Event{Step: installflow.StepBootstrapEscrow, Attempt: 1,
+			Payload: installflow.StepFinished{Outcome: installflow.StepSucceeded}}))
+		emit("step.failed", f.hub.Emit(stepStart(installflow.StepInstallInputs, 1)))
+		emit("step.failed", f.hub.Emit(installflow.Event{Step: installflow.StepInstallInputs, Attempt: 1, Payload: installflow.StepFailed{
+			Code: "install.inputs.failed", Remedy: "install.fix-inputs", Retry: installflow.RetryUnknown, Effect: installflow.EffectNoneObserved}}))
+		emit("run.summary", f.hub.Finish(installflow.Summary{Outcome: installflow.RunFailed, InstallRecord: installflow.RecordUnknown,
+			Readiness: installflow.ReadinessUnknown, Claim: installflow.ClaimUnknown, PartialState: installflow.EffectMayHaveChanged,
+			FailedStep: installflow.StepInstallInputs, Next: []installflow.NextCommand{{Purpose: "install.retry"}},
+			Credentials: []installflow.SecretRef{{Namespace: "dc-install", Name: "dci-bootstrap-escrow", Key: "password"}}}))
+		envs := f.wait(t)
+
+		if generated {
+			if len(refused) == 0 {
+				t.Fatal("the control registered the values as GENERATED and nothing was refused: the test reads no identifier")
+			}
+			continue
+		}
+		if len(refused) != 0 {
+			t.Fatalf("identifiers spelling a chosen secret were refused: %v", refused)
+		}
+		var sum *installflow.Summary
+		for _, e := range envs {
+			if s, ok := e.Payload.(installflow.Summary); ok {
+				sum = &s
+			}
+			if p, ok := e.Payload.(installflow.StepStarted); ok && len(p.Params) > 0 {
+				// Free text is redacted as strictly as ever; a param NAME is an identifier.
+				if got := p.Params[0].Value.String(); strings.Contains(got, "install") || p.Params[0].Name != "install" {
+					t.Errorf("param %q = %q: the text kept the secret or the name was changed", p.Params[0].Name, got)
+				}
+			}
+		}
+		if sum == nil || sum.FailedStep != installflow.StepInstallInputs || len(sum.Next) != 1 || len(sum.Credentials) != 1 {
+			t.Errorf("the summary lost an identifier that spells a chosen secret: %+v", sum)
+		}
+		if got := f.hub.Redact("bootstrap failed: password install"); strings.Contains(got, "install") || strings.Contains(got, "bootstrap") {
+			t.Errorf("Redact kept a chosen secret: %q", got)
+		}
+	}
 }
 
 // TestARedactOnlyValueIsRedactedButNeverRefusesAnIdentifier: a value registered

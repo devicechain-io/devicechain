@@ -21,7 +21,7 @@ title: GraphQL API
 |---|---|
 | **参考页面** | [GraphQL Schema 参考](/reference/graphql/)：每个 Schema 一页，列出所有查询、变更、订阅和类型及其说明 |
 | **索引** | [`/schema/index.json`](pathname:///schema/index.json)：列出所有功能区、认证平面、端点和 Schema 文件 |
-| **Schema** | `/schema/<area>.graphql`；对提供另外两个平面的功能区，还包含 `-admin` 和 `-settings` 文件 |
+| **Schema** | `/schema/<area>.graphql`；提供管理平面的三个功能区还包含 `-admin` 文件，user-management 还包含 `-settings` 文件 |
 
 请先查看索引。它集中列出每个功能区的 Schema 所属认证平面，以及该平面接受的令牌。
 每个发布的 Schema 文件开头也有注释，说明自身的平面、端点和令牌。
@@ -56,19 +56,21 @@ Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀�
 | `event-management` | 时序事件查询：`events`、`locationEvents`、`measurementEvents`、`alertEvents`、`bucketedMeasurements`，以及 `calculatedEvents`：在设备已存储的上报上预览计算指标的草稿公式 |
 | `device-state` | 实时最后已知状态：`latestMeasurements`、`latestLocation`、`deviceStates`；以及把事件源明确声明在线的设备转回推断在线状态的 `demoteAssertedPresence` |
 | `command-delivery` | 命令派发：`createCommand`、`cancelCommand`、设备群批次（`createCommandBatch`、`cancelCommandBatch`）、命令历史 |
-| `event-processing` | 检测规则验证、回放预览、规则健康状况 |
+| `event-processing` | 检测规则验证、回放预览、规则测试（`evaluateRules`，`dcctl test` 依托于它）、规则健康状况 |
 | `dashboard-management` | 仪表盘增删改查和版本管理 |
 | `outbound-connectors` | 每租户出站连接器增删改查 |
 | `notification-management` | 通知渠道和策略 |
+| `update-management` | 空中升级：制品目录、设备分配和按组发布（可选功能区；见下文） |
 | `ai-inference` | 支持自然语言规则编写的单一调用 `inferRuleCandidate`；仅在启用可选推理服务时存在 |
 
-另有三个端点位于**独立的身份令牌平面**，而非租户平面，只授权给超级用户或运维人员：
+另有四个端点位于**独立的身份令牌平面**，而非租户平面，只授权给超级用户或运维人员：
 
 | 端点 | 覆盖内容 |
 |---|---|
 | `/api/user-management/admin/graphql` | 实例管理 API：身份目录、成员关系、角色目录、租户注册表和等级 |
 | `/api/user-management/settings/graphql` | 实例设置 |
 | `/api/ai-inference/admin/graphql` | 运维人员注册的推理提供商 |
+| `/api/event-management/admin/graphql` | 每个租户的事件用量（`tenantEventUsage`），只读，供运维人员使用 |
 
 数据平面服务使用**基于能力的授权**：每个解析器检查调用者租户令牌携带的特定权限，例如 `device:write`。
 部分权限可能与直觉不同：
@@ -995,8 +997,6 @@ DeviceChain 提供的每个客户端每次请求只发送一次登录，所以�
 1. 找到登录流量来源，在上游阻止它。
 2. 如果流量合法，提高 `instance.config.infrastructure.nats.kvStateMaxBytes`。
    此大小适用于每个状态桶，因此确认 JetStream 卷有足够空间容纳增加的容量。
-
-Schema 稳定后，将根据它们生成详细的逐类型参考页面。
 
 `SECRET_RESUPPLY_REQUIRED` 表示更新会改变已存储凭据的目标或发送方式。使用 `updateConnector`、`updateNotificationChannel` 或 `updateAiProvider` 时，请在同一请求中重新发送 `secret`，或使用 `secret: null` 删除凭据。若连接器回滚的目标不同，请改用 `updateConnector` 并提供目标配置和凭据。
 

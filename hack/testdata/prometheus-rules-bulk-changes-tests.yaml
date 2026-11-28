@@ -265,7 +265,7 @@ tests:
       - series: 'devicechain_devicemanagement_bulk_change_reconciler_lag_seconds{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'
         values: '0x20'
     alert_rule_test:
-      - eval_time: 5m
+      - eval_time: 7m
         alertname: BulkChangesSettlementLagging
         exp_alerts:
           - exp_labels:
@@ -274,7 +274,7 @@ tests:
             exp_annotations:
               runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#bulkchangessettlementlagging"
               summary: "Bulk change settlement is lagging"
-              description: "An applied bulk change line is more than fifteen minutes past its settlement deadline, or a device report that could settle one has waited more than fifteen minutes, or no device-management pod can measure how long such reports have waited. Check the device-management logs for settlement task errors and failed reconciler lag measurements, and the database for load. Applied lines are not lost while this lags; they settle once the tasks catch up. An applied line is not proof that the device took the change, so read its evidence before resolving it by hand."
+              description: "An applied bulk change line is more than fifteen minutes past its settlement deadline, or a device report that could settle an applied line still without a verdict has waited more than fifteen minutes, or for five minutes no device-management pod has measured how long such reports have waited. A line its deadline already settled as ambiguous is not measured here; a late report still settles it. Check the device-management logs for settlement task errors and failed reconciler lag measurements, and the database for load. Applied lines are not lost while this lags; they settle once the tasks catch up. An applied line is not proof that the device took the change, so read its evidence before resolving it by hand."
 
   # The reconciler is over fifteen minutes behind. Fires.
   - interval: 1m
@@ -284,7 +284,7 @@ tests:
       - series: 'devicechain_devicemanagement_bulk_change_reconciler_lag_seconds{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'
         values: '1000x20'
     alert_rule_test:
-      - eval_time: 5m
+      - eval_time: 7m
         alertname: BulkChangesSettlementLagging
         exp_alerts:
           - exp_labels:
@@ -293,7 +293,7 @@ tests:
             exp_annotations:
               runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#bulkchangessettlementlagging"
               summary: "Bulk change settlement is lagging"
-              description: "An applied bulk change line is more than fifteen minutes past its settlement deadline, or a device report that could settle one has waited more than fifteen minutes, or no device-management pod can measure how long such reports have waited. Check the device-management logs for settlement task errors and failed reconciler lag measurements, and the database for load. Applied lines are not lost while this lags; they settle once the tasks catch up. An applied line is not proof that the device took the change, so read its evidence before resolving it by hand."
+              description: "An applied bulk change line is more than fifteen minutes past its settlement deadline, or a device report that could settle an applied line still without a verdict has waited more than fifteen minutes, or for five minutes no device-management pod has measured how long such reports have waited. A line its deadline already settled as ambiguous is not measured here; a late report still settles it. Check the device-management logs for settlement task errors and failed reconciler lag measurements, and the database for load. Applied lines are not lost while this lags; they settle once the tasks catch up. An applied line is not proof that the device took the change, so read its evidence before resolving it by hand."
 
   # No pod can measure the reconciler lag (every pod reads NaN, not measured). Fires: an
   # instance that cannot measure its lag must not read as one that has none.
@@ -308,7 +308,7 @@ tests:
       - series: 'devicechain_devicemanagement_bulk_change_reconciler_lag_seconds{namespace="dci-devicechain", pod="dc-device-management-bbbbb"}'
         values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
     alert_rule_test:
-      - eval_time: 5m
+      - eval_time: 7m
         alertname: BulkChangesSettlementLagging
         exp_alerts:
           - exp_labels:
@@ -317,7 +317,7 @@ tests:
             exp_annotations:
               runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#bulkchangessettlementlagging"
               summary: "Bulk change settlement is lagging"
-              description: "An applied bulk change line is more than fifteen minutes past its settlement deadline, or a device report that could settle one has waited more than fifteen minutes, or no device-management pod can measure how long such reports have waited. Check the device-management logs for settlement task errors and failed reconciler lag measurements, and the database for load. Applied lines are not lost while this lags; they settle once the tasks catch up. An applied line is not proof that the device took the change, so read its evidence before resolving it by hand."
+              description: "An applied bulk change line is more than fifteen minutes past its settlement deadline, or a device report that could settle an applied line still without a verdict has waited more than fifteen minutes, or for five minutes no device-management pod has measured how long such reports have waited. A line its deadline already settled as ambiguous is not measured here; a late report still settles it. Check the device-management logs for settlement task errors and failed reconciler lag measurements, and the database for load. Applied lines are not lost while this lags; they settle once the tasks catch up. An applied line is not proof that the device took the change, so read its evidence before resolving it by hand."
 
   # One pod cannot measure it; the other measured a healthy lag. Quiet: the measured value is the
   # instance's, and one pod's failure says nothing about the reports.
@@ -344,7 +344,7 @@ tests:
       - series: 'devicechain_devicemanagement_bulk_change_reconciler_lag_seconds{namespace="dci-devicechain", pod="dc-device-management-bbbbb"}'
         values: '1000x20'
     alert_rule_test:
-      - eval_time: 5m
+      - eval_time: 7m
         alertname: BulkChangesSettlementLagging
         exp_alerts:
           - exp_labels:
@@ -353,10 +353,29 @@ tests:
             exp_annotations:
               runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#bulkchangessettlementlagging"
               summary: "Bulk change settlement is lagging"
-              description: "An applied bulk change line is more than fifteen minutes past its settlement deadline, or a device report that could settle one has waited more than fifteen minutes, or no device-management pod can measure how long such reports have waited. Check the device-management logs for settlement task errors and failed reconciler lag measurements, and the database for load. Applied lines are not lost while this lags; they settle once the tasks catch up. An applied line is not proof that the device took the change, so read its evidence before resolving it by hand."
+              description: "An applied bulk change line is more than fifteen minutes past its settlement deadline, or a device report that could settle an applied line still without a verdict has waited more than fifteen minutes, or for five minutes no device-management pod has measured how long such reports have waited. A line its deadline already settled as ambiguous is not measured here; a late report still settles it. Check the device-management logs for settlement task errors and failed reconciler lag measurements, and the database for load. Applied lines are not lost while this lags; they settle once the tasks catch up. An applied line is not proof that the device took the change, so read its evidence before resolving it by hand."
+
+  # Every pod misses a few measurements in a row (each reads NaN for three minutes), then measures
+  # a healthy lag. Shorter than the rule's five minutes, so quiet: a missed pass or two is not an
+  # instance that cannot measure its lag.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_bulk_change_deadline_lag_seconds{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'
+        values: '0x20'
+      - series: 'devicechain_devicemanagement_bulk_change_reconciler_lag_seconds{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'
+        values: '2 2 NaN NaN NaN 2x15'
+      - series: 'devicechain_devicemanagement_bulk_change_reconciler_lag_seconds{namespace="dci-devicechain", pod="dc-device-management-bbbbb"}'
+        values: '2 2 NaN NaN NaN 2x15'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: BulkChangesSettlementLagging
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: BulkChangesSettlementLagging
+        exp_alerts: []
 
   # A fresh pod reads NaN until its first measurement, seconds after it starts. Shorter than the
-  # rule's minute, so quiet; then a healthy measurement keeps it quiet.
+  # rule's five minutes, so quiet; then a healthy measurement keeps it quiet.
   - interval: 30s
     input_series:
       - series: 'devicechain_devicemanagement_bulk_change_deadline_lag_seconds{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'

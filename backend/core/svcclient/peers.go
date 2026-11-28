@@ -36,8 +36,8 @@ func NewPeers(infra config.InfrastructureConfiguration, area string) *Peers {
 func (p *Peers) Area() string { return p.area }
 
 func (p *Peers) Ready() error {
-	if p.infra.ServiceAuth.Secret == "" {
-		return MissingError{Key: "infrastructure.serviceAuth.secret"}
+	if err := p.mintReady(); err != nil {
+		return err
 	}
 	if !p.infra.UserManagement.Endpoint().Configured() {
 		return MissingError{Key: "infrastructure.userManagement"}
@@ -81,11 +81,28 @@ func (p *Peers) UserManagement(authorities ...auth.Authority) (Seam, error) {
 
 // URL also supports existing sites that construct a client before the mint is ready.
 func (p *Peers) URL(target config.ServiceEndpoint) (string, error) {
-	if p.infra.ServiceAuth.Secret == "" {
-		return "", MissingError{Key: "infrastructure.serviceAuth.secret"}
+	if err := p.mintReady(); err != nil {
+		return "", err
 	}
 	if !target.Configured() {
 		return "", MissingError{Key: target.Key}
 	}
 	return target.GraphQLURL(), nil
+}
+
+// mintReady says whether this area holds what its mint needs. For an area in auth.AreaBoundCallers
+// that is its OWN mounted credential, and only that: a shared secret in its configuration does not
+// make it ready, and is never used (New discards it for an area-bound subject).
+func (p *Peers) mintReady() error {
+	if auth.IsAreaBoundCaller(p.area) {
+		path := auth.AreaMintCredentialFile(areaCredentialDir, p.area)
+		if _, err := readAreaCredential(path); err != nil {
+			return MissingError{Key: path}
+		}
+		return nil
+	}
+	if p.infra.ServiceAuth.Secret == "" {
+		return MissingError{Key: "infrastructure.serviceAuth.secret"}
+	}
+	return nil
 }

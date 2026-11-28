@@ -89,5 +89,9 @@ var (
 		NewEffectGenerationsSchema(),
 		NewRuleProvenanceSchema(),
 		NewFleetLineTenantAwaitingIndexSchema(),
+		NewFleetLineUnsettledIndexSchema(),
+		NewFleetOperationPurgedLineCountSchema(),
+		NewFleetLineEvidenceOpenIndexSchema(),
+		NewFleetLineEvidenceCloseIndexSchema(),
 	}
 )

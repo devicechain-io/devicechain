@@ -302,7 +302,10 @@ until it has been on screen for a moment, so keys typed ahead cannot approve any
 `dcctl setup local` is guided only. It needs stdin, stdout and stderr to be an interactive terminal
 (not CI, not `TERM=dumb`), and it has no `--yes`. Without a terminal it changes nothing and exits 2,
 naming the two commands to run instead. Its flags (`--kube-context`, `--cluster`, `--compact`,
-`--ha`, `--no-splash`) only set where the screens start; each can be changed on them.
+`--ha`, `--no-splash`) only set where the screens start; each can be changed on them. `--expose-lan`
+is not on the screens: it publishes the local cluster's ports on every host interface instead of
+127.0.0.1 only, and because kind fixes a cluster's ports when it creates it, the flag applies only
+when setup creates the cluster.
 
 If you leave or the instance fails after the cluster stage, the cluster stays installed. Setup says
 so and prints the exact `dcctl bootstrap … --ui=tui` command that creates the instance on the same

@@ -493,6 +493,8 @@ func (m *passphraseModel) screen(t bsTheme) bsScreen {
 	switch m.q.Question.Question {
 	case installflow.QuestionEscrowPassphraseConfirm:
 		title, ask = "Confirm the escrow passphrase", "Type the same passphrase again."
+	case installflow.QuestionEscrowExistingPassphrase:
+		title, ask = "Escrow passphrase", "Passphrase of the existing escrow at "+paramOf(m.q.Question, "artifact")
 	case installflow.QuestionEscrowRestorePassphrase:
 		title, ask = "Escrow passphrase", "Passphrase for the root-key escrow "+paramOf(m.q.Question, "artifact")+"."
 	default:

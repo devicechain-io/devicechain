@@ -86,7 +86,7 @@ A threshold can be a **fixed value** on the rule, or **dynamic**: the name of a 
 
 #### Dynamic thresholds in a CEL expression {#dynamic-thresholds-in-cel}
 
-In a CEL expression, the event's measurements are the map `m` and the device's attributes are the map `attr`, both from a key to a number. A key is in `attr` only while the device has a **numeric** value for it at `SERVER` or `SHARED` scope. It is absent when the attribute was never set, when it was set to something other than a number, when it was set with `CLIENT` scope, and for a short time after it is set, until the change reaches the detection engine.
+In a CEL expression, the event's measurements are the map `m` and the device's attributes are the map `attr`, both from a key to a number. A metric declared `STRING` is never in `m`, even when its text looks like a number, so a rule that names one can never fire. The console's rule form, and `validateDetectionRules` when it is given the profile's `metrics`, warn about such a rule with `namesStringMetric`; the rule is still saved. A key is in `attr` only while the device has a **numeric** value for it at `SERVER` or `SHARED` scope. It is absent when the attribute was never set, when it was set to something other than a number, when it was set with `CLIENT` scope, and for a short time after it is set, until the change reaches the detection engine.
 
 Test presence before you read a value. A dynamic threshold built on the form compiles to `"tempLimit" in attr && "temp" in m && m["temp"] > attr["tempLimit"]`, which does not fire for a device without the attribute. The form has no fallback value. To fall back to a fixed limit, write the fallback as its own comparison:
 

@@ -93,3 +93,32 @@ func TestRolloutSafetyRequiresFixedOptInOnTheWire(t *testing.T) {
 		require.Equal(t, model.CodeRolloutSafetyDisabled, code(resp))
 	}
 }
+
+// The console sends promoteUpdateRollout through a document with variables. A
+// variable declared non-null with a default is refused by validation, so the
+// exact document the console sends is run here, with and without the override.
+const consolePromoteDocument = `
+  mutation PromoteUpdateRollout($token: String!, $expectedCohort: Int!, $overrideFailure: Boolean = false) {
+    promoteUpdateRollout(token: $token, expectedCohort: $expectedCohort, overrideFailure: $overrideFailure) {
+      token currentCohort
+    }
+  }
+`
+
+func TestConsolePromoteDocumentValidatesAndRuns(t *testing.T) {
+	p, _ := rolloutPlane(t)
+	p.api.RolloutSafety = true
+	writer := p.ctx("acme", auth.ArtifactWrite)
+	require.Empty(t, p.exec(writer, `mutation { createUpdateRollout(request: {token: "console", artifactToken: "fw-1", groupToken: "fleet", maxInFlight: 1,
+ cohorts: [{name: "canary", deviceTokens: ["dev-1"]}, {name: "all", percentage: 100}]}) { token } }`, nil).Errors)
+	require.Empty(t, p.exec(writer, `mutation { startUpdateRollout(token: "console") { token } }`, nil).Errors)
+	require.NoError(t, p.api.RDB.DB(writer).Model(&model.UpdateAttempt{}).Where("device_token = ?", "dev-1").Update("state", string(ota.StateFailed)).Error)
+
+	// Validation must accept the document (an error here would not mention the failed cohort).
+	resp := p.exec(writer, consolePromoteDocument, map[string]any{"token": "console", "expectedCohort": 0})
+	require.NotEmpty(t, resp.Errors)
+	require.Contains(t, resp.Errors[0].Message, "overrideFailure")
+	resp = p.exec(writer, consolePromoteDocument, map[string]any{"token": "console", "expectedCohort": 0, "overrideFailure": true})
+	require.Empty(t, resp.Errors)
+	require.JSONEq(t, `{"promoteUpdateRollout":{"token":"console","currentCohort":1}}`, string(resp.Data))
+}

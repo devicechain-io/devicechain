@@ -275,11 +275,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hdr := w.Header()
+	setInertHeaders(hdr)
 	hdr.Set("Accept-Ranges", "bytes")
 	hdr.Set("ETag", etag)
-	hdr.Set("Cache-Control", "no-store")
-	hdr.Set("X-Content-Type-Options", "nosniff")
-	hdr.Set("Content-Type", target.Artifact.MediaType)
+	// The bytes are always served as an opaque attachment, whatever media type the artifact was
+	// declared with: this endpoint shares an origin with the console, so a body a browser would
+	// render must never be offered to one as a page. The declared type is catalogue metadata; it
+	// travels in a header of its own, never as the Content-Type.
+	hdr.Set("Content-Type", downloadContentType)
+	hdr.Set("Content-Disposition", `attachment; filename="`+attachmentName(artifactToken, target.Artifact.Version)+`"`)
+	hdr.Set(MediaTypeHeader, target.Artifact.MediaType)
 	hdr.Set("Content-Length", strconv.FormatInt(length, 10))
 	status := http.StatusOK
 	if partial {
@@ -304,8 +309,63 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // been read by the time it is called.
 func (h *Handler) refuse(w http.ResponseWriter, status int, result, msg string) {
 	h.metrics.result(result)
-	w.Header().Set("Cache-Control", "no-store")
+	setInertHeaders(w.Header())
 	http.Error(w, msg, status)
+}
+
+const (
+	// downloadContentType is the only Content-Type a download is ever served with.
+	downloadContentType = "application/octet-stream"
+	// MediaTypeHeader carries the artifact's declared media type, for a client that wants it.
+	MediaTypeHeader = "X-DeviceChain-Artifact-Media-Type"
+	// contentSecurityPolicy forbids a browser from running or loading anything from a response
+	// of this endpoint, should it ever be shown one in place of saving it.
+	contentSecurityPolicy = "sandbox; default-src 'none'"
+	// maxAttachmentName bounds the suggested filename.
+	maxAttachmentName = 128
+)
+
+// setInertHeaders sets the headers every response of this endpoint carries, refusals included: no
+// caching, no sniffing, and a policy under which nothing in the body can run.
+func setInertHeaders(hdr http.Header) {
+	hdr.Set("Cache-Control", "no-store")
+	hdr.Set("X-Content-Type-Options", "nosniff")
+	hdr.Set("Content-Security-Policy", contentSecurityPolicy)
+}
+
+// attachmentName derives the suggested filename of a download from the artifact token (already
+// held to the token grammar) and its version. The version is tenant text, so every byte outside
+// [A-Za-z0-9._-] becomes '_': the result can carry no quote, separator, path or control character,
+// and is plain ASCII. A name that would start with a dot is prefixed, so it is never hidden or
+// relative.
+func attachmentName(token, version string) string {
+	var b strings.Builder
+	write := func(s string) {
+		for i := 0; i < len(s) && b.Len() < maxAttachmentName; i++ {
+			c := s[i]
+			switch {
+			case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_', c == '.':
+				b.WriteByte(c)
+			default:
+				b.WriteByte('_')
+			}
+		}
+	}
+	write(token)
+	if version != "" && version != token {
+		if b.Len() > 0 {
+			write("-")
+		}
+		write(version)
+	}
+	name := b.String()
+	if name == "" || name[0] == '.' {
+		name = "artifact" + name
+		if len(name) > maxAttachmentName {
+			name = name[:maxAttachmentName]
+		}
+	}
+	return name
 }
 
 // stream copies exactly length bytes from body to w, re-arming the write deadline on every chunk. It

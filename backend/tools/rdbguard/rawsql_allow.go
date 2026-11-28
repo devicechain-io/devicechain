@@ -256,10 +256,12 @@ var rawSQLAllowList = []siteEntry{
 			"no row of entity_attributes or of any tenant table, so there is no tenant predicate to bypass.",
 	},
 	{
-		Path: "backend/services/device-management/model/fleet_operation_activation.go", Func: "CheckFleetOperationActivation", Count: 1,
-		Why: "LOCK TABLE entity_attributes IN ROW EXCLUSIVE MODE: a table-level lock taken before the guard's catalog " +
-			"is read, so that DISABLE or DROP TRIGGER waits for the transaction. It reads and writes no row of " +
-			"the table, so there is no tenant predicate to bypass; the SQL is a constant.",
+		Path: "backend/services/device-management/model/fleet_operation_activation.go", Func: "CheckFleetOperationActivation", Count: 2,
+		Why: "two statements, neither touching a row of entity_attributes. (1) LOCK TABLE entity_attributes IN ROW " +
+			"EXCLUSIVE MODE: a table-level lock taken before the guard's catalog is read, so that DISABLE or DROP " +
+			"TRIGGER waits for the transaction. (2) the one facts SELECT over pg_catalog (pg_trigger, pg_class, " +
+			"pg_proc, pg_db_role_setting) and current_setting; the name entity_attributes appears only as a " +
+			"relname literal compared against pg_class, so it reads no tenant data. Both SQL texts are constants.",
 	},
 	{
 		Path: "backend/services/device-management/model/position_classify.go", Func: "Api.ClassifyUnclassifiedAlarms", Count: 1,

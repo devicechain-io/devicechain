@@ -29,6 +29,7 @@ backend/cli/bootstrap/install_progress_test.go
 backend/cli/bootstrap/install_test.go
 backend/cli/bootstrap/instances.go
 backend/cli/bootstrap/kube.go
+backend/cli/bootstrap/kubesecrets.go
 backend/cli/bootstrap/objectstorewiring_test.go
 backend/cli/bootstrap/size_docs_test.go
 backend/cli/bootstrap/sizing_test.go
@@ -127,6 +128,7 @@ backend/services/device-management/model/authored_sim_alarm_wire_test.go
 backend/services/device-management/model/authored_sim_fleetpulse_command_test.go
 backend/services/device-management/model/fleet_operation_gate_test.go
 backend/services/device-management/processor/connect_snippet_golden_test.go
+backend/services/device-management/schema/migration_fleet_line_evidence_close_index_test.go
 backend/services/event-management/model/upgrade_notes_bounds_test.go
 backend/services/event-management/processor/backfill/deps_test.go
 backend/services/event-management/processor/backfill/plansource_test.go
@@ -154,6 +156,7 @@ backend/services/lwm2m-ingest/downlink/documents_test.go
 backend/services/mcp/server/alarm_suppression_test.go
 backend/services/mcp/server/command_cause_test.go
 backend/services/mcp/server/documents_test.go
+backend/services/mcp/server/tools_device_rolling_test.go
 backend/services/notification-management/processor/alarm_lookup_wire_test.go
 backend/services/notification-management/processor/documents_test.go
 backend/services/notification-management/processor/suppression_rolling_matrix_test.go
@@ -162,6 +165,7 @@ backend/services/outbound-connectors/lpwan/chirpstack_test.go
 backend/services/outbound-connectors/lpwan/documents_test.go
 backend/services/outbound-connectors/lpwan/tts_test.go
 backend/services/sparkplug-ingest/downlink/reasons_test.go
+backend/services/update-management/download/headers_test.go
 backend/services/update-management/model/edge_lockstep_test.go
 backend/services/update-management/profilecheck/documents_test.go
 backend/services/user-management/basemap/catalog_test.go

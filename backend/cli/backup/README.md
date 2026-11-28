@@ -116,5 +116,22 @@ port-forward resolution, with the same `--kube-context`, `--nats-url` and
 `--blob-directory` options as backup. It reads stream information and exports
 blob bytes into an in-memory pipe; it never calls NATS restore/reconciliation or
 writes target files/objects. Freeze target mutations while planning. The output
-is an observation, not a lock or authorization for a later restore. `--plan` is
-mandatory and no apply operation exists.
+is an observation, not a lock or authorization for a later restore.
+
+`dcctl restore <instance> --from <set> --apply --only object-store` is the one
+apply that exists (`ApplyObjects`, apply.go); stream restore is not implemented
+and `--apply` without `--only object-store` is refused. After `PrepareRestore`
+it refuses, before any write: a foreign identity (references in the restored
+database carry the source instance and backend, so this is not migrated), a
+saved object whose backend differs from the target's, and, without
+`--overwrite-target`, any target object that differs from the backup or is not
+in it. It writes only objects missing (or, with the flag, differing) on the
+target, so a re-run finishes an interrupted restore; it never deletes. Each
+object is staged and checked against the verified index again while the
+snapshot is streamed a second time: filesystem objects go to a `.put-restore-*`
+temp beside the key and are committed with a hard link (no clobber) or, when
+replacing, a rename, all through `os.Root`; S3 objects are spooled to a local
+temp and put with the verified SHA-256 as `x-amz-checksum-sha256` and, for a
+new key, `If-None-Match: *`. The target is exported again at the end and must
+hold every backup object. A missing instance directory stays an error. A run first removes `.put-restore-*` files a hard-killed run left under the instance directory (that prefix only, through `os.Root`; an in-flight blob-store `.put-*` is still refused). An S3 object larger than one PutObject (5 GiB) is refused before the first write; multipart restore is not implemented. The filesystem target must support hard links.
+`apply_minio_integration_test.go` (tag `integration`) runs it against MinIO.

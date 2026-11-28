@@ -171,7 +171,7 @@ dcctl bootstrap local prod --kube-context prod --host iot.example.com --ui=tui
 
 实例的任何部分都不会在没有其自身批准的情况下运行，集群的批准也不会回答实例运行提出的任何问题。每个会继续往下走的屏幕（交接屏幕和两个审核屏幕）在显示片刻之前不接受按键，因此提前输入的按键无法批准任何操作。
 
-`dcctl setup local` 只能以引导方式使用。它要求 stdin、stdout 和 stderr 都是交互式终端（不是 CI，也不是 `TERM=dumb`），并且没有 `--yes`。没有终端时它不做任何更改，以 2 退出，并给出应改为运行的两个命令。它的标志（`--kube-context`、`--cluster`、`--compact`、`--ha`、`--no-splash`）只决定屏幕的起始值，每一项都可以在屏幕上更改。
+`dcctl setup local` 只能以引导方式使用。它要求 stdin、stdout 和 stderr 都是交互式终端（不是 CI，也不是 `TERM=dumb`），并且没有 `--yes`。没有终端时它不做任何更改，以 2 退出，并给出应改为运行的两个命令。它的标志（`--kube-context`、`--cluster`、`--compact`、`--ha`、`--no-splash`）只决定屏幕的起始值，每一项都可以在屏幕上更改。`--expose-lan` 不在屏幕上：它把本地集群的端口发布到主机的所有网络接口上，而不只是 127.0.0.1；由于 kind 在创建集群时就固定了端口，该标志仅在 setup 创建集群时生效。
 
 如果在集群阶段之后退出或实例创建失败，集群仍保持已安装状态。setup 会说明这一点，并打印在同样的屏幕上创建该实例的确切 `dcctl bootstrap … --ui=tui` 命令：如果已经做出选择，则包含你所做的选择。
 
