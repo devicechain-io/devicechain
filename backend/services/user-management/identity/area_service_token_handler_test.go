@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -354,5 +355,33 @@ func TestAreaMintMetricsArePreSeeded(t *testing.T) {
 	want := (len(auth.AreaBoundCallerNames()) + 1) * len(AreaMintResults)
 	if n != want {
 		t.Fatalf("pre-seeded %d series, want %d", n, want)
+	}
+}
+
+// Two areas configured with ONE credential: the request is refused, never resolved to either area
+// (not the first listed, not the first sorted), and nothing is issued.
+func TestAreaMintRefusesAnAmbiguousCredential(t *testing.T) {
+	for _, order := range [][]string{{"automation", "spare"}, {"spare", "automation"}} {
+		f := newAreaMintFixture(t)
+		f.creds = map[string]string{"automation": automationCredential, "spare": automationCredential}
+		h := AreaServiceTokenHandler(order, f.credential, f.issue, f.check, f.metrics)
+		req := httptest.NewRequest(http.MethodPost, auth.AreaServiceTokenPath, strings.NewReader(`{"authorities":["device:read"]}`))
+		req.Header.Set(auth.AreaCredentialHeader, automationCredential)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized || len(f.issued) != 0 {
+			t.Fatalf("order %v: code=%d issued=%v", order, rec.Code, f.issued)
+		}
+		if strings.Contains(rec.Body.String(), automationCredential) {
+			t.Fatal("the credential is in the response")
+		}
+	}
+}
+
+// The two sides of the area-bound mint apply the same length floor.
+func TestAreaCredentialFloorsAgree(t *testing.T) {
+	if auth.MinAreaCredentialLen != credential.MinSharedCredentialLen {
+		t.Fatalf("auth.MinAreaCredentialLen = %d, credential.MinSharedCredentialLen = %d",
+			auth.MinAreaCredentialLen, credential.MinSharedCredentialLen)
 	}
 }

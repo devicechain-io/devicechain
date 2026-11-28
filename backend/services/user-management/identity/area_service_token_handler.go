@@ -4,8 +4,6 @@
 package identity
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,6 +13,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/rs/zerolog/log"
@@ -130,9 +129,17 @@ func AreaServiceTokenHandler(
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		area, configured := matchAreaCredential(areas, credential, r.Header.Get(auth.AreaCredentialHeader))
+		area, configured, err := matchAreaCredential(areas, credential, r.Header.Get(auth.AreaCredentialHeader))
 		if configured == 0 {
 			http.Error(w, "area-bound service-token minting is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		if err != nil {
+			// Two areas share one credential: answering with either would let it act as the other.
+			metrics.record(auth.UnknownCallerLabel, AreaMintBadCredential)
+			log.Error().Msg("area-bound service-token request refused: the presented credential is configured for more than one area; " +
+				"give each area-bound area a credential of its own")
+			http.Error(w, "area credentials are not distinct; refusing to choose an area", http.StatusUnauthorized)
 			return
 		}
 		if area == "" {
@@ -172,28 +179,21 @@ func AreaServiceTokenHandler(
 	}), maxMintBodyBytes)
 }
 
-// matchAreaCredential returns the area whose configured credential equals presented ("" for none)
-// and how many areas have a usable credential configured. Every configured credential is compared,
-// under a constant-time compare of fixed-width digests, whether or not an earlier one matched, so
-// the answer's timing says nothing about which area (or how much of a credential) was right.
-func matchAreaCredential(areas []string, credential func(string) (string, error), presented string) (string, int) {
-	got := sha256.Sum256([]byte(presented))
-	matched, configured := "", 0
+// matchAreaCredential reads every area's configured credential and hands the compare to the
+// credential primitive (credential.MatchSharedCredential): every configured credential compared in
+// constant time over SHA-256 digests with no early exit, the length floor on both sides, and a value
+// configured for two areas refused rather than resolved to one. A credential that cannot be read is
+// that area having none.
+func matchAreaCredential(areas []string, read func(string) (string, error), presented string) (string, int, error) {
+	configured := make([]credential.ConfiguredCredential, 0, len(areas))
 	for _, a := range areas {
-		c, err := credential(a)
-		if err != nil || len(c) < auth.MinAreaCredentialLen {
-			continue
+		c, err := read(a)
+		if err != nil {
+			c = ""
 		}
-		configured++
-		want := sha256.Sum256([]byte(c))
-		if subtle.ConstantTimeCompare(got[:], want[:]) == 1 && matched == "" {
-			matched = a
-		}
+		configured = append(configured, credential.ConfiguredCredential{Name: a, Value: c})
 	}
-	if len(presented) < auth.MinAreaCredentialLen {
-		return "", configured
-	}
-	return matched, configured
+	return credential.MatchSharedCredential(presented, configured)
 }
 
 var errAreaMintSubject = errors.New("invalid request body: an area-bound mint takes no subject; the subject is the area whose credential matched")
