@@ -219,6 +219,43 @@ func TestARetriedUpdatedReportRestoresAnInstalledVersionThatFailedToWrite(t *tes
 	require.True(t, got.ObservedAt.Equal(updatedAt.Add(-time.Second)), "repair keeps the completing report's broker time")
 }
 
+func TestARepairOfAnAttemptWithNoStoredCompletionTimeFallsBackToItsLastReportTime(t *testing.T) {
+	e := newUpdateEnv(t)
+	ctx := tenantCtx("acme")
+	e.availableArtifact(t, "acme", "fw-3", "3.1.0", []byte("firmware three"))
+	v, err := e.api.AssignArtifact(ctx, "dev-1", "fw-3")
+	require.NoError(t, err)
+	e.mustApply(t, "acme", "dev-1", progress(v, 1, ota.StageInstalling, "b"), ota.VerdictApplied)
+	report := running(v, 2, "b2")
+	e.advance(time.Minute)
+	completedAt := e.clock
+	verdict, err := e.api.ApplyReport(WithObservedAt(ctx, completedAt.Add(-time.Second)), "dev-1", report)
+	require.NoError(t, err)
+	require.Equal(t, ota.VerdictApplied, verdict)
+
+	// An attempt an older release completed has no stored completion time, and its installed-version
+	// write is missing.
+	db := e.api.RDB.DB(ctx)
+	require.NoError(t, db.Model(&UpdateAttempt{}).Where("device_token = ?", "dev-1").Update("updated_observed_at", nil).Error)
+	var row UpdateAttempt
+	require.NoError(t, db.Where("device_token = ?", "dev-1").First(&row).Error)
+	require.False(t, row.UpdatedObservedAt.Valid)
+	require.Equal(t, string(ota.StateUpdated), row.State)
+	require.NoError(t, db.Where("device_token = ?", "dev-1").Delete(&DeviceInstalledComponent{}).Error)
+	require.Empty(t, installed(t, e, "acme", "dev-1"))
+
+	// The final report is resent later, as a new message with a later broker time.
+	e.advance(time.Hour)
+	resentAt := e.clock
+	verdict, err = e.api.ApplyReport(WithObservedAt(ctx, resentAt), "dev-1", report)
+	require.NoError(t, err)
+	require.Equal(t, ota.VerdictDuplicate, verdict)
+	got := installed(t, e, "acme", "dev-1")["firmware"]
+	require.Equal(t, "3.1.0", got.Version)
+	require.False(t, got.ObservedAt.Equal(resentAt), "the resent message's time must not stand in for the completion time")
+	require.True(t, got.ObservedAt.Equal(row.LastReportAt), "the repair falls back to the attempt's last report time")
+}
+
 func TestAResentUpdatedReportDoesNotOverwriteANewerInstalledVersion(t *testing.T) {
 	for _, newer := range []string{"assignment", "inventory"} {
 		t.Run(newer, func(t *testing.T) {
