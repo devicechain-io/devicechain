@@ -21,13 +21,16 @@ import (
 // from applying one line twice. The service schedules it through RunFleetDriver only when ledger.Served.
 //
 //	0  yield to a control request for 30 seconds on the database clock
+//	   then the COMPLETION: nothing left PLANNED means the operation is DISPATCHED, whatever its counts.
+//	   A threshold pauses what is still to be posted; once nothing is, there is nothing to hold back, and
+//	   the pass that posted the last line may not be the one that finishes (a replica stopped, a race).
 //	1  a LEASE: a fresh, uncached answer from user-management that the grantee still holds the authorities,
 //	   good for five seconds from the moment the question was SENT (a slow answer does not stretch it)
 //	2  the thresholds: a failure or ambiguity count at its limit pauses the operation
 //	3  PERMITS: how many posting attempts this operation may start in this second, taken from the database
 //	4  the HINTS: the due PLANNED lines in ordinal order (an unlocked read, no claim)
 //	5  the posts, a few at a time, each a PostFleetLine
-//	6  the completion: nothing left PLANNED means the operation is DISPATCHED
+//	6  the completion again, for the pass that posted the last line
 
 // Pause reasons the driver writes, and the holds it reports (a hold waits; it never pauses).
 const (
@@ -113,12 +116,27 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 		res.Hold = FleetHoldControlPending
 		return res, nil
 	}
+	// Completion comes before every pause: the thresholds and the dependency clock only hold back lines
+	// still to be posted, and a finished operation paused by them could never be resumed (its counts
+	// never fall) nor reach DISPATCHED.
+	var planned int64
+	if err := db.Model(&FleetOperationLine{}).Where("operation_id = ? AND posting = ?", op.ID, FleetPostingPlanned).Count(&planned).Error; err != nil {
+		return nil, err
+	}
+	if planned == 0 {
+		return api.finishDriven(ctx, res, op)
+	}
 	// A continuous POST_ERROR hold is the first failure time, on the database clock.
 	// Recheck that retrying lines remain: a stale hold alone must never pause a finished operation.
+	// The clock never starts before this execution epoch did: a hold carried across a pause and a
+	// resume is the earlier epoch's, and a resume whose clear of it was lost (a stopped process, a
+	// failed statement) must still give the resumed operation its own 24 hours.
 	var unavailable int64
+	dependencyCutoff := fleetTimestampAfter(db, -24*time.Hour, time.Time{})
 	if err := db.Model(&FleetOperationRuntime{}).
-		Where("operation_id = ? AND hold_code = ? AND hold_since <= ?", op.ID, FleetHoldPostError,
-			fleetTimestampAfter(db, -24*time.Hour, time.Time{})).
+		Where("operation_id = ? AND hold_code = ? AND hold_since <= ?", op.ID, FleetHoldPostError, dependencyCutoff).
+		Where("EXISTS (?)", db.Model(&FleetOperation{}).Select("1").
+			Where("id = ? AND execution_epoch = ? AND state_changed_at <= ?", op.ID, op.ExecutionEpoch, dependencyCutoff)).
 		Where("EXISTS (?)", fleetDependencyLines(db, op.ID).Select("1")).Count(&unavailable).Error; err != nil {
 		return nil, err
 	}
@@ -166,13 +184,6 @@ func (api *Api) DriveFleetOperation(ctx context.Context, token string, caps Flee
 	}
 
 	// 3-4. Permits, then the due lines.
-	var planned int64
-	if err := db.Model(&FleetOperationLine{}).Where("operation_id = ? AND posting = ?", op.ID, FleetPostingPlanned).Count(&planned).Error; err != nil {
-		return nil, err
-	}
-	if planned == 0 {
-		return api.finishDriven(ctx, res, op)
-	}
 	allowed, err := api.fleetAllowed(ctx, op, caps)
 	if err != nil {
 		return nil, err

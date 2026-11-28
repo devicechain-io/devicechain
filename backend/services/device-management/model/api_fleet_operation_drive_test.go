@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"testing"
@@ -68,6 +69,10 @@ func driveFixture(t *testing.T, n int, safety FleetSafetyRequest) *driveEnv {
 	prev := fleetClock
 	fleetClock = func() time.Time { return e.now }
 	t.Cleanup(func() { fleetClock = prev })
+	// The start ran on the real clock; on the fixture's, the epoch begins now. The dependency clock
+	// never starts before the epoch did, so a fixture epoch from the future would never let it run.
+	require.NoError(t, api.RDB.DB(ctx).Model(&FleetOperation{}).Where("id = ?", op.ID).Update("state_changed_at", e.now).Error)
+	op.StateChangedAt = sql.NullTime{Time: e.now, Valid: true}
 	return e
 }
 
@@ -546,7 +551,7 @@ func TestAPassThatFailsBeforeDecidingLeavesTheHoldAlone(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, FleetHoldRateLimit, held.HoldCode)
 
-	// The next pass gets its lease and then fails reading the lines: it decided nothing about the hold.
+	// The next pass fails reading the lines: it decided nothing about the hold.
 	broken := errors.New("lines unreadable")
 	failing := true
 	require.NoError(t, e.api.RDB.DB(e.ctx).Callback().Query().After("gorm:query").Register("test:fail_lines", func(d *gorm.DB) {

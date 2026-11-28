@@ -69,16 +69,20 @@ func TestFleetPostgresRetryDeadlineUsesDatabaseTime(t *testing.T) {
 	}
 	t.Cleanup(func() { fleetClock = old })
 	require.NoError(t, api.RecordFleetLineRetry(context.Background(), 42, "DEVICE_BUSY", time.Now().Add(3*time.Second)))
-	require.Len(t, recorder.calls, 2)
-	q := strings.ToLower(recorder.calls[1].query)
-	require.Contains(t, q, "next_attempt_at")
-	require.Contains(t, q, "clock_timestamp()")
-	for _, arg := range recorder.calls[1].args {
-		_, isTime := arg.(time.Time)
-		require.False(t, isTime)
-		_, isNullTime := arg.(sql.NullTime)
-		require.False(t, isNullTime)
+	// The line's retry, then the operation's last error: both stamped on the database's clock.
+	require.Len(t, recorder.calls, 3)
+	for i, column := range map[int]string{1: "next_attempt_at", 2: "last_error_at"} {
+		q := strings.ToLower(recorder.calls[i].query)
+		require.Contains(t, q, column)
+		require.Contains(t, q, "clock_timestamp()")
+		for _, arg := range recorder.calls[i].args {
+			_, isTime := arg.(time.Time)
+			require.False(t, isTime)
+			_, isNullTime := arg.(sql.NullTime)
+			require.False(t, isNullTime)
+		}
 	}
+	require.Contains(t, strings.ToLower(recorder.calls[2].query), "fleet_operation_runtime")
 }
 
 func (r *fleetSQLRecorder) ExecContext(_ context.Context, q string, args ...any) (sql.Result, error) {

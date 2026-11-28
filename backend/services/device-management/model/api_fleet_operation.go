@@ -405,6 +405,12 @@ type FleetOperationSearchResults struct {
 }
 
 func (api *Api) FleetOperations(ctx context.Context, c FleetOperationSearchCriteria) (*FleetOperationSearchResults, error) {
+	if c.Dispatch != nil && !fleetDispatchFilterable(ledger.Dispatch(*c.Dispatch)) {
+		return nil, fleetFilterRefused("dispatch", *c.Dispatch)
+	}
+	if c.Evidence != nil && !ledger.Evidence(*c.Evidence).Valid() {
+		return nil, fleetFilterRefused("evidence", *c.Evidence)
+	}
 	results := make([]FleetOperation, 0)
 	db, pag := api.RDB.ListOf(ctx, &FleetOperation{}, func(r *gorm.DB) *gorm.DB {
 		if c.Dispatch != nil {
@@ -430,6 +436,27 @@ type FleetLineSearchCriteria struct {
 	Posting    *string
 	Settlement *string
 	Code       *string
+	// AfterOrdinal keeps only the lines after this ordinal. Paging on it is a keyset: a line that
+	// leaves the filtered set between two pages cannot shift a later one past the reader, as it can
+	// with a page number over a set the driver and the reconciler keep changing.
+	AfterOrdinal *int32
+}
+
+// The posting, settlement, dispatch and evidence filters name closed vocabularies the database
+// constrains, so a value outside them can never match a row. It is refused rather than answered with an
+// empty page, which would read as "there are none". The values a later release reserves (and the served
+// enums already list) are accepted: they are names, and nothing holds them yet. Kind and code are open
+// vocabularies, filtered as given.
+func fleetDispatchFilterable(v ledger.Dispatch) bool {
+	return v.Valid() || v == ledger.DispatchDraft
+}
+
+func fleetPostingFilterable(v ledger.Posting) bool {
+	return v.Valid() || v == ledger.PostingDispatching || v == ledger.PostingUnknown
+}
+
+func fleetFilterRefused(field, value string) error {
+	return fleetErr(FleetCodeInvalidRequest, "%q is not a bulk change %s state", value, field)
 }
 
 // FleetLineSearchResults is one page of lines.
@@ -440,6 +467,12 @@ type FleetLineSearchResults struct {
 
 // FleetOperationLines pages one operation's lines in ordinal order.
 func (api *Api) FleetOperationLines(ctx context.Context, token string, c FleetLineSearchCriteria) (*FleetLineSearchResults, error) {
+	if c.Posting != nil && !fleetPostingFilterable(ledger.Posting(*c.Posting)) {
+		return nil, fleetFilterRefused("posting", *c.Posting)
+	}
+	if c.Settlement != nil && !ledger.Settlement(*c.Settlement).Valid() {
+		return nil, fleetFilterRefused("settlement", *c.Settlement)
+	}
 	op, err := api.fleetOperationByToken(ctx, token)
 	if err != nil {
 		return nil, err
@@ -450,6 +483,9 @@ func (api *Api) FleetOperationLines(ctx context.Context, token string, c FleetLi
 	results := make([]FleetOperationLine, 0)
 	db, pag := api.RDB.ListOf(ctx, &FleetOperationLine{}, func(r *gorm.DB) *gorm.DB {
 		r = r.Where("operation_id = ?", op.ID)
+		if c.AfterOrdinal != nil {
+			r = r.Where("ordinal > ?", *c.AfterOrdinal)
+		}
 		if c.Posting != nil {
 			r = r.Where("posting = ?", *c.Posting)
 		}

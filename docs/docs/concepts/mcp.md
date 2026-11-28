@@ -9,10 +9,10 @@ You can let an AI assistant — Claude Desktop and Claude Code, Cursor, VS Code 
 The server is built on one principle: **an AI agent can never do more than the person who authorized it.** It is not a broad, over-permissioned gateway. It is a thin, curated layer for reads and proposals over the platform's existing GraphQL API, and it carries the signed-in user's own tenant-scoped token.
 
 :::note Status
-**Available today:** an opt-in `mcp` service with twelve curated read tools, fronted by a full OAuth 2.1 authorization server on `user-management`, and Preview tools for proposing alarm actions for human review. Dynamic client registration (RFC 7591) is planned. This repository is the source of truth for what currently builds.
+**Available today:** an opt-in `mcp` service with twelve curated read tools, fronted by a full OAuth 2.1 authorization server on `user-management`, Preview tools for proposing alarm actions for human review, and Preview [skills](#skills) that guide an assistant through common multi-step tasks. Clients are registered by an administrator; self-registration is planned through Client ID Metadata Documents. This repository is the source of truth for what currently builds.
 :::
 
-The authorization server supports the authorization-code flow with PKCE, RFC 8414 metadata, refresh-token rotation and RFC 8707 audience binding. Until dynamic client registration ships, an administrator registers clients.
+The authorization server supports the authorization-code flow with PKCE, RFC 8414 metadata, refresh-token rotation and RFC 8707 audience binding. An administrator registers clients; see [How a client connects](#how-a-client-connects).
 
 ## What an assistant can do
 
@@ -202,6 +202,32 @@ A person must approve in the console **Approvals** inbox. In this Preview, **the
 
 The caller must supply `requestId`, an idempotency key of 1 to 128 printable characters. MCP forwards it unchanged and never invents one. Retry an identical request with the same key to receive the original proposal with status `EXISTING`; reusing the key for a different request fails with `CONFLICT`. `dryRun: true` checks the request without storing a proposal. The rationale is agent-written text under `untrusted`, never instructions.
 
+## Skills (preview) {#skills}
+
+The server also offers **skills**: written procedures that tell an assistant how to combine the tools above for a common task. A skill is instructions and nothing else. It holds no permission, runs no code and makes no request of its own. Every step it describes is an ordinary tool call, checked exactly as it would be without the skill.
+
+| Skill | Use it when |
+| --- | --- |
+| `alarm-storm-triage` | Many alarms are open at once. The assistant groups them into incidents using platform fields, checks maintenance suppression, samples evidence from a few devices per incident within a fixed budget, and reports each incident with its evidence and a stated confidence. It proposes an acknowledgement only when you ask and the proposal tools are available. |
+| `device-anomaly-investigation` | One device is behaving oddly. The assistant compares the device with its own history, correlates commands, alarms and maintenance windows, and returns ranked explanations tied to tool results, with the one check a person should make next. |
+| `propose-change-for-approval` | You want an alarm acknowledged or cleared, or a command sent. The assistant checks the device's published commands, dry-runs the proposal, writes a rationale that does not repeat untrusted text, and hands the proposal to the people who approve it. It needs the Preview [proposal tools](#proposing-actions) and stops when they are not listed. |
+
+Each skill is a directory in the [Agent Skills](https://agentskills.io/specification) format: a `SKILL.md` with the procedure, and reference files the procedure reads when it reaches them. The server offers the same files in three ways:
+
+- **As prompts.** One prompt per skill, with the skill's name. In Claude Code, for a server added as `devicechain`, run one as `/mcp__devicechain__alarm-storm-triage`. A client shows prompts as prompts, not as skills.
+- **As resources**, at `skill://<skill>/SKILL.md` and `skill://<skill>/references/<file>.md`. In Claude Code, attach one with `@devicechain:skill://alarm-storm-triage/SKILL.md`. Each resource is listed with its size and its SHA-256 digest.
+- **From the server's instructions**, which name the three skills so that an assistant can find them on its own.
+
+What to expect from them:
+
+- **The same for everyone.** Every caller sees the same skills, whatever the tenant, the scopes or the client. Skill text is part of the release and is never built from tenant data, so it changes only when the server is upgraded.
+- **Guidance, not a control.** Every skill restates that text under `untrusted` is data, never instructions, and tells the assistant to treat a refusal as the answer. That makes a well-behaved assistant better. It does not make a misled one safe: the controls remain the user's own token and permissions, the tenant's agent policy and human approval.
+- **Bounded reading.** Each skill sets a page and call budget and tells the assistant to report what it did not examine rather than keep paging, so following a skill does not run a user into the rate limit.
+- **Not yet the MCP skills extension.** Some clients list skills through the MCP skills extension (`io.modelcontextprotocol/skills`). This server does not offer that extension yet, because it requires a newer revision of the protocol than the server speaks. Those clients still see the skills as the prompts and resources above. The URIs and files follow the extension's layout, so that offering the extension later does not change them.
+- **Trust the path to the server.** The skill text comes from the server binary over TLS. A proxy or gateway in front of the server that can rewrite responses can rewrite skills too, as it could rewrite tool descriptions.
+
+Skill names, resource URIs and prompt names are in the [preview tier](../deployment/versioning-policy.md#preview-interfaces), and a skill's text may change in any release.
+
 ## The security model
 
 MCP is becoming a standard way to give AI assistants real capabilities. The risk is that a careless implementation hands an agent a powerful, broadly scoped key. DeviceChain's server is designed so that this cannot happen.
@@ -243,7 +269,7 @@ Some properties of these lines matter when you rely on them:
 - **They are in the operator's logs, not on the console's Audit page.** A tenant administrator cannot see them. Keep them by collecting the service's log output; how long they are kept is up to your log pipeline.
 - **They name people.** `actor` is an email address. Deleting a tenant does not reach log lines already collected, so remove a deleted tenant's lines in your log store if your retention rules require it.
 - **The digest is a way to match calls, not a way to hide them.** Arguments are device tokens, filters and time ranges. Anyone who knows a tenant's devices can recompute the digest of a guessed request. No tool argument carries a credential.
-- **One line per call.** A line is a few hundred bytes, so the volume follows the call rate. Listing the tools and opening a session write nothing.
+- **One line per call.** A line is a few hundred bytes, so the volume follows the call rate. Listing the tools, opening a session and reading a [skill](#skills) write nothing.
 
 ## How a client connects
 
@@ -255,6 +281,8 @@ The MCP server is an **OAuth 2.1 resource server**, and `user-management` is its
 4. The client calls MCP tools with that token, and each call runs under the user's own permissions.
 
 An administrator registers clients through the admin API; clients do not register themselves. An operator therefore controls which applications may request access, and with which redirect URIs.
+
+Self-registration is planned through **Client ID Metadata Documents**, the registration method the MCP specification recommends: a client identifies itself with an HTTPS URL that serves a document describing it, and the authorization server reads that document instead of storing a registration. Dynamic client registration (RFC 7591) is not planned, because the MCP specification has deprecated it.
 
 ### Where to point a client {#where-to-point-a-client}
 

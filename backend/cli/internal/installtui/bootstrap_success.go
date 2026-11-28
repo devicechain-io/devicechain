@@ -39,7 +39,13 @@ const passphraseFilePlaceholder = "<file holding the escrow passphrase>"
 // only as a placeholder for a protected file. targetArgs are the target's flags
 // (--kube-context or --cluster) as the command line had them.
 func BootstrapCommand(in InstanceChoices, esc EscrowChoice, targetArgs []string) string {
-	argv := quoteArgs(BootstrapArgs(in, esc, targetArgs))
+	return BootstrapCommandOf(BootstrapArgs(in, esc, targetArgs), esc)
+}
+
+// BootstrapCommandOf is BootstrapCommand for a command line already composed, word by
+// word and unquoted (BootstrapArgs, as the command layer may have adjusted it).
+func BootstrapCommandOf(words []string, esc EscrowChoice) string {
+	argv := quoteArgs(words)
 	if esc.Mode != EscrowNone {
 		argv = append(argv, "--escrow-passphrase-file="+passphraseFilePlaceholder)
 	}
@@ -49,9 +55,10 @@ func BootstrapCommand(in InstanceChoices, esc EscrowChoice, targetArgs []string)
 // BootstrapContinueCommand is the command that builds the chosen instance later, by
 // hand, as a POSIX command line: the same flags as BootstrapCommand, but with no
 // --yes and no passphrase file, so the bootstrap asks for the passphrase at the
-// terminal, as a person running it expects.
+// terminal, as a person running it expects, and with --ui=tui, so it opens on these
+// same screens, the choices seeded from its flags.
 func BootstrapContinueCommand(in InstanceChoices, esc EscrowChoice, targetArgs []string) string {
-	return strings.Join(quoteArgs(BootstrapArgs(in, esc, targetArgs)), " ")
+	return strings.Join(append(quoteArgs(BootstrapArgs(in, esc, targetArgs)), "--ui=tui"), " ")
 }
 
 // BootstrapArgs is the bootstrap command line the choices describe, word by word

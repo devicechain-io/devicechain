@@ -34,6 +34,9 @@ func TestStatusEveryRule(t *testing.T) {
 		{"standing unknown", healthy, StandingUnknown, HealthOK, StateBlocked, "OWNER_STANDING_UNKNOWN"},
 		{"owner not qualified", healthy, StandingNotQualified, HealthOK, StateBlocked, "OWNER_NOT_QUALIFIED"},
 		{"owner reinstated", healthy, StandingQualifies, HealthOK, StateSatisfied, ""},
+		// An owner who does not qualify records no plan, so standing is judged with or without one.
+		{"standing unknown with no plan yet", nil, StandingUnknown, HealthOK, StateBlocked, "OWNER_STANDING_UNKNOWN"},
+		{"owner not qualified with no plan yet", nil, StandingNotQualified, HealthOK, StateBlocked, "OWNER_NOT_QUALIFIED"},
 
 		// The diff.
 		{"empty target", facts(Counts{}), StandingQualifies, HealthOK, StateSatisfied, "EMPTY_TARGET"},
@@ -58,6 +61,7 @@ func TestStatusEveryRule(t *testing.T) {
 // evaluation is ever SATISFIED or CONVERGING.
 func TestStatusIsTotalAndFailsClosed(t *testing.T) {
 	shapes := []*PlanFacts{
+		nil,
 		facts(Counts{}), facts(Counts{InSync: 1}), facts(Counts{Drifted: 1}), facts(Counts{KeyUndeclared: 1}),
 		facts(Counts{DeclaredTypeMismatch: 1, InSync: 1}), {TargetRejectedCode: "X"}, {CeilingExceeded: true},
 	}
@@ -66,6 +70,12 @@ func TestStatusIsTotalAndFailsClosed(t *testing.T) {
 		for _, s := range []Standing{StandingUnknown, StandingQualifies, StandingNotQualified} {
 			for _, h := range []Health{HealthOK, HealthDependencyUnavailable, HealthObservationUnstable} {
 				state, code, err := Status(f, s, h)
+				if f == nil && s == StandingQualifies && h == HealthOK {
+					if !errors.Is(err, ErrNoPlan) {
+						t.Errorf("Status(nil, qualifies, OK) = %s(%s), %v; want ErrNoPlan", state, code, err)
+					}
+					continue
+				}
 				if err != nil {
 					t.Fatalf("Status(%+v, %d, %q): %v", f, s, h, err)
 				}

@@ -1,0 +1,7 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Skill files are served byte for byte and pinned by SHA-256 (testdata/skills.sha256).
+# A checkout that converted them to CRLF would serve different bytes than CI pins.
+skills/** text eol=lf
+testdata/skills.sha256 text eol=lf
