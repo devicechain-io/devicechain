@@ -92,5 +92,6 @@ var (
 		NewFleetLineUnsettledIndexSchema(),
 		NewFleetOperationPurgedLineCountSchema(),
 		NewFleetLineEvidenceOpenIndexSchema(),
+		NewFleetLineEvidenceCloseIndexSchema(),
 	}
 )

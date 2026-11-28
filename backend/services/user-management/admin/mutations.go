@@ -95,11 +95,31 @@ func (s *Service) SetIdentityEnabled(ctx context.Context, email string, enabled 
 	return s.loadIdentity(ctx, email)
 }
 
-// SetSystemRoles replaces an identity's system-role assignments.
+// CodeInvitationPassword is the wire code of ErrInvitationPassword.
+const CodeInvitationPassword = "INVITATION_PASSWORD"
+
+// ErrInvitationPassword refuses an operator grant to an identity whose password was set by
+// accepting a tenant invitation (iam.Identity.PasswordFromInvitation).
+//
+// 🔴 SUCH A PASSWORD PROVES NOTHING ABOUT THE ADDRESS. The administrator who issued the
+// invitation held the code too, and may have chosen it. A system role or a membership the
+// operator grants is meant for the person who owns the address, so it is refused rather
+// than handed to whoever chose the password, and refused LOUDLY rather than added in a
+// state that password sign-ins silently cannot use. setPassword (the operator vouching for
+// a password it hands over) or clearPassword lifts it.
+var ErrInvitationPassword = &TenantRefusal{code: CodeInvitationPassword,
+	msg: "this identity's password was set by accepting a tenant invitation, so it does not prove who owns the address; " +
+		"set its password with setPassword (or remove it with clearPassword) first"}
+
+// SetSystemRoles replaces an identity's system-role assignments. A non-empty set is refused
+// for an identity whose password came from an invitation (ErrInvitationPassword).
 func (s *Service) SetSystemRoles(ctx context.Context, email string, roleTokens []string) (*iam.Identity, error) {
 	id, err := s.loadIdentity(ctx, email)
 	if err != nil {
 		return nil, err
+	}
+	if len(roleTokens) > 0 && id.PasswordFromInvitation {
+		return nil, ErrInvitationPassword
 	}
 	roles, err := s.iam.CatalogueRolesByScopeTokens(ctx, iam.ScopeSystem, roleTokens)
 	if err != nil {
@@ -165,6 +185,9 @@ func (s *Service) AddScopedMembership(ctx context.Context, email, tenant string,
 	id, err := s.loadIdentity(ctx, email)
 	if err != nil {
 		return nil, err
+	}
+	if id.PasswordFromInvitation {
+		return nil, ErrInvitationPassword
 	}
 	t, err := s.iam.TenantByToken(ctx, tenant)
 	if err != nil {

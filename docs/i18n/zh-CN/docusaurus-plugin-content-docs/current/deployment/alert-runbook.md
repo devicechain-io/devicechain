@@ -21,6 +21,24 @@ an area of this instance has no pod available
 
 **含义与处理方式.** Deployment ‹deployment› wants ‹value› pod(s) and has had none available for ten minutes, so that area is not serving. Because its pods are gone, the area also stops reporting its own readiness and metrics, and the instance overview's readiness and scrape panels will not show it: this alert and the panel for areas with no pod available are what do. Describe the deployment and its pods: kubectl describe deployment and kubectl get pods in the instance's namespace show a failing image pull, a pod that cannot be scheduled for want of CPU or memory, a failed readiness probe, or a crash before ready (kubectl logs --previous). If the area was scaled to zero by mistake, scale it back; an area you turned off on purpose has zero wanted pods and does not raise this.
 
+## `devicechain.area-mint`
+
+### AreaMintBadCredentialsSustained {#areamintbadcredentialssustained}
+
+**严重程度:** `warning` · **规则组:** `devicechain.area-mint`
+
+Service-token requests keep presenting an area credential that matches no area
+
+**含义与处理方式.** For at least 15 minutes, user-management's area-bound service-token endpoint has been refusing more than 10 requests every ten minutes because the credential presented matches no area-bound area. Nothing was granted. A short burst while a credential is being rotated is expected and does not raise this; a stream this long is either something on the instance's internal network presenting credentials that are not an area's, or a rotation whose two sides never agreed. Check whether an area-bound area's pod is failing to obtain tokens: if it is, its mounted credential and user-management's differ, so compare the Secret dci-&lt;instance&gt;-mint-&lt;area&gt; with what both pods mount, and restart the one that has not refreshed. If every area-bound area is obtaining tokens, the requests come from something else: the endpoint is served only on user-management's internal listener, so the caller is inside the instance's network. Find it and treat it as suspect.
+
+### AreaMintRefusedForbiddenRequest {#areamintrefusedforbiddenrequest}
+
+**严重程度:** `critical` · **规则组:** `devicechain.area-mint`
+
+An area-bound area asked for a service token it may never have
+
+**含义与处理方式.** user-management refused a service-token request presented with the mint credential of ‹area›: it asked for an authority outside that area's ceiling, for the super-authority, or to name the token's subject itself. The area is built never to ask for any of these, so either its pod is running code it should not be, or its credential is being used by something else. Nothing was granted. user-management's rate-limited 'area-bound service-token request refused' warning names the area, the result and the authorities asked for. Treat the area's pod as suspect: inspect it, then rotate its credential by deleting the Secret dci-&lt;instance&gt;-mint-&lt;area&gt; and running dcctl upgrade, which mints a new one. Both the area and user-management read the credential from its mounted file on every mint, so the new one is in force once the mounts refresh, without a restart.
+
 ## `devicechain.broker`
 
 ### BrokerCertificateExpiringSoon {#brokercertificateexpiringsoon}

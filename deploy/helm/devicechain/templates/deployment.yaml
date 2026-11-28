@@ -21,7 +21,18 @@ ADR-022 review hardening:
 {{- $blobPath := ternary ($blobPersist.mountPath | default "") ($blob.directory | default "") (ne ($blobPersist.mountPath | default "") "") }}
 {{- $blobWantVolume := or $blobPersist.enabled (not (empty $blobPersist.existingClaim)) }}
 {{- $blobMountAreas := include "devicechain.blobMountAreas" . | fromJsonArray }}
-{{- range $area := splitList "," (include "devicechain.enabledAreas" .) }}
+{{- $enabledAreas := splitList "," (include "devicechain.enabledAreas" .) }}
+{{- $areaBound := splitList "," (include "devicechain.areaBoundAreas" .) }}
+{{- range $area := $enabledAreas }}
+{{- /* The area-bound mint credentials this Deployment mounts: user-management mounts every
+enabled area-bound area's (it checks them), an area-bound area mounts its own, and no other
+Deployment mounts any. */}}
+{{- $mintAreas := list }}
+{{- range $b := $areaBound }}
+{{- if and (has $b $enabledAreas) (or (eq $area "user-management") (eq $area $b)) }}
+{{- $mintAreas = append $mintAreas $b }}
+{{- end }}
+{{- end }}
 {{- $areaCfg := get ($root.Values.functionalAreas | default dict) $area | default dict }}
 {{/*
 Mount the filesystem object-store volume (ADR-058) into this area only when it consumes the
@@ -429,6 +440,11 @@ spec:
             - name: blob-store
               mountPath: {{ $blobPath | quote }}
             {{- end }}
+            {{- range $b := $mintAreas }}
+            - name: mint-{{ $b }}
+              mountPath: /etc/dci-mint/{{ $b }}
+              readOnly: true
+            {{- end }}
       volumes:
         - name: instance-config
           secret:
@@ -436,6 +452,18 @@ spec:
         - name: microservice-config
           configMap:
             name: {{ include "devicechain.microserviceConfigMap" $root }}
+        {{- /* OPTIONAL in user-management, which must start whether or not an area-bound area's
+        credential exists yet (with none it mints nothing for that area); REQUIRED in the area
+        itself, which can do nothing without it and must not start as if it could. */}}
+        {{- range $b := $mintAreas }}
+        - name: mint-{{ $b }}
+          secret:
+            secretName: {{ include "devicechain.areaMintSecret" (dict "root" $root "area" $b) | quote }}
+            optional: {{ eq $area "user-management" }}
+            items:
+              - key: credential
+                path: credential
+        {{- end }}
         {{- if $mountBlob }}
         - name: blob-store
           persistentVolumeClaim:

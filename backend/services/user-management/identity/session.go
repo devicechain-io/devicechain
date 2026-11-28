@@ -325,6 +325,11 @@ func (m *Manager) admitTenantRecord(ctx context.Context, rec *sessionRecord, id 
 // gated on a second factor in v1, so refusing a superuser's tenant entry would protect nothing,
 // and it would lock the operator out of the very tenant they need to repair.
 func (m *Manager) admitPasswordSession(ctx context.Context, rec *sessionRecord, id *iam.Identity, tenant string, su bool) error {
+	// An invitation password enters only the tenants that vouched for it, superuser or not:
+	// it is checked first, and nothing below can let it through.
+	if err := m.admitInvitedPassword(ctx, id, tenant); err != nil {
+		return err
+	}
 	t, err := m.iam.TenantByToken(ctx, tenant)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -346,6 +351,34 @@ func (m *Manager) admitPasswordSession(ctx context.Context, rec *sessionRecord, 
 			return nil
 		}
 		return m.mfaRefusal(ctx, id)
+	}
+	return nil
+}
+
+// admitInvitedPassword refuses a password sign-in into a tenant that did not vouch for the
+// identity's invitation password (iam.Identity.PasswordFromInvitation).
+//
+// 🔴 THIS IS THE CROSS-TENANT GUARD. Identities are global by address, and an invitation
+// code is held by the administrator who issued it as well as by the person invited. A
+// password set through tenant A's code therefore says nothing about who owns the address,
+// and tenant B attaching a membership to that address (its own invitation, revoked and
+// enabled by hand; an operator adding it; a provider link) must not hand that membership
+// to whoever chose the password. The membership is read from the store, never from the
+// identity's preloaded list, so a caller that loaded it without memberships is refused,
+// not admitted.
+func (m *Manager) admitInvitedPassword(ctx context.Context, id *iam.Identity, tenant string) error {
+	if !id.PasswordFromInvitation {
+		return nil
+	}
+	mem, err := m.iam.MembershipByIdentityTenant(ctx, id.ID, tenant)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errTenantAccessDenied
+		}
+		return err
+	}
+	if !mem.AdmitsInvitedPassword {
+		return errTenantAccessDenied
 	}
 	return nil
 }
@@ -455,11 +488,21 @@ func (m *Manager) sessionMemberships(ctx context.Context, sid auth.SessionID, id
 		return nil, err
 	}
 	if rec.Method != SessionMethodSso {
-		if isSuperuser(id) {
-			return membershipInfos(id.Memberships), nil
-		}
-		tokens := make([]string, 0, len(id.Memberships))
+		// A membership its invitation password does not admit is not listed: the sign-in
+		// could not enter it (admitInvitedPassword), as a single sign-on's listing leaves out
+		// what it cannot enter.
+		mems := make([]iam.Membership, 0, len(id.Memberships))
 		for _, mem := range id.Memberships {
+			if id.PasswordFromInvitation && !mem.AdmitsInvitedPassword {
+				continue
+			}
+			mems = append(mems, mem)
+		}
+		if isSuperuser(id) {
+			return membershipInfos(mems), nil
+		}
+		tokens := make([]string, 0, len(mems))
+		for _, mem := range mems {
 			tokens = append(tokens, mem.TenantId)
 		}
 		enforced, err := m.iam.SsoEnforcedAmong(ctx, tokens)
@@ -474,8 +517,8 @@ func (m *Manager) sessionMemberships(ctx context.Context, sid auth.SessionID, id
 				return nil, err
 			}
 		}
-		out := make([]MembershipInfo, 0, len(id.Memberships))
-		for _, mem := range id.Memberships {
+		out := make([]MembershipInfo, 0, len(mems))
+		for _, mem := range mems {
 			out = append(out, MembershipInfo{
 				Tenant: mem.TenantId, Roles: roleTokens(mem.TenantRoles), SsoRequired: enforced[mem.TenantId],
 				MfaRequired: needsMfa[mem.TenantId],

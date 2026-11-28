@@ -4,19 +4,24 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/secrets/escrow"
 	"github.com/devicechain-io/dcctl/bootstrap"
+	"github.com/devicechain-io/dcctl/internal/secretenv"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
 
 // Escrow inspection flags.
 var (
-	escrowInstance    string
-	escrowKubeContext string
+	escrowInstance             string
+	escrowKubeContext          string
+	escrowVerifyOpen           bool
+	escrowVerifyPassphraseFile string
 )
 
 var secretsCmd = &cobra.Command{
@@ -67,35 +72,29 @@ artifact against a live instance, use "dcctl secrets escrow verify".`,
 	SilenceUsage: true,
 }
 
-// secretsEscrowVerifyCmd answers the only question that matters about an escrow
-// artifact: does it hold the key this instance is actually running?
-//
-// It compares FINGERPRINTS, so it needs no passphrase and never decrypts anything —
-// which is what makes it a check an operator can run on a Tuesday, as often as they
-// like, without handling the passphrase at all. The failure it catches is an escrow
-// that was silently orphaned: a re-bootstrap that minted a new key, a hand-edited
-// Secret, an artifact copied from the wrong instance. Every one of those looks
-// exactly like a healthy setup until a restore, which is far too late to find out.
-//
-// A mismatch exits non-zero so this composes into a cron job or a CI gate.
+// secretsEscrowVerifyCmd compares the header by default for compatibility. --open
+// additionally authenticates the artifact and compares the recovered key bytes.
 var secretsEscrowVerifyCmd = &cobra.Command{
 	Use:   "verify <file>",
-	Short: "Check that an escrow artifact holds the root key a live instance is running",
-	Long: `Check that a root-key escrow artifact holds the root key a live instance is running.
+	Short: "Compare an escrow header with a live instance, or open it with --open",
+	Long: `Compare a root-key escrow artifact with the root key a live instance is running.
 
-The check compares key digests: the artifact's against the digest of the key in the instance's
-configuration Secret (read through --kube-context, or the current context). It needs no
-passphrase and decrypts nothing, so it is safe to run as often as you like, from a scheduled
-job or a CI gate.
+By default, compare only the cleartext header fingerprint with the key in the instance's
+configuration Secret (read through --kube-context, or the current context). This needs no
+passphrase and decrypts nothing. A matching header does not prove the artifact can open.
 
-A mismatch means the artifact is intact but belongs to a different key (usually the instance
-was re-bootstrapped after the file was written, or the file belongs to another instance), so
-the instance has no usable escrow. The command exits non-zero in that case.
+With --open, decrypt and authenticate the artifact and compare the recovered key bytes
+with the running key. Supply the original passphrase using --escrow-passphrase-file or
+DCCTL_ESCROW_PASSPHRASE (the file takes precedence). This mode never prompts. A missing or
+wrong passphrase, damaged artifact, or different key exits non-zero.
 
-  dcctl secrets escrow verify --instance prod ./prod-rootkey.escrow`,
-	Example: `  # exits non-zero when the artifact does not hold the key the instance is running
+Without --open, a fingerprint mismatch also exits non-zero: the header names a different
+key, usually because the instance was re-bootstrapped or the file belongs to another instance.`,
+	Example: `  # compare the header only; this does not check recoverability
   dcctl secrets escrow verify --instance prod ./prod-rootkey.escrow
-  dcctl secrets escrow verify --instance prod --kube-context prod ./prod-rootkey.escrow`,
+  # prove that the artifact opens to the key the instance is running
+  dcctl secrets escrow verify --instance prod --open --escrow-passphrase-file ./passphrase ./prod-rootkey.escrow
+  dcctl secrets escrow verify --instance prod --open --kube-context prod ./prod-rootkey.escrow`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if escrowInstance == "" {
@@ -105,28 +104,59 @@ the instance has no usable escrow. The command exits non-zero in that case.
 		if err != nil {
 			return err
 		}
+		var pass string
+		if escrowVerifyOpen {
+			pass, err = escrowVerificationPassphrase(escrowVerifyPassphraseFile)
+			if err != nil {
+				return err
+			}
+		}
 		key, err := bootstrap.DeployedRootKey(cmd.Context(), escrowKubeContext, escrowInstance)
 		if err != nil {
 			return err
 		}
-		if !art.Matches(key) {
-			// Named as an orphan rather than as a corrupt file: the artifact is
-			// almost certainly intact and simply describes a key this instance no
-			// longer uses, and telling an operator their backup is "invalid" would
-			// send them to delete the wrong thing.
-			return fmt.Errorf(
-				"%s does NOT hold the root key instance %q is running.\n"+
-					"  The artifact is intact — it just belongs to a different key, so it would not open this\n"+
-					"  instance's stored secrets. Usually that means the instance was re-bootstrapped (minting a\n"+
-					"  fresh key) after this file was written, or the file belongs to another instance.\n"+
-					"  Until this is resolved, this instance has NO usable escrow.",
-				args[0], escrowInstance)
+		defer clear(key)
+		if escrowVerifyOpen {
+			opened, err := escrow.Open(art, pass)
+			if err != nil {
+				return fmt.Errorf("%s: %w", args[0], err)
+			}
+			defer clear(opened)
+			if !bytes.Equal(opened, key) {
+				return fmt.Errorf("%s opens to a different root key than instance %q is running", args[0], escrowInstance)
+			}
+			fmt.Println(color.HiGreenString("%s opened to the root key instance %q is running.", args[0], escrowInstance))
+		} else {
+			if !art.Matches(key) {
+				return fmt.Errorf("%s names a different root key than instance %q is running; this instance has no confirmed usable escrow", args[0], escrowInstance)
+			}
+			fmt.Println(color.HiGreenString("%s names the root key instance %q is running (header only; use --open to check it opens).", args[0], escrowInstance))
 		}
-		fmt.Println(color.HiGreenString("%s holds the root key instance %q is running.", args[0], escrowInstance))
 		fmt.Printf("  %s %s\n", color.WhiteString("Key digest:"), color.GreenString(art.Fingerprint))
 		return nil
 	},
 	SilenceUsage: true,
+}
+
+// escrowVerificationPassphrase never prompts: an unattended verification must fail
+// when it cannot authenticate the artifact. Read only through the captured secret
+// environment so Kubernetes exec plugins never inherit the passphrase.
+func escrowVerificationPassphrase(file string) (string, error) {
+	if file != "" {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			return "", fmt.Errorf("reading the escrow passphrase file: %w", err)
+		}
+		pass := strings.TrimRight(string(raw), "\r\n")
+		if pass == "" {
+			return "", fmt.Errorf("the escrow passphrase file %s is empty", file)
+		}
+		return pass, nil
+	}
+	if pass, ok := secretenv.LookupEscrowPassphrase(); ok && pass != "" {
+		return pass, nil
+	}
+	return "", fmt.Errorf("--open requires --escrow-passphrase-file or a non-empty %s", secretenv.EscrowPassphrase)
 }
 
 // readEscrowArtifact loads and parses an artifact, reporting the path in the error
@@ -144,6 +174,8 @@ func readEscrowArtifact(path string) (*escrow.Artifact, error) {
 }
 
 func init() {
+	secretsEscrowVerifyCmd.Flags().BoolVar(&escrowVerifyOpen, "open", false, "decrypt the artifact and compare its key bytes with the live instance (requires a passphrase)")
+	secretsEscrowVerifyCmd.Flags().StringVar(&escrowVerifyPassphraseFile, "escrow-passphrase-file", "", "read the original passphrase for --open from this file (or $"+secretenv.EscrowPassphrase+")")
 	secretsEscrowVerifyCmd.Flags().StringVar(&escrowInstance, "instance", "", "instance id to check the artifact against (required)")
 	secretsEscrowVerifyCmd.Flags().StringVar(&escrowKubeContext, "kube-context", "", "kube-context to target (default: current)")
 

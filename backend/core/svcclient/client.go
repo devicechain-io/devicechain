@@ -125,6 +125,10 @@ type Client struct {
 	secret      string
 	subject     string
 	authorities []string
+	// credentialFile is set for an AREA-BOUND subject (auth.IsAreaBoundCaller): the client mints at
+	// auth.AreaServiceTokenPath with the credential read from this file, and secret is empty — it
+	// is never sent, whatever the caller passed.
+	credentialFile string
 
 	// group single-flights concurrent mints so a burst of first calls (or a
 	// simultaneous refresh) collapses to one round-trip to user-management.
@@ -154,6 +158,12 @@ var sharedTransport = httptransport.New()
 // need). umCfg locates user-management's mint endpoint; secret is the shared
 // service secret (config.ServiceAuthConfiguration.Secret). An empty secret yields
 // a Client that fails closed on first use.
+//
+// 🔴 AN AREA-BOUND SUBJECT NEVER USES THE SHARED SECRET. For a subject in auth.AreaBoundCallers
+// the secret argument is DISCARDED, and the client mints at the area-bound endpoint with the
+// area's own mounted credential. There is no fallback: against a user-management that does not
+// serve that endpoint (a previous release answers 404) the mint fails and the call gets no token,
+// rather than retrying the endpoint that would let the caller name any subject and any authority.
 func New(umCfg config.UserManagementConfiguration, secret, subject string, authorities []string, opts ...Option) *Client {
 	c := &Client{
 		http:        &http.Client{Timeout: requestTimeout, Transport: sharedTransport},
@@ -162,6 +172,11 @@ func New(umCfg config.UserManagementConfiguration, secret, subject string, autho
 		secret:      secret,
 		subject:     subject,
 		authorities: authorities,
+	}
+	if auth.IsAreaBoundCaller(subject) {
+		c.secret = ""
+		c.mintURL = "http://" + umCfg.InternalAddr() + auth.AreaServiceTokenPath
+		c.credentialFile = auth.AreaMintCredentialFile(areaCredentialDir, subject)
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -360,7 +375,7 @@ func (c *Client) serviceToken(ctx context.Context) (string, error) {
 	if tok != "" && time.Now().Before(exp.Add(-refreshSkew)) {
 		return tok, nil
 	}
-	if c.secret == "" {
+	if c.credentialFile == "" && c.secret == "" {
 		return "", fmt.Errorf("svcclient: service-to-service auth is not configured (empty service secret)")
 	}
 
@@ -395,7 +410,21 @@ func (c *Client) serviceToken(ctx context.Context) (string, error) {
 func (c *Client) mint(ctx context.Context) (string, time.Time, error) {
 	started := time.Now()
 	defer func() { mintDuration.Observe(time.Since(started).Seconds()) }()
-	body, err := json.Marshal(auth.ServiceTokenRequest{Subject: c.subject, Authorities: c.authorities})
+	var (
+		body                []byte
+		err                 error
+		header, credentials string
+	)
+	if c.credentialFile != "" {
+		if credentials, err = readAreaCredential(c.credentialFile); err != nil {
+			return "", time.Time{}, err
+		}
+		header = auth.AreaCredentialHeader
+		body, err = json.Marshal(auth.AreaServiceTokenRequest{Authorities: c.authorities})
+	} else {
+		header, credentials = auth.ServiceSecretHeader, c.secret
+		body, err = json.Marshal(auth.ServiceTokenRequest{Subject: c.subject, Authorities: c.authorities})
+	}
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("svcclient: marshal mint request: %w", err)
 	}
@@ -404,7 +433,7 @@ func (c *Client) mint(ctx context.Context) (string, time.Time, error) {
 		return "", time.Time{}, fmt.Errorf("svcclient: build mint request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(auth.ServiceSecretHeader, c.secret)
+	req.Header.Set(header, credentials)
 
 	resp, err := c.mintHTTP.Do(req)
 	if err != nil {

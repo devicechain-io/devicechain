@@ -37,6 +37,7 @@ title: 指标参考
 | `command_delivery_nudges_dropped_total` | 因队列已满而丢弃的分发触发。这是延迟信号，不是错误率：指令仍会在投递扫描时发出，扫描是所有触发之下的兜底。 |
 | `command_delivery_nudges_requested_total` | 被接受进入入队时分发队列的分发触发，每条通过 createCommand 创建的指令一个（机群批次不发出任何触发）。 |
 | `command_delivery_presence_read_errors_total` | 无法读取在线状态投影的扫描轮次；该门失败即放行，因此这里持续有速率，表示指令正在无门控地分发。 |
+| `command_delivery_presence_gate_off_dispatches_total` | 由于缺少配置（服务密钥或 device-state 端点）导致在线状态门被关闭，因而未经在线状态检查就分发的指令数。门已接通时为零。这里出现任何速率，都表示发往离线设备的指令正在被发布并丢弃：[`SafetyGateDisabled`](./observability.md#safety-gates) 告警会因同一原因触发，command-delivery 也会每小时最多一次重复输出一条点名缺失键的 WARN。 |
 | `command_delivery_disabled_gate_errors_total` | 无法为某个分发批次读取已停用设备记录（该批次不分发），或无法从 device-management 同步该记录的次数。持续有速率表示指令被延迟，而不是丢失。 |
 | `command_delivery_disabled_gate_ready` | 仪表。本进程列出租户并读取每个租户的已停用设备后为 `1`，此前为 `0`。尚未在任何地方填充过记录的租户在其为 `0` 时不会被分发；若它卡在 `0` 且 `command_delivery_disabled_gate_errors_total` 上升，说明重启发生在 user-management 或 device-management 故障期间。 |
 | `command_delivery_disabled_gate_pending_tenants` | 仪表。本进程尚未读取其已停用设备记录的租户数；这些租户的指令在等待。已删除或不再出现在列表中的租户不再计入。 |
@@ -196,6 +197,7 @@ title: 指标参考
 | `react_actions_not_enabled_total{action}` | 被识别但因此部署没有对应接收端而丢弃的 REACT 动作，按动作类型区分：未配置指令投递时的 sendCommand，或未启用出站连接器时的 httpCall/publish。告警接收端总是已接通，因此 raiseAlarm/clearAlarm 不应出现在这里。 |
 | `react_connector_egress_shed_total{action}` | 因超过租户出站速率而在源头被丢弃的连接器分发尝试（`httpCall`、`publish`），按动作类型区分。按尝试计数：重投递可能先被丢弃、后又接纳同一动作，所以这不是被永久丢弃动作的数量。 |
 | `react_command_refused_total{reason,result}` | 规则尝试发送、但在到达 command-delivery 之前被拒绝的命令，按原因区分，`result` 始终为 `"unwanted"`。`command_rate_limited`：租户超过其出站速率。`command_loop`：该规则在一分钟内已向该设备发送 120 条命令。`command_guard_full`：循环防护跟踪的规则与设备组合已达上限。每次拒绝还会在死信预算内记录为原因为 `shed` 的死信。 |
+| `react_command_governance_unresolved_admissions_total{cause}` | 规则发送的命令中，因租户自身上限未知而按平台默认值放行的命令，按原因区分（`pending`、`unreachable`、`unknown-tenant`）。与连接器动作的 `governance_unresolved_admissions_total` 分开计数。没有任何告警读取它：`TenantsMeteredAtPlatformDefault` 只监视 `<area>_governance_unresolved_admissions_total` 序列。 |
 | `react_connector_shed_dead_lettered_total{action}` | 在源头被拒绝（超过租户出站速率的连接器动作，以及因 `react_command_refused_total` 中任一原因被拒绝的命令），并以原因 shed 记录为单独死信的动作，按动作类型区分（`httpCall`、`publish`、`sendCommand`）。 |
 | `react_derived_in_flight` | REACT 已从流中取出但尚未处理完的派生事件：正在等待其设备的工作者，或正在分发。通常最多为 `react_workers`；当有投递等待超过其确认期限时会更多。 |
 | `react_dispatch_lag_seconds` | REACT 分发落后于派生事件流的程度：每个事件从被消息代理存储到开始分发时的时长。这是一次检测的告警、命令和连接器调用在 REACT 上等待的时间。 |

@@ -5,10 +5,13 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/devicechain-io/dc-k8s/functionalarea"
@@ -73,12 +76,9 @@ func backupInstance(ctx context.Context, opts backupOptions) error {
 			areas = append(areas, string(a))
 		}
 	}
-	bc := cfg.Infrastructure.Blob
-	if bc.Backend == "" || bc.Backend == blob.BackendFilesystem {
-		if opts.BlobDirectory == "" {
-			return fmt.Errorf("filesystem blob backup requires --blob-directory pointing to a read-only mounted/exported instance PVC root")
-		}
-		bc.Directory = opts.BlobDirectory
+	bc, err := instanceBlobConfig(cfg.Infrastructure.Blob, opts.BlobDirectory, "filesystem blob backup requires --blob-directory pointing to a read-only mounted/exported instance PVC root")
+	if err != nil {
+		return err
 	}
 	url := opts.NatsURL
 	if url == "" {
@@ -138,7 +138,7 @@ func backupInstance(ctx context.Context, opts backupOptions) error {
 	}
 	defer nc.Close()
 	export := func(ctx context.Context, w io.Writer) error {
-		return backup.ExportBlobs(ctx, blob.Config{Backend: bc.Backend, Directory: bc.Directory, Bucket: bc.Bucket, Region: bc.Region, Endpoint: bc.Endpoint, UsePathStyle: bc.UsePathStyle}, opts.InstanceID, w)
+		return backup.ExportBlobs(ctx, bc, opts.InstanceID, w)
 	}
 	if opts.RestorePlan != nil {
 		actions, err := opts.RestorePlan.Plan(ctx, nc, export, cfg.Infrastructure.Nats.ShardGroups, areas)
@@ -148,6 +148,62 @@ func backupInstance(ctx context.Context, opts backupOptions) error {
 		return backup.WritePlan(opts.PlanOutput, actions)
 	}
 	return backup.Create(ctx, nc, opts.InstanceID, opts.Destination, export, cfg.Infrastructure.Nats.ShardGroups, areas)
+}
+
+// instanceBlobConfig is the deployed blob store, with a filesystem backend read
+// through the operator's local mount of the volume rather than the pods' path.
+func instanceBlobConfig(bc config.BlobConfiguration, directory, missing string) (blob.Config, error) {
+	if bc.Backend == "" || bc.Backend == blob.BackendFilesystem {
+		if directory == "" {
+			return blob.Config{}, fmt.Errorf("%s", missing)
+		}
+		bc.Directory = directory
+	}
+	return blob.Config{Backend: bc.Backend, Directory: bc.Directory, Bucket: bc.Bucket, Region: bc.Region, Endpoint: bc.Endpoint, UsePathStyle: bc.UsePathStyle}, nil
+}
+
+// restoreObjects applies a verified plan's object store to the installed
+// instance. It needs no broker: objects live in the blob store alone.
+func restoreObjects(ctx context.Context, opts backupOptions, overwrite bool) error {
+	cfg, err := bootstrap.DeployedInstanceConfig(ctx, opts.KubeContext, opts.InstanceID)
+	if err != nil {
+		return err
+	}
+	if cfg == nil {
+		return fmt.Errorf("instance %q is not installed", opts.InstanceID)
+	}
+	cfg.ApplyDefaults()
+	bc, err := instanceBlobConfig(cfg.Infrastructure.Blob, opts.BlobDirectory, "filesystem blob restore requires --blob-directory pointing to a writable local mount of the instance's blob PVC root")
+	if err != nil {
+		return err
+	}
+	target, err := backup.NewObjectTarget(ctx, bc)
+	if err != nil {
+		return err
+	}
+	export := func(ctx context.Context, w io.Writer) error {
+		return backup.ExportBlobs(ctx, bc, opts.InstanceID, w)
+	}
+	_, err = opts.RestorePlan.ApplyObjects(ctx, export, target, overwrite, opts.PlanOutput)
+	if bc.Backend == "" || bc.Backend == blob.BackendFilesystem {
+		return withInstanceDirectoryHint(err, bc.Directory, opts.InstanceID)
+	}
+	return err
+}
+
+// withInstanceDirectoryHint explains a refusal caused by the target volume
+// having no instance directory. That is refused, never read as an empty store:
+// a mistyped mount path looks exactly like it. A freshly provisioned volume has
+// none until its first upload, so say what to do in that case, and only that
+// one: any other missing file (a backup-set file that vanished) is its own error.
+func withInstanceDirectoryHint(err error, root, instance string) error {
+	if err == nil || !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if _, statErr := os.Stat(filepath.Join(root, instance)); !errors.Is(statErr, fs.ErrNotExist) {
+		return err
+	}
+	return fmt.Errorf("%w\nIf %s is the instance's freshly provisioned blob volume, create the directory %q in it and run the restore again", err, root, instance)
 }
 
 // Match the diagnostic commands' transport policy: resolve TLS through the
