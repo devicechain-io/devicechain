@@ -178,6 +178,19 @@ READERS = [
         "frontend/packages/dashboards/src/**",
         "frontend/apps/dashboard/src/**",
     ], [], "graphql/schemaplane/schemaplane_test.go:19, frontend_documents_test.go:85"),
+    # graphql: client_documents_cost_test.go costs every document a first-party client
+    # sends against the served SDL: the frontend's TypeScript, the SDKs' C#, every Go
+    # source in backend/ (string constants that are documents) and the genqlient files.
+    ("backend/core", "graphql", [
+        SDL,
+        "frontend/apps/**/*.ts",
+        "frontend/apps/**/*.tsx",
+        "frontend/packages/**/*.ts",
+        "frontend/packages/**/*.tsx",
+        "sdks/**/*.cs",
+        "backend/**/*.go",
+        "backend/**/genqlient-*.graphql",
+    ], NONTEST, "graphql/client_documents_cost_test.go:81,280,283,289,303, cost_test.go:421"),
     ("backend/core", "rdb/partialupdatetest", ["backend/services/*/model/*.go", "backend/services/*/model/*/*.go"], NONTEST, "rdb/partialupdatetest/savescan_test.go:133"),
     ("backend/core", "config", [
         "deploy/opentofu/modules/traefik/main.tf",

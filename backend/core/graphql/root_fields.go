@@ -13,26 +13,68 @@ import (
 )
 
 // rootOperation is one operation of a document, as far as the work limit needs it: its
-// type, its name, and the selections directly under its root.
+// type, its name, the defaults its variable definitions declare, and its selection tree.
 type rootOperation struct {
 	kind, name string
 	roots      []rootSelection
+	// varDefaults holds the default value of each variable definition that declares
+	// one; the cost count reads a page size from it when the request supplies none.
+	varDefaults map[string]any
 }
 
-// rootSelection is one selection in a root-level selection set: a field (key is its
-// response key), an inline fragment (inline holds its selections), or a fragment spread
-// (spread is the fragment's name). Anything below the root is read and discarded.
+// rootSelection is one selection in a selection set: a field (key is its response key,
+// name the field it selects, args its arguments, sub its own selection set, nil for a
+// leaf), an inline fragment (inline holds its selections, on its type condition, empty
+// when it has none), or a fragment spread (spread is the fragment's name). The name
+// says "root" for history: the root-field ceiling reads only the top level, while the
+// cost count (cost.go) reads the whole tree.
 type rootSelection struct {
 	key    string
+	name   string
+	args   []argValue
+	sub    []rootSelection
 	inline []rootSelection
+	on     string
 	spread string
+	// conds are the selection's @skip and @include conditions.
+	conds []condition
 }
+
+// condition is one @skip(if:) or @include(if:) on a selection: skip says which, value is
+// the if argument as written (a literal or a variable).
+type condition struct {
+	skip  bool
+	value any
+}
+
+// fragmentDef is one fragment definition: its type condition and its selections.
+type fragmentDef struct {
+	on   string
+	sels []rootSelection
+}
+
+// argValue is one argument, or one entry of an input object, as the document writes it.
+//
+// A value is one of: int64 (an Int literal), float64 (a Float literal), litString (a
+// string or block string, as its token is written), litName (true, false,
+// null or an enum value), varRef (a $variable), []any (a list) or []argValue (an input
+// object, in document order, duplicates kept).
+type argValue struct {
+	name  string
+	value any
+}
+
+type (
+	litString string
+	litName   string
+	varRef    string
+)
 
 // readDocument is the ONE entry to the document reader: the length ceiling, then
 // readRootFields. The work limit (checkWork) and the WebSocket's operation-type gate
 // (operationType) both read through it, so neither can read a document the other
 // would have read differently, and neither can read one before its length is checked.
-func readDocument(query string, maxLen int) ([]rootOperation, map[string][][]rootSelection, *gqlerrors.QueryError) {
+func readDocument(query string, maxLen int) ([]rootOperation, map[string][]fragmentDef, *gqlerrors.QueryError) {
 	if len(query) > maxLen {
 		return nil, nil, gqlerrors.Errorf("query length %d exceeds the maximum allowed query length of %d bytes", len(query), maxLen)
 	}
@@ -108,8 +150,8 @@ func selectOperation(ops []rootOperation, name string) (rootOperation, error) {
 // Anything this cannot read is refused. FuzzRootFieldLimit and FuzzOperationType use
 // graphql-go as the arbiter: a false refusal is safe, while reading a document as a
 // different set of fields or operation type could let work past a transport gate.
-func readRootFields(document string) (ops []rootOperation, fragments map[string][][]rootSelection, err error) {
-	r := &rootReader{l: newOpLexer(document), fragments: map[string][][]rootSelection{}}
+func readRootFields(document string) (ops []rootOperation, fragments map[string][]fragmentDef, err error) {
+	r := &rootReader{l: newOpLexer(document), fragments: map[string][]fragmentDef{}}
 	defer func() {
 		if p := recover(); p != nil {
 			perr, ok := p.(rootReadError)
@@ -130,7 +172,7 @@ type rootReadError struct{ error }
 type rootReader struct {
 	l         *opLexer
 	ops       []rootOperation
-	fragments map[string][][]rootSelection
+	fragments map[string][]fragmentDef
 }
 
 // check abandons the read on a scanner error, which graphql-go turns into a syntax error
@@ -198,9 +240,9 @@ func (r *rootReader) document() {
 				r.fail("unexpected %q, expecting %q", r.l.text, "on")
 			}
 			r.advance()
-			r.ident()
+			on := r.ident()
 			r.directives()
-			r.fragments[name] = append(r.fragments[name], r.selectionSet())
+			r.fragments[name] = append(r.fragments[name], fragmentDef{on: on, sels: r.selectionSet()})
 		default:
 			r.fail("unexpected %q, expecting %q", keyword, "fragment")
 		}
@@ -218,7 +260,12 @@ func (r *rootReader) operation(kind string) rootOperation {
 		for r.l.tok != ')' {
 			r.description()
 			r.token('$')
-			r.inputValue()
+			if name, def, ok := r.inputValue(); ok {
+				if op.varDefaults == nil {
+					op.varDefaults = map[string]any{}
+				}
+				op.varDefaults[name] = def
+			}
 		}
 		r.token(')')
 	}
@@ -227,17 +274,19 @@ func (r *rootReader) operation(kind string) rootOperation {
 	return op
 }
 
-// inputValue is ParseInputValue.
-func (r *rootReader) inputValue() {
+// inputValue is ParseInputValue. It returns the name and, when one is declared, the
+// default value.
+func (r *rootReader) inputValue() (name string, def any, hasDefault bool) {
 	r.description()
-	r.ident()
+	name = r.ident()
 	r.token(':')
 	r.typeRef()
 	if r.l.tok == '=' {
 		r.token('=')
-		r.literal(true)
+		def, hasDefault = r.literal(true), true
 	}
 	r.directives()
+	return name, def, hasDefault
 }
 
 // typeRef is ParseType.
@@ -275,90 +324,118 @@ func (r *rootReader) selection() rootSelection {
 		var sel rootSelection
 		if r.l.tok == scanner.Ident {
 			if name := r.ident(); name != "on" {
-				r.directives()
-				return rootSelection{spread: name}
+				return rootSelection{spread: name, conds: r.directives()}
 			}
-			r.ident()
+			sel.on = r.ident()
 		}
-		r.directives()
+		sel.conds = r.directives()
 		// selectionSet always holds at least one selection, so a non-nil inline is
 		// what tells an inline fragment apart from a field.
 		sel.inline = r.selectionSet()
 		return sel
 	}
 	key := r.ident()
+	name := key
 	if r.l.tok == ':' {
 		r.token(':')
-		r.ident()
+		name = r.ident()
 	}
+	sel := rootSelection{key: key, name: name}
 	if r.l.tok == '(' {
-		r.arguments()
+		sel.args = r.arguments()
 	}
-	r.directives()
+	sel.conds = r.directives()
 	if r.l.tok == '{' {
-		r.selectionSet()
+		sel.sub = r.selectionSet()
 	}
-	return rootSelection{key: key}
+	return sel
 }
 
 // arguments is ParseArgumentList.
-func (r *rootReader) arguments() {
+func (r *rootReader) arguments() []argValue {
+	var args []argValue
 	r.token('(')
 	for r.l.tok != ')' {
-		r.ident()
+		name := r.ident()
 		r.token(':')
-		r.literal(false)
+		args = append(args, argValue{name: name, value: r.literal(false)})
 		r.directives()
 	}
 	r.token(')')
+	return args
 }
 
 // directives is ParseDirectives.
-func (r *rootReader) directives() {
+//
+// It returns the @skip and @include conditions among them, which the cost count honours
+// as execution does; every other directive is read and discarded.
+func (r *rootReader) directives() []condition {
+	var conds []condition
 	for r.l.tok == '@' {
 		r.token('@')
-		r.ident()
+		name := r.ident()
+		var args []argValue
 		if r.l.tok == '(' {
-			r.arguments()
+			args = r.arguments()
+		}
+		if name != "skip" && name != "include" {
+			continue
+		}
+		for _, a := range args {
+			if a.name == "if" {
+				conds = append(conds, condition{skip: name == "skip", value: a.value})
+			}
 		}
 	}
+	return conds
 }
 
-// literal is ParseLiteral.
-func (r *rootReader) literal(constOnly bool) {
+// literal is ParseLiteral. It returns the value read, in argValue's representation.
+func (r *rootReader) literal(constOnly bool) any {
 	switch r.l.tok {
 	case '$':
 		if constOnly {
 			r.fail("variable not allowed")
 		}
 		r.token('$')
-		r.ident()
+		return varRef(r.ident())
 	case scanner.Int, scanner.Float:
-		r.number(false)
-	case scanner.String, scanner.Ident:
+		return r.number(false)
+	case scanner.String:
+		text := r.l.text
 		r.advance()
+		return litString(text)
+	case scanner.Ident:
+		name := r.l.text
+		r.advance()
+		return litName(name)
 	case '-':
 		// v1.11.1 ParseLiteral calls consumeNumber(true) after '-', replacing
 		// v1.11.0's unchecked ConsumeLiteral. Names and structural tokens must now
 		// fail here too, even for Any; swallowing one would lose parser agreement.
 		r.token('-')
-		r.number(true)
+		return r.number(true)
 	case '[':
+		list := []any{}
 		r.token('[')
 		for r.l.tok != ']' {
-			r.literal(constOnly)
+			list = append(list, r.literal(constOnly))
 		}
 		r.token(']')
+		return list
 	case '{':
+		obj := []argValue{}
 		r.token('{')
 		for r.l.tok != '}' {
-			r.ident()
+			name := r.ident()
 			r.token(':')
-			r.literal(constOnly)
+			obj = append(obj, argValue{name: name, value: r.literal(constOnly)})
 		}
 		r.token('}')
+		return obj
 	default:
 		r.fail("invalid value")
+		return nil
 	}
 }
 
@@ -367,7 +444,7 @@ func (r *rootReader) literal(constOnly bool) {
 // missing integer/fraction parts), so its token kind cannot establish agreement.
 var opNumberPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$`)
 
-func (r *rootReader) number(negative bool) {
+func (r *rootReader) number(negative bool) any {
 	if r.l.tok != scanner.Int && r.l.tok != scanner.Float {
 		r.fail("expected number")
 	}
@@ -380,11 +457,14 @@ func (r *rootReader) number(negative bool) {
 	}
 	// Upstream consumeNumber also rejects int64/float64 overflow. Include the
 	// sign before parsing so -9223372036854775808 remains valid, as upstream does.
-	var err error
+	var (
+		val any
+		err error
+	)
 	if r.l.tok == scanner.Int {
-		_, err = strconv.ParseInt(text, 10, 64)
+		val, err = strconv.ParseInt(text, 10, 64)
 	} else {
-		_, err = strconv.ParseFloat(text, 64)
+		val, err = strconv.ParseFloat(text, 64)
 	}
 	if err != nil {
 		r.fail("numeric literal out of range")
@@ -396,6 +476,7 @@ func (r *rootReader) number(negative bool) {
 		r.fail("a number directly followed by a name is not accepted")
 	}
 	r.advance()
+	return val
 }
 
 // countRootKeys counts the DISTINCT response keys an operation's root selection set
@@ -415,7 +496,7 @@ func (r *rootReader) number(negative bool) {
 // contributes the same keys twice, which the distinct count absorbs, and the visited
 // set is also what stops a cyclic spread — invalid, but not yet validated here — from
 // recursing forever.
-func countRootKeys(roots []rootSelection, fragments map[string][][]rootSelection) int {
+func countRootKeys(roots []rootSelection, fragments map[string][]fragmentDef) int {
 	keys := map[string]struct{}{}
 	visited := map[string]bool{}
 	var walk func([]rootSelection)
@@ -428,7 +509,7 @@ func countRootKeys(roots []rootSelection, fragments map[string][][]rootSelection
 				}
 				visited[s.spread] = true
 				for _, def := range fragments[s.spread] {
-					walk(def)
+					walk(def.sels)
 				}
 			case s.inline != nil:
 				walk(s.inline)

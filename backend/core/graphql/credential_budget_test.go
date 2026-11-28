@@ -171,6 +171,8 @@ func TestZeroBudgetSchemaRefusesEveryCheck(t *testing.T) {
 		maxQueryLength:   DefaultGraphQLMaxQueryLength,
 		maxQueryRoots:    DefaultGraphQLMaxQueryRootFields,
 		maxMutationRoots: DefaultGraphQLMaxMutationRootFields,
+		maxCost:          DefaultGraphQLMaxQueryCost,
+		maxAliases:       DefaultGraphQLMaxFieldAliases,
 	}
 	resp := schema.Exec(context.Background(), "mutation { check }", "", nil)
 	require.Len(t, resp.Errors, 1)

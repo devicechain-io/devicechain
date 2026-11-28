@@ -73,6 +73,8 @@ backend/core/config/nats_shard_docs_test.go
 backend/core/core/functionalareas.go
 backend/core/core/functionalareas_test.go
 backend/core/core/hardening_docs_test.go
+backend/core/graphql/client_documents_cost_test.go
+backend/core/graphql/cost_test.go
 backend/core/graphql/schemaplane/frontend_documents_test.go
 backend/core/graphql/schemaplane/schemaplane_test.go
 backend/core/httptransport/nodefault_test.go

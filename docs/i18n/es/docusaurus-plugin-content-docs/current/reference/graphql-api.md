@@ -1059,6 +1059,8 @@ defecto: ninguno puede desactivarse.
 | Profundidad de anidamiento | 15 | `DC_GRAPHQL_MAX_DEPTH` | Selecciones anidadas más allá de esta profundidad. |
 | Campos raíz por consulta | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | Una operación de consulta que selecciona más campos de primer nivel que este número. |
 | Campos raíz por mutación | 5 | `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` | Una operación de mutación que selecciona más campos de primer nivel que este número. |
+| Coste de la consulta | 100.000 | `DC_GRAPHQL_MAX_QUERY_COST` | Una operación cuyo coste supera este número (consulta [Coste de la consulta](#query-cost)). |
+| Nombres para un mismo campo | 20 | `DC_GRAPHQL_MAX_FIELD_ALIASES` | Una operación que selecciona un mismo campo con más nombres (alias) que este número en algún nivel. |
 | Comprobaciones de credenciales por petición | 1 | `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` | Las comprobaciones de contraseña de una misma petición que superan este número (consulta [más abajo](#credential-checks-per-request)). |
 
 Salvo con el límite del cuerpo, el de tiempo de ejecución y el de comprobaciones de credenciales, una solicitud rechazada recibe
@@ -1090,8 +1092,37 @@ el valor `TOO_MANY_ROOT_FIELDS`:
 El límite de mutaciones es el estricto porque los campos de una mutación se ejecutan uno tras otro.
 Sin él, una sola solicitud podría llevar cientos de copias con alias de una mutación costosa. La
 consola, la aplicación de paneles, los SDK, `dcctl` y el servidor MCP envían un solo campo de
-mutación por solicitud y como mucho dos campos de consulta. El límite se aplica solo a los campos de
-primer nivel; los alias de un campo anidado no se cuentan.
+mutación por solicitud y como mucho dos campos de consulta. Los límites de campos raíz cuentan solo
+los campos de primer nivel; el trabajo por debajo de ese nivel lo acota el coste de la consulta.
+
+### Coste de la consulta {#query-cost}
+
+Antes de ejecutarse, cada operación, incluidas las suscripciones, recibe un coste. Se rechaza cuando
+el coste supera `DC_GRAPHQL_MAX_QUERY_COST` (100.000 por defecto):
+
+- Cada campo seleccionado cuesta 1.
+- Todo lo seleccionado bajo un campo que devuelve una página de resultados cuesta tantas veces como
+  filas tenga la página. El tamaño de página es el que indica la solicitud, en la consulta o en sus
+  variables. Un tamaño de página omitido cuenta como el valor por defecto que declara el esquema
+  o, si no declara ninguno, como 1.000, lo máximo que devuelve cualquier página. Un tamaño de página
+  que no sea un número positivo o que supere 1.000 cuenta como 1.000.
+- Todo lo seleccionado bajo una búsqueda que recibe una lista, como una lista de tokens, cuesta
+  tantas veces como elementos tenga la lista.
+- La operación se costea tal como se ejecuta. Los campos a los que se llega a través de un
+  fragmento cuentan como si estuvieran escritos directamente, una selección que `@skip` o `@include`
+  deja fuera no cuesta nada, y los campos que se ejecutan como uno solo (mismo nombre, alias y
+  argumentos, escritos dos veces o alcanzados por varios fragmentos) cuentan una vez.
+
+Por ejemplo, una página de 100 dispositivos con 5 campos cada uno cuesta unos 600. El documento más
+costoso que envían la consola, la aplicación de paneles, los SDK, `dcctl` y el servidor MCP cuesta
+unos 72.000 con el mayor tamaño de página que puede pedir.
+
+El rechazo lleva `extensions.code` con el valor `QUERY_TOO_COSTLY`. Una operación que selecciona un
+mismo campo con más de `DC_GRAPHQL_MAX_FIELD_ALIASES` nombres (20 por defecto) en algún nivel se
+rechaza con `TOO_MANY_ALIASES`. Para quedar por debajo del límite de coste, pide páginas más
+pequeñas o menos campos anidados. Cada servicio cuenta las solicitudes que rechazan estos límites y
+los de campos raíz en la métrica `devicechain_graphql_work_refused_total`, con la etiqueta
+`limit="root_fields"`, `"cost"` o `"aliases"`.
 
 ### Límites de tamaño en listas, entradas y agregaciones {#size-bounds}
 

@@ -814,6 +814,8 @@ mutation StepUp($refreshToken: String!, $code: String!) {
 | 嵌套深度 | 15 | `DC_GRAPHQL_MAX_DEPTH` | 超过此深度的嵌套选择。 |
 | 每查询根字段数 | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | 顶层字段数超过此值的查询操作。 |
 | 每变更根字段数 | 5 | `DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS` | 顶层字段数超过此值的变更操作。 |
+| 查询成本 | 100,000 | `DC_GRAPHQL_MAX_QUERY_COST` | 成本超过此值的操作，见[查询成本](#query-cost)。 |
+| 同一字段的名称数 | 20 | `DC_GRAPHQL_MAX_FIELD_ALIASES` | 在任一层级以超过此数的名称（别名）选择同一字段的操作。 |
 | 每请求凭据检查数 | 1 | `DC_GRAPHQL_MAX_CREDENTIAL_CHECKS` | 一次请求中超过此数的密码检查，见[下文](#credential-checks-per-request)。 |
 
 除了正文限制、执行时间限制和凭据检查限制，被拒绝的请求会返回 HTTP 200，`errors` 中只有一项，无 `data`，且不执行任何内容。在执行时间截止时被取消的请求已经开始运行，因此响应会为被中断的工作返回一个错误。
@@ -841,7 +843,27 @@ mutation StepUp($refreshToken: String!, $code: String!) {
 变更限制更严格，因为变更字段依次执行。
 否则一个请求可以包含数百个昂贵变更的别名副本。
 控制台、仪表盘应用、SDK、`dcctl` 和 MCP 服务器每个请求发送一个变更字段，最多两个查询字段。
-限制只针对顶层字段，嵌套字段的别名不计数。
+根字段限制只计算顶层字段；顶层以下的工作量由查询成本限制。
+
+### 查询成本 {#query-cost}
+
+每个操作（包括订阅）在执行前都会计算成本，成本超过 `DC_GRAPHQL_MAX_QUERY_COST`（默认 100,000）时被拒绝：
+
+- 每个选择的字段成本为 1。
+- 在返回一页结果的字段下选择的所有内容，成本乘以该页的行数。页大小取请求在查询或变量中指定的值。
+  省略的页大小按 schema 为其声明的默认值计算；未声明默认值时按 1,000 计算，即任何一页返回的最大行数。
+  不是正数或超过 1,000 的页大小按 1,000 计算。
+- 在接受列表（例如令牌列表）的查找字段下选择的所有内容，成本乘以列表长度。
+- 按实际执行的方式计算成本：通过片段到达的字段与直接展开书写一样计数；被 `@skip` 或 `@include`
+  排除的选择不计成本；作为同一个字段执行的字段（名称、别名和参数相同，重复书写或经多个片段到达）只计一次。
+
+例如，一页 100 台设备、每台 5 个字段，成本约为 600。控制台、仪表盘应用、SDK、`dcctl` 和 MCP
+服务器发送的成本最高的文档，在其可请求的最大页大小下成本约为 72,000。
+
+拒绝时 `extensions.code` 为 `QUERY_TOO_COSTLY`。在任一层级以超过 `DC_GRAPHQL_MAX_FIELD_ALIASES`
+个名称（默认 20）选择同一字段的操作，以 `TOO_MANY_ALIASES` 拒绝。要降到成本限制以下，请请求更小的页或更少的嵌套字段。
+每个服务在 `devicechain_graphql_work_refused_total` 指标中统计这些限制和根字段限制拒绝的请求，
+标签为 `limit="root_fields"`、`"cost"` 或 `"aliases"`。
 
 ### 列表、输入和聚合的大小限制 {#size-bounds}
 

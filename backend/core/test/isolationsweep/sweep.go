@@ -378,12 +378,30 @@ func selection(t *introspection.Type, depth int) string {
 			parts = append(parts, f.Name())
 		default:
 			if depth < 2 {
-				parts = append(parts, f.Name()+selection(f.Type(), depth+1))
+				parts = append(parts, f.Name()+sizeArgs(f)+selection(f.Type(), depth+1))
 			}
 		}
 	}
 	parts = append(parts, "__typename")
 	return " { " + strings.Join(parts, " ") + " }"
+}
+
+// sizeArgs gives a nested field's optional page-size argument (limit, first) a small
+// value. Left out, the server counts it as its largest page (1,000 rows) in the query
+// cost, and a nested page of that size under the root page this sweep asks for is over
+// the cost ceiling, which would refuse the operation before the isolation it sweeps is
+// ever reached.
+func sizeArgs(f *introspection.Field) string {
+	var parts []string
+	for _, a := range f.Args(&struct{ IncludeDeprecated bool }{true}) {
+		if (a.Name() == "limit" || a.Name() == "first") && named(a.Type()).Name() != nil && *named(a.Type()).Name() == "Int" {
+			parts = append(parts, a.Name()+": 5")
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "(" + strings.Join(parts, ", ") + ")"
 }
 
 func requiredArgs(f *introspection.Field) []*introspection.InputValue {

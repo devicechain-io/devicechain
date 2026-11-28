@@ -43,9 +43,11 @@ func DevToolsEnabled() bool {
 // They are appended AFTER any caller-supplied opts so the secure defaults take
 // precedence. On top of those, the returned Schema refuses an operation that selects
 // more ROOT fields than DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS / _MUTATION_ROOT_FIELDS allow,
-// before any resolver runs. That bounds the serial work one request can buy through
-// aliased mutations and its root fan-out; it does not bound nested aliasing (see
-// Schema's doc comment for what it leaves open). Every execution also carries a
+// costs more than DC_GRAPHQL_MAX_QUERY_COST, or selects one field under more names at
+// one level than DC_GRAPHQL_MAX_FIELD_ALIASES allows, before any resolver runs. The root
+// ceilings bound the serial work one request can buy through aliased mutations and its
+// root fan-out; the cost and alias ceilings bound nested work (see Schema's doc comment,
+// and cost.go for what the count does not see). Every execution also carries a
 // credential-check budget of DC_GRAPHQL_MAX_CREDENTIAL_CHECKS, which bounds the
 // bcrypt compares one request can reach however its document is written.
 //
@@ -66,12 +68,16 @@ func MustParseSchema(schema string, resolver interface{}, opts ...graphql.Schema
 	if !DevToolsEnabled() {
 		opts = append(opts, graphql.DisableIntrospection())
 	}
+	inner := graphql.MustParseSchema(schema, resolver, opts...)
 	return &Schema{
-		inner:            graphql.MustParseSchema(schema, resolver, opts...),
+		inner:            inner,
 		capabilitySchema: schema,
 		maxQueryLength:   maxLen,
 		maxQueryRoots:    maxQueryRootFields(),
 		maxMutationRoots: maxMutationRootFields(),
+		maxCost:          int64(maxQueryCost()),
+		maxAliases:       maxFieldAliasesLimit(),
+		model:            buildCostModel(inner.Inspect()),
 		maxCredChecks:    maxCredentialChecks(),
 	}
 }
