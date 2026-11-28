@@ -231,3 +231,34 @@ func TestContributorUnknownTierStaysActive(t *testing.T) {
 		t.Fatalf("an unknown tier must not clear or dominate; want active MAJOR, got active=%v sev=%q", active, sev)
 	}
 }
+
+// DETECT stamps a fresh raise one microsecond past a resolve at the same instant. Whatever the
+// delivery order of raise@10, resolve@20 and raise@20+1us, the alarm must end active; at an equal
+// time the resolve would win and leave it cleared.
+func TestContributorBumpedRaiseAfterResolveIsActive(t *testing.T) {
+	times := []time.Time{ts(10), ts(20), ts(20).Add(time.Microsecond)}
+	for _, order := range [][3]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}} {
+		cs := contributorSet{}
+		for _, i := range order {
+			cs.apply("r", i != 1, "MAJOR", times[i])
+		}
+		if severity, active := cs.activeSeverity(); !active || severity != "MAJOR" {
+			t.Fatalf("order %v: want active MAJOR, got %v %q", order, active, severity)
+		}
+	}
+}
+
+// The counterweight: the un-bumped edges DETECT emitted before (raise@10, resolve@20, raise@20)
+// end cleared in every delivery order, which is the defect the bump exists to avoid.
+func TestContributorEqualTimeRaiseAfterResolveIsCleared(t *testing.T) {
+	times := []time.Time{ts(10), ts(20), ts(20)}
+	for _, order := range [][3]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}} {
+		cs := contributorSet{}
+		for _, i := range order {
+			cs.apply("r", i != 1, "MAJOR", times[i])
+		}
+		if _, active := cs.activeSeverity(); active {
+			t.Fatalf("order %v: an equal-time resolve is expected to win; the fold changed", order)
+		}
+	}
+}

@@ -8,6 +8,8 @@ DeviceChain turns raw device telemetry into signals you can act on. A dedicated 
 
 The service evaluates on event time and persists its state, so a restart re-derives the same firings — none missed, none duplicated — for rules with fixed thresholds. A rule whose threshold is an attribute is re-evaluated during replay against the attribute's value as the service last held it, not its value when the event first arrived, so an attribute that changed between an event and a restart can make a firing be missed or re-derived.
 
+When a reading clears a rule and another reading with the same timestamp breaches it again, the new alarm is stamped one microsecond after the resolve, so it stays active. A reading at that original timestamp that arrives later still counts as current, not as older than the alarm. Devices should still send distinct timestamps.
+
 :::note Status
 **Available today:** detection and actions are the platform's live detection engine, with all eight [condition types](#condition-types) (static or attribute-driven thresholds) and all four [actions](#automated-actions) with per-action guards. Rules are authored three ways over one schema — form builder, visual automation canvas, and, with the AI service enabled, a natural-language "Describe" door — all [validated by the same compiler](#authoring--previewing-rules) before publish, and the canvas can preview a draft against replayed history. The four-state [alarm lifecycle](#the-alarm-lifecycle) with in-place severity escalation, live alarm and detection subscriptions, and email/webhook [notification](#reaching-a-human) with escalation are all in place.
 :::
