@@ -35,13 +35,18 @@ type postEnv struct {
 // sets k to v1 on it.
 func postFixture(t *testing.T, value string, unset bool) *postEnv {
 	t.Helper()
+	return postFixtureWithValueType(t, value, unset, "STRING")
+}
+
+func postFixtureWithValueType(t *testing.T, value string, unset bool, valueType string) *postEnv {
+	t.Helper()
 	armed(t)
 	api, ctx := configTestApi(t)
 	require.NoError(t, api.RDB.DB(core.WithSystemContext(ctx)).AutoMigrate(&FleetOperation{}, &FleetOperationRuntime{}, &FleetOperationContract{},
 		&FleetOperationLine{}, &FleetOperationEvent{}))
-	dev := seedConfiguredDevice(t, api, ctx, []ConfigurationKey{{Key: "k", ValueType: "STRING"}})
+	dev := seedConfiguredDevice(t, api, ctx, []ConfigurationKey{{Key: "k", ValueType: valueType}})
 	req := &FleetOperationCreateRequest{Token: "p1", Name: "n", Kind: FleetKindConfigSet, DeviceTokens: []string{dev.Token},
-		ConfigSet: &FleetConfigSetIntent{Key: "k", ValueType: "STRING", Value: &value}}
+		ConfigSet: &FleetConfigSetIntent{Key: "k", ValueType: valueType, Value: &value}}
 	if unset {
 		req.ConfigSet = &FleetConfigSetIntent{Key: "k", Unset: true}
 	}
