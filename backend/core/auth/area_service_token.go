@@ -24,7 +24,9 @@ import (
 //     gets a 404 and no token, which is the fail-closed outcome (svcclient never falls back to the
 //     shared secret).
 //
-// The shared-secret endpoint is unchanged by any of this.
+// The shared-secret endpoint changes in one way only: it refuses to mint under an area-bound
+// caller's name (in any letter case), so the area's subject is obtainable through this endpoint
+// alone.
 //
 // 🔴 WHAT THIS DOES NOT YET GIVE. The ceiling is enforced on tokens minted THROUGH this endpoint. It
 // is not a boundary on the area as a whole while the area's pod still HOLDS the shared secret, and it

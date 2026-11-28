@@ -30,6 +30,9 @@ import (
 // Its fields are private so callers cannot bypass verification.
 type RestorePlan struct {
 	instance string
+	// dir is the verified backup set; ApplyObjects reads the object snapshot
+	// from it a second time and checks every byte again against objects.
+	dir      string
 	manifest *Manifest
 	streams  map[string]nats.StreamInfo
 	objects  map[string]objectRecord
@@ -59,7 +62,7 @@ func PrepareRestore(dir, instance string, forceForeign bool) (*RestorePlan, erro
 	if err := backupset.ValidateBackupPolicy(); err != nil {
 		return nil, err
 	}
-	p := &RestorePlan{instance: instance, manifest: m, streams: map[string]nats.StreamInfo{}}
+	p := &RestorePlan{instance: instance, dir: dir, manifest: m, streams: map[string]nats.StreamInfo{}}
 	entries := map[string]Entry{}
 	for _, e := range m.Entries {
 		entries[e.Kind+"/"+e.Name] = e

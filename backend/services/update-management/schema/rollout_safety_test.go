@@ -12,7 +12,7 @@ import (
 func TestRolloutSafetyMigrationReplaysAndAllowsOldWriters(t *testing.T) {
 	db := openDB(t)
 	require.Equal(t, "20261121000100", RolloutSafetyID)
-	require.Equal(t, RolloutSafetyID, Migrations[len(Migrations)-2].ID)
+	require.Equal(t, RolloutSafetyID, Migrations[len(Migrations)-3].ID)
 	require.NoError(t, NewRolloutsSchema().Migrate(db))
 	insert := `INSERT INTO update_rollouts (tenant_id, token, name, artifact_id, group_token, max_in_flight, state, pause_reason, target_count)
 	 VALUES ('acme', ?, 'rollout', 1, 'fleet', 1, 'DRAFT', '', 0)`

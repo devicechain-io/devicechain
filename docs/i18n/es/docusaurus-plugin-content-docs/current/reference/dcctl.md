@@ -41,7 +41,7 @@ dcctl [command]
 * [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files
 * [dcctl relationship](#dcctl-relationship)	 - Add, list and remove typed entity relationships
 * [dcctl resgen](#dcctl-resgen)	 - Generate configuration resources
-* [dcctl restore](#dcctl-restore)	 - Verify a backup and print a read-only restore plan
+* [dcctl restore](#dcctl-restore)	 - Verify a backup and print a restore plan, or restore its object store
 * [dcctl secrets](#dcctl-secrets)	 - Inspect and verify instance secret material
 * [dcctl setup](#dcctl-setup)	 - Preview. Guided set-up: a cluster, then an instance on it
 * [dcctl sim](#dcctl-sim)	 - Create and drive DeviceChain simulations
@@ -2915,16 +2915,22 @@ dcctl resgen [flags]
 
 ## dcctl restore {#dcctl-restore}
 
-Verify a backup and print a read-only restore plan
+Verify a backup and print a restore plan, or restore its object store
 
 ### Synopsis
 
 Verify local backup bytes, identity and coverage before connecting to the installed instance.
-Read target stream state and blob bytes; refuse possible newer-data loss. No restore is applied.
-Freeze target writers while planning; this is an observation, not a reservation for a later apply.
+--plan reads target stream state and blob bytes, refuses possible newer-data loss and prints the plan; it changes nothing.
+Freeze target writers while planning; a plan is an observation, not a reservation for a later apply.
+
+--apply --only object-store writes the backup's objects into the target instance's blob store. It refuses a
+target holding any object that differs from the backup, or is not in it, unless --overwrite-target is given;
+objects already identical are left alone, so an interrupted restore is finished by running it again.
+Every object is checked against the verified backup before it is committed, and the target is read back at
+the end. Stream restore is not implemented: --apply without --only object-store is refused.
 
 ```
-dcctl restore <instance> --from <backup-set> --plan [flags]
+dcctl restore <instance> --from <backup-set> (--plan | --apply --only object-store) [flags]
 ```
 
 ### Examples
@@ -2933,18 +2939,22 @@ dcctl restore <instance> --from <backup-set> --plan [flags]
   dcctl restore acme --from ./acme-backup --plan
   dcctl restore acme --from ./acme-backup --plan --kube-context prod
   dcctl restore acme-copy --from ./acme-backup --plan --force-foreign
+  dcctl restore acme --from ./acme-backup --apply --only object-store --blob-directory /mnt/acme-blob
 ```
 
 ### Options
 
 ```
-      --blob-directory string   Read-only mounted/exported target filesystem blob PVC root
+      --apply                   Restore the resources named by --only into the target instance
+      --blob-directory string   Mounted/exported target filesystem blob PVC root (read-only for --plan, writable for --apply)
       --force-foreign           Allow a foreign instance or tenant identity; never bypass loss or coverage checks
       --from string             Local verified backup-set directory (required)
   -h, --help                    help for restore
       --kube-context string     Kubernetes context of the installed instance
       --nats-url string         Reachable broker URL (default: port-forward)
-      --plan                    Print a plan without applying it (required)
+      --only string             With --apply, the resource to restore: object-store (the only one this release applies)
+      --overwrite-target        With --apply, replace target objects that differ from the backup; objects not in the backup are kept
+      --plan                    Print a plan without applying it
 ```
 
 ### SEE ALSO

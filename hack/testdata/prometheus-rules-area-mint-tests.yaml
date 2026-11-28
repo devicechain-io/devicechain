@@ -73,7 +73,8 @@ tests:
 
   # ------------------------------------------------------------------
   # MUST NOT FIRE. Issued tokens at any rate, and bad credentials from anything that is not the
-  # area (area="other"), are not this alert: the first is normal, the second carries no area.
+  # area (area="other"), are not this alert: the first is normal, the second carries no area and
+  # has an alert of its own (AreaMintBadCredentialsSustained, below).
   # ------------------------------------------------------------------
   - interval: 1m
     input_series:
@@ -96,4 +97,70 @@ tests:
     alert_rule_test:
       - eval_time: 6m
         alertname: AreaMintRefusedForbiddenRequest
+        exp_alerts: []
+
+  # ==================================================================
+  # AreaMintBadCredentialsSustained: credentials that match no area, steadily.
+  # ==================================================================
+
+  # MUST FIRE once the stream has lasted past the `for`. 5 a minute is 50 per ten-minute window,
+  # over the threshold from the first minutes; pending until 15m later, firing after.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_area_mint_requests_total{namespace="dci-devicechain", job="devicechain/user-management", area="other", result="bad_credential"}'
+        values: '0+5x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AreaMintBadCredentialsSustained
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: AreaMintBadCredentialsSustained
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#areamintbadcredentialssustained"
+              summary: "Service-token requests keep presenting an area credential that matches no area"
+              description: "For at least 15 minutes, user-management's area-bound service-token endpoint has been refusing more than 10 requests every ten minutes because the credential presented matches no area-bound area. Nothing was granted. A short burst while a credential is being rotated is expected and does not raise this; a stream this long is either something on the instance's internal network presenting credentials that are not an area's, or a rotation whose two sides never agreed. Check whether an area-bound area's pod is failing to obtain tokens: if it is, its mounted credential and user-management's differ, so compare the Secret dci-<instance>-mint-<area> with what both pods mount, and restart the one that has not refreshed. If every area-bound area is obtaining tokens, the requests come from something else: the endpoint is served only on user-management's internal listener, so the caller is inside the instance's network. Find it and treat it as suspect."
+
+  # MUST NOT FIRE on a rotation's skew: a hard burst (40 failures in two minutes) and then none.
+  # The window holds it over the threshold for ten minutes, which is less than the `for`.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_area_mint_requests_total{namespace="dci-devicechain", job="devicechain/user-management", area="other", result="bad_credential"}'
+        values: '0 0 0 0 0 20 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40 40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AreaMintBadCredentialsSustained
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: AreaMintBadCredentialsSustained
+        exp_alerts: []
+      - eval_time: 38m
+        alertname: AreaMintBadCredentialsSustained
+        exp_alerts: []
+
+  # MUST NOT FIRE below the threshold, however long: one every two minutes is 5 per window.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_area_mint_requests_total{namespace="dci-devicechain", job="devicechain/user-management", area="other", result="bad_credential"}'
+        values: '0+0.5x60'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: AreaMintBadCredentialsSustained
+        exp_alerts: []
+
+  # MUST NOT FIRE on what the other alert covers, nor on another instance's stream.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_area_mint_requests_total{namespace="dci-devicechain", job="devicechain/user-management", area="automation", result="over_ceiling"}'
+        values: '0+5x40'
+      - series: 'devicechain_usermanagement_area_mint_requests_total{namespace="dci-devicechain", job="devicechain/user-management", area="automation", result="invalid_request"}'
+        values: '0+5x40'
+      - series: 'devicechain_usermanagement_area_mint_requests_total{namespace="dci-other", job="devicechain/user-management", area="other", result="bad_credential"}'
+        values: '0+5x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: AreaMintBadCredentialsSustained
         exp_alerts: []
