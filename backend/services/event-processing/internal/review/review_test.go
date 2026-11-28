@@ -78,6 +78,68 @@ func run(t *testing.T, p Params) Result {
 	}
 	return r
 }
+func TestReviewSkipsDeclaredStringReadingLikeLive(t *testing.T) {
+	for _, dataType := range []string{"STRING", "DOUBLE"} {
+		t.Run(dataType, func(t *testing.T) {
+			p := fixture(t)
+			// Both sides compare the numeric-looking reading against 1.
+			def := json.RawMessage(`{"name":"hot","type":"threshold","when":{"metric":"temp","op":"gt","threshold":1},"actions":[{"type":"sendCommand","sendCommand":{"command":"boost"}}]}`)
+			p.Base.Definition, p.Draft.Definition = def, def
+			s := p.Source.(*source)
+			for i := range s.msgs {
+				ev, err := resolvedevent.UnmarshalResolvedEvent(s.msgs[i].Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				m := &ev.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries[0].Entries[0]
+				m.DataType, m.Value = &dataType, "40"
+				s.msgs[i].Value, err = resolvedevent.MarshalResolvedEvent(ev)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Inspect the admitted evaluator input as well as the final review.
+			for _, window := range p.Windows {
+				_, events, err := readWindow(context.Background(), p, window, LeadInMargin, p.Devices)
+				if err != nil {
+					t.Fatal(err)
+				}
+				readings := 0
+				for _, ev := range events {
+					for _, m := range ev.Metrics {
+						if m.Name == "temp" {
+							readings++
+						}
+					}
+				}
+				if dataType == "STRING" && readings != 0 {
+					t.Fatalf("STRING became %d numeric evaluator readings", readings)
+				}
+				if dataType == "DOUBLE" && readings == 0 {
+					t.Fatal("numeric control had no evaluator readings")
+				}
+			}
+			result := run(t, p)
+			if len(result.Windows) != len(p.Windows) {
+				t.Fatalf("review returned %d windows, want %d", len(result.Windows), len(p.Windows))
+			}
+			for _, window := range result.Windows {
+				if len(window.Devices) != 1 || len(window.Devices[0].MetricTypes["temp"]) != 1 || window.Devices[0].MetricTypes["temp"][0] != dataType {
+					t.Fatalf("declared metric type lost: %+v", window.Devices)
+				}
+				base := len(window.BaseIntents) + len(window.LeadInBaseIntents)
+				draft := len(window.DraftIntents) + len(window.LeadInDraftIntents)
+				if dataType == "STRING" && (base != 0 || draft != 0) {
+					t.Fatalf("STRING fired a rule: %+v", window)
+				}
+				if dataType == "DOUBLE" && (base == 0 || draft == 0) {
+					t.Fatalf("numeric control did not fire both rules: %+v", window)
+				}
+			}
+		})
+	}
+}
+
 func TestNoopAndDeterminism(t *testing.T) {
 	p := fixture(t)
 	a := run(t, p)

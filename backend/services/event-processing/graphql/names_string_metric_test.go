@@ -4,6 +4,7 @@
 package graphql
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -76,6 +77,14 @@ func TestValidateDetectionRules_MetricListFailsClosed(t *testing.T) {
 	_, err = validate(t, validateArgs{Rules: rules, Metrics: metricsArg(
 		detectionMetricInput{Key: "mode", DataType: "string"}, detectionMetricInput{Key: "mode", DataType: "STRING"})})
 	require.NoError(t, err)
+
+	atCap := make([]detectionMetricInput, MaxMetricsPerValidation)
+	for i := range atCap {
+		atCap[i] = detectionMetricInput{Key: fmt.Sprintf("k%d", i), DataType: "DOUBLE"}
+	}
+	res, err := validate(t, validateArgs{Rules: rules, Metrics: &atCap})
+	require.NoError(t, err)
+	require.True(t, res.Valid(), "exactly the documented metric limit must be accepted")
 
 	over := make([]detectionMetricInput, MaxMetricsPerValidation+1)
 	for i := range over {

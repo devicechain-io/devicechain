@@ -6,7 +6,9 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +19,86 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
+
+func TestStartupReplayRecoversCommandsAfterRefusedCheckpoint(t *testing.T) {
+	w := &derivedCapture{}
+	rp := stampingProcessor(t, diffRegistry(t), w)
+	rp.cfg.Shards = 2
+	rp.closeDetector()
+	rp.engine = rp.newDetector()
+	t.Cleanup(rp.closeDetector)
+	msg := resolvedMessage(t, diffEvent{device: "device-1", occurred: testBase, value: "40"}, 1, testBase, &fakeAck{})
+	rp.ResolvedEventsReader = &deliveredReader{fakeReader: &fakeReader{}, through: 1}
+	refused := 0
+	rp.procCancel = func() { refused++ }
+	rp.Replay = &replayWithEOFHook{
+		fakeReplayOpener: &fakeReplayOpener{msgs: []messaging.Message{msg}, head: 1},
+		onEOF: func() {
+			// Applying the input succeeds, but the final replay checkpoint refuses
+			// placement before it can synchronize the concurrent shards.
+			rp.ruleRouting = &groupRuleRouting{
+				owners: map[string]int{"acme": 0},
+				err:    errors.New("checkpoint placement unavailable"),
+			}
+		},
+	}
+	if err := rp.replayToHead(); err != nil {
+		t.Fatal(err)
+	}
+	if refused != 1 || len(w.events) != 0 {
+		t.Fatalf("want one refused checkpoint and no publication, got %d refusals and %d events", refused, len(w.events))
+	}
+	if rp.replaying {
+		t.Fatal("replay mode remained set after returning to live consumption")
+	}
+	rp.ruleRouting = nil
+	if !rp.checkpoint(context.Background()) {
+		t.Fatal("checkpoint after restoring placement failed")
+	}
+	sink := &reactFakeSink{}
+	gate := &meterGate{admit: false}
+	rd, _ := reactWithConnectors(t, governedCommandRule(), sink, nil, nil, &deadRecorder{}, testShedBudget, react.WithCommandRateGate(gate))
+	raised := 0
+	for _, ev := range w.events {
+		if !ev.OccurredTime.Equal(testBase) {
+			t.Fatalf("unexpected detection time: %v", ev.OccurredTime)
+		}
+		if !ev.Replayed {
+			t.Fatal("a recovered detection collected after a refused checkpoint lost its replay stamp")
+		}
+		if ev.Edge != runtime.EdgeResolved {
+			raised++
+		}
+		rd.handle(derivedMsg(t, "acme", ev, 1, &fakeAck{}))
+	}
+	if raised == 0 || len(sink.sent) != raised || len(gate.at) != 0 {
+		t.Fatalf("sent %d of %d recovered commands and charged %d times; want all sent, none charged", len(sink.sent), raised, len(gate.at))
+	}
+}
+
+// replayWithEOFHook changes checkpoint conditions after the last input is applied.
+type replayWithEOFHook struct {
+	*fakeReplayOpener
+	onEOF func()
+}
+
+func (r *replayWithEOFHook) NewReplayReader(suffix string, seq uint64) (messaging.ReplayReader, uint64, error) {
+	reader, head, err := r.fakeReplayOpener.NewReplayReader(suffix, seq)
+	return &replayEOFHookReader{ReplayReader: reader, onEOF: r.onEOF}, head, err
+}
+
+type replayEOFHookReader struct {
+	messaging.ReplayReader
+	onEOF func()
+}
+
+func (r *replayEOFHookReader) Read(ctx context.Context) (messaging.Message, error) {
+	msg, err := r.ReplayReader.Read(ctx)
+	if errors.Is(err, io.EOF) {
+		r.onEOF()
+	}
+	return msg, err
+}
 
 func governedCommandRule() rules.Rule {
 	r := sendCmdRule()
@@ -223,6 +305,9 @@ func TestCommandSyntheticFeedbackLoopIsCutAndRecorded(t *testing.T) {
 	letters := dead.letters(t)
 	if len(letters) != 1 || !strings.HasPrefix(letters[0].Detail, "sendCommand/command_loop/") {
 		t.Fatalf("loop suppression has no distinct diagnostic: %+v", letters)
+	}
+	if !strings.Contains(letters[0].Summary, "command_loop") || strings.Contains(letters[0].Summary, "outbound rate") {
+		t.Fatalf("loop suppression summary misidentifies the source policy: %q", letters[0].Summary)
 	}
 	if labelledCounter(t, reg, "devicechain_eventprocessing_react_command_refused_total", "reason", react.CommandLoop) != 1 {
 		t.Fatal("loop refusal was not counted distinctly")
