@@ -1739,6 +1739,24 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		return nil
 	}
 
+	// 🔴 REPLAY IS TWO THINGS, AND ONLY THE FIRST IS A RE-DERIVATION. The part of the window
+	// the durable already handed out was applied by an earlier term, which may have drained and
+	// even delivered its detections before it died: those are re-derived output, marked
+	// Replayed, and REACT sends them without charging its command guards (the idempotency token
+	// collapses a second delivery). The part past it is a backlog that arrived while nobody was
+	// consuming: no engine has ever seen it, so its detections are fresh triggers and must be
+	// governed like live ones. Marking the whole window Replayed let a backlog of any size
+	// actuate past the tenant's command ceiling and the loop guard.
+	//
+	// The boundary errs toward governing. A replay reads by sequence and moves no durable, so
+	// a term that died part-way through its OWN replay leaves the next one charging that
+	// stretch again (its commands collapse downstream on their tokens; only the allowance is
+	// spent twice). The other way, a fetched batch the dead term never applied counts as
+	// delivered, which is bounded by one fetch.
+	delivered, err := rp.deliveredThrough()
+	if err != nil {
+		return fmt.Errorf("read how far the resolved-events durable has delivered before replay: %w", err)
+	}
 	replayed := 0
 	for {
 		msg, err := reader.Read(rp.pctx())
@@ -1747,6 +1765,12 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		}
 		if err != nil {
 			return fmt.Errorf("replay read: %w", err)
+		}
+		if rp.replaying && msg.StreamSeq > delivered {
+			// The first message no earlier term was given. A concurrent engine stamps on
+			// collection, so take in everything the re-derived part made before the stamp flips.
+			rp.syncDetector()
+			rp.replaying = false
 		}
 		// A replay read acknowledges nothing (it is a read by sequence), so nothing is
 		// buffered for the durable here — only the engine is advanced.
@@ -2398,6 +2422,26 @@ func (rp *ResolvedEventsProcessor) drainControlPlane() {
 		return // a term that ended before its engine was built has nothing to drain
 	}
 	rp.drainDetections(rp.clock.Now(), false)
+}
+
+// consumerDelivered reports the highest stream sequence the resolved-events durable has handed
+// to any consumer instance. *messaging.NatsManager's reader satisfies it (a ConsumerInfo call).
+type consumerDelivered interface {
+	DeliveredThrough(ctx context.Context) (uint64, error)
+}
+
+// deliveredThrough is how far an earlier term may have applied the stream: the durable's
+// delivered sequence, read before this term's loop fetches anything. A reader that cannot say
+// (the unit-test fakes) proves no earlier delivery, so the whole replay window is governed as
+// fresh: the guards then over-count a re-derivation rather than wave a backlog through.
+func (rp *ResolvedEventsProcessor) deliveredThrough() (uint64, error) {
+	dr, ok := rp.ResolvedEventsReader.(consumerDelivered)
+	if !ok {
+		return 0, nil
+	}
+	ctx, cancel := context.WithTimeout(rp.pctx(), backlogProbeTimeout)
+	defer cancel()
+	return dr.DeliveredThrough(ctx)
 }
 
 // consumerBacklog reports the resolved-events durable consumer's UNDELIVERED (pending) and
