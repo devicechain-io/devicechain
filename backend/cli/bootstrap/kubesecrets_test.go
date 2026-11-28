@@ -155,6 +155,7 @@ func TestKubeconfigPluginSettingsInJSONAndTUIEvents(t *testing.T) {
 				"      env:\n      - name: HTTPS_PROXY\n        value: http://alice:Pr0xy-pw@proxy:3128\n"+
 				"      - name: SESSION\n        value: "+jwt+"\n"+
 				"      - name: OPAQUE\n        value: Long.p4ss:Phrase-7Qw2Er9Ty4\n"+
+				"      - name: SESSION\n        value: correcthorsebatterystaple_1234\n"+
 				"      - name: AWS_PROFILE\n        value: default\n"+
 				"      - name: AUTH_MODE\n        value: default\n"+
 				"      - name: COMPASS_REGISTRY\n        value: eu.gcr.io\n"+
@@ -166,7 +167,7 @@ func TestKubeconfigPluginSettingsInJSONAndTUIEvents(t *testing.T) {
 			lines := []string{"docker context default", "namespace default", "helm default us-east-1",
 				"proxy password Pr0xy-pw", "session " + jwt, "opaque Long.p4ss:Phrase-7Qw2Er9Ty4",
 				"namespace devicechain-production-namespace", "env EnvCredential1234567890", "provider ProviderCredential1234567890",
-				"typed env tk4x", "typed provider cs4x", "registry eu.gcr.io", "kubectl 1.27.3", "db pass Pw4short"}
+				"typed env tk4x", "typed provider cs4x", "registry eu.gcr.io", "kubectl 1.27.3", "db pass Pw4short", "horse correcthorsebatterystaple_1234"}
 			e := &InstallEngine{
 				Provider: &fakeProvider{name: "local"}, Options: InstallOptions{Options: Options{AssumeYes: true}}, SkipPreflight: true,
 				Cluster: func(ctx context.Context, _ Provider, _ InstallOptions) error {
@@ -227,7 +228,7 @@ func TestKubeconfigPluginSettingsInJSONAndTUIEvents(t *testing.T) {
 			for _, want := range []string{"docker context default", "namespace default", "helm default us-east-1",
 				"proxy password [redacted]", "session [redacted]", "opaque [redacted]",
 				"namespace devicechain-production-namespace", "env [redacted]", "provider [redacted]", "typed env [redacted]", "typed provider [redacted]",
-				"registry eu.gcr.io", "kubectl 1.27.3", "db pass [redacted]"} {
+				"registry eu.gcr.io", "kubectl 1.27.3", "db pass [redacted]", "horse [redacted]"} {
 				if !logs[want] {
 					t.Errorf("missing log %q; got %v", want, logs)
 				}
@@ -547,6 +548,64 @@ func TestAdditionalCredentialPredicates(t *testing.T) {
 		if credentialShaped(value) {
 			t.Errorf("ordinary setting %q must remain visible", value)
 		}
+	}
+}
+
+// legacyCredentialShaped is the predicate credentialShaped replaced, kept verbatim as the
+// coverage floor: whatever it registered at 20 bytes or more must stay registered.
+func legacyCredentialShaped(a string) bool {
+	if len(a) < 20 || a[0] == '/' {
+		return false
+	}
+	letter, digit := false, false
+	for _, c := range a {
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z':
+			letter = true
+		case '0' <= c && c <= '9':
+			digit = true
+		case c == '+' || c == '/' || c == '=' || c == '_':
+		default:
+			return false
+		}
+	}
+	return letter && digit
+}
+
+// 🔴 COVERAGE NEVER SHRINKS: every long value the earlier predicate registered is still
+// registered. The only exemptions are a path (leading '/') and a URL, whose password is
+// registered on its own. The plain-name exemption is for short values only.
+func TestCredentialShapedKeepsLegacyCoverage(t *testing.T) {
+	corpus := []string{
+		"correcthorsebatterystaple_1234", "correct_horse_battery_staple_1234", "passphrase1234567890abcd",
+		"AKIA1234567890ABCDEF", "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY", "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+		"abcdefghijklmnopqrstuvwxyz12", "ABCDEFGHIJKLMNOPQRSTUVWXYZ12", "dGhpcyBpcyBhIHRva2VuIHZhbHVl+/==",
+		"Tok3n_Tok3n_Tok3n_Tok3n", "aaaaaaaaaaaaaaaaaaaa1", "1aaaaaaaaaaaaaaaaaaaa", "UPPERCASEPASSPHRASE_9876",
+		// short: the 20-byte floor applies
+		"correcthorse_1234", "AKIA1234567890", "1.27.3",
+		// documented exemptions: paths and URLs
+		"/usr/local/bin/helper-2024-aaaa", "/home/operator/.kube/aws-config1",
+		"https://login.example.com/oauth2/v2.0/token", "http://alice:ArgProxyPW@proxy:3128",
+		// plain names the earlier predicate also left alone
+		"devicechain-production-namespace", "production-cluster-01", "kubernetes.default.svc.cluster",
+	}
+	for _, v := range corpus {
+		if legacyCredentialShaped(v) && !credentialShaped(v) {
+			t.Errorf("%q was registered before and is no longer", v)
+		}
+	}
+	for _, v := range []string{"correcthorsebatterystaple_1234", "AKIA1234567890ABCDEF"} {
+		if !credentialShaped(v) {
+			t.Errorf("%q must be registered", v)
+		}
+	}
+	for _, v := range []string{"1.27.3", "eu.gcr.io", "localhost:8080", "correcthorse_1234"} {
+		if credentialShaped(v) {
+			t.Errorf("short ordinary value %q must stay visible", v)
+		}
+	}
+	if got := execArgSecrets([]string{"correcthorsebatterystaple_1234", "--session=correcthorsebatterystaple_5678"}); len(got) != 2 {
+		t.Errorf("positional and inline long values: got %q", got)
 	}
 }
 

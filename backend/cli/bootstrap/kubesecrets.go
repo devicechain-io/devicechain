@@ -231,7 +231,28 @@ func credentialShaped(a string) bool {
 	if len(a) < 20 || a[0] == '/' || isURL(a) {
 		return false
 	}
-	return !plainName(a)
+	// A long value is exempt only as a plain NAME; one the previous shape already
+	// registered (letters and digits in the key alphabet, such as a long
+	// "word_1234" passphrase) stays registered even though it parses as a plain name.
+	return keyAlphabetShaped(a) || !plainName(a)
+}
+
+// keyAlphabetShaped is the shape credentialShaped registered before plainName
+// existed: only letters, digits, '+', '/', '=' and '_', with both letters and digits.
+func keyAlphabetShaped(a string) bool {
+	letter, digit := false, false
+	for _, c := range a {
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z':
+			letter = true
+		case '0' <= c && c <= '9':
+			digit = true
+		case c == '+' || c == '/' || c == '=' || c == '_':
+		default:
+			return false
+		}
+	}
+	return letter && digit
 }
 
 // isURL reports whether a is an absolute URL with a host. Its password, if it has
