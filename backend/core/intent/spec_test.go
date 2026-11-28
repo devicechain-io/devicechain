@@ -5,6 +5,8 @@ package intent
 
 import (
 	"errors"
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -51,8 +53,11 @@ func TestParseAcceptsTheBoundaries(t *testing.T) {
 		"unset":                         with(`{"valueType":"LONG","value":"40"}`, `{"unset":true}`),
 		"unset false with a value":      with(`"value":"40"}`, `"value":"40","unset":false}`),
 		"negative long":                 with(`"value":"40"`, `"value":"-9223372036854775808"`),
-		"double":                        with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"DOUBLE","value":"1e-3"}`),
-		"boolean spelled as strconv":    with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"BOOLEAN","value":"F"}`),
+		"double":                        with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"DOUBLE","value":"0.001"}`),
+		"double integral":               with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"DOUBLE","value":"-3"}`),
+		"double negative zero":          with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"DOUBLE","value":"-0"}`),
+		"long zero":                     with(`"value":"40"`, `"value":"0"`),
+		"boolean false":                 with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"BOOLEAN","value":"false"}`),
 		"json":                          with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"JSON","value":" [1, {\"a\":null}] "}`),
 		"string empty":                  with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"STRING","value":""}`),
 		"paired surrogate escape":       with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"STRING","value":"😀"}`),
@@ -121,6 +126,23 @@ func TestParseRefusesWhatItCannotTakeLiterally(t *testing.T) {
 		"value not a string":            with(`"value":"40"`, `"value":40`),
 		"unset with a value":            with(`"value":"40"}`, `"value":"40","unset":true}`),
 		"unset with only a type":        with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"LONG","unset":true}`),
+		"unset with an empty type":      with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"","unset":true}`),
+		"unset with an empty value":     with(`{"valueType":"LONG","value":"40"}`, `{"value":"","unset":true}`),
+		"unset with both empty":         with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"","value":"","unset":true}`),
+		"long with a leading zero":      with(`"value":"40"`, `"value":"040"`),
+		"long with a plus sign":         with(`"value":"40"`, `"value":"+40"`),
+		"long negative zero":            with(`"value":"40"`, `"value":"-0"`),
+		"double with a trailing zero":   with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"DOUBLE","value":"21.50"}`),
+		"double integral with a point":  with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"DOUBLE","value":"1.0"}`),
+		"double with an exponent":       with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"DOUBLE","value":"1e3"}`),
+		"double hex":                    with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"DOUBLE","value":"0x1p2"}`),
+		"double with a plus sign":       with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"DOUBLE","value":"+1.5"}`),
+		"double with a leading point":   with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"DOUBLE","value":".5"}`),
+		"double with underscores":       with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"DOUBLE","value":"1_000"}`),
+		"boolean as a digit":            with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"BOOLEAN","value":"1"}`),
+		"boolean upper case":            with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"BOOLEAN","value":"TRUE"}`),
+		"boolean title case":            with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"BOOLEAN","value":"False"}`),
+		"boolean as a letter":           with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"BOOLEAN","value":"F"}`),
 		"unset not a boolean":           with(`{"valueType":"LONG","value":"40"}`, `{"unset":"true"}`),
 		"empty value object":            with(`{"valueType":"LONG","value":"40"}`, `{}`),
 		"long that is not an integer":   with(`"value":"40"`, `"value":"40.0"`),
@@ -211,12 +233,107 @@ func TestDefaultsAndExactness(t *testing.T) {
 	if explicitZero.Reconcile.ManualDwellSeconds != 0 {
 		t.Error("an explicit manualDwellSeconds of 0 was replaced by the default")
 	}
-	a := mustParse(t, validDoc)
-	b := mustParse(t, with(`"value":"40"`, `"value":"040"`))
+	a := mustParse(t, with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"STRING","value":"40"}`))
+	b := mustParse(t, with(`{"valueType":"LONG","value":"40"}`, `{"valueType":"STRING","value":"040"}`))
 	da, _ := SpecDigest(a)
 	db, _ := SpecDigest(b)
 	if da == db {
-		t.Error(`"40" and "040" must be different specs: the value text is exact`)
+		t.Error(`STRING "40" and "040" must be different specs: the value text is exact`)
+	}
+}
+
+// storedSpelling repeats device-management's normalizeAttributeValue (model/api_attributes.go),
+// which every configuration write passes through: the text a device's stored row holds for a
+// written value, or ok=false where device-management refuses the write. Package core cannot
+// import a service, so the rule is restated here and the cases below pin the two together.
+func storedSpelling(valueType, text string) (string, bool) {
+	switch valueType {
+	case ValueTypeLong, ValueTypeDouble:
+		f, err := strconv.ParseFloat(text, 64)
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			return "", false
+		}
+		if valueType == ValueTypeDouble {
+			return strconv.FormatFloat(f, 'f', -1, 64), true
+		}
+		if i, err := strconv.ParseInt(text, 10, 64); err == nil {
+			return strconv.FormatInt(i, 10), true
+		}
+		if f != math.Trunc(f) || f < math.MinInt64 || f >= math.MaxInt64 {
+			return "", false
+		}
+		return strconv.FormatInt(int64(f), 10), true
+	case ValueTypeBoolean:
+		b, err := strconv.ParseBool(text)
+		if err != nil {
+			return "", false
+		}
+		return strconv.FormatBool(b), true
+	}
+	return text, true
+}
+
+// valueSpellings are typed value texts in the spellings device-management accepts and rewrites,
+// and in the ones it stores unchanged.
+var valueSpellings = []struct{ valueType, text string }{
+	{"BOOLEAN", "true"}, {"BOOLEAN", "false"}, {"BOOLEAN", "TRUE"}, {"BOOLEAN", "True"}, {"BOOLEAN", "1"},
+	{"BOOLEAN", "0"}, {"BOOLEAN", "t"}, {"BOOLEAN", "F"}, {"BOOLEAN", "FALSE"}, {"BOOLEAN", "yes"},
+	{"LONG", "40"}, {"LONG", "040"}, {"LONG", "+40"}, {"LONG", "-0"}, {"LONG", "0"}, {"LONG", "-40"},
+	{"LONG", "40.0"}, {"LONG", "4e1"}, {"LONG", "9223372036854775807"}, {"LONG", "-9223372036854775808"},
+	{"LONG", "0x28"}, {"LONG", "4_0"},
+	{"DOUBLE", "21.5"}, {"DOUBLE", "21.50"}, {"DOUBLE", "1.0"}, {"DOUBLE", "1"}, {"DOUBLE", "1e3"},
+	{"DOUBLE", "1E3"}, {"DOUBLE", "1000"}, {"DOUBLE", "0x1p2"}, {"DOUBLE", "4"}, {"DOUBLE", "+1.5"},
+	{"DOUBLE", ".5"}, {"DOUBLE", "0.5"}, {"DOUBLE", "-0"}, {"DOUBLE", "-0.0"}, {"DOUBLE", "1e-7"},
+	{"DOUBLE", "0.0000001"}, {"DOUBLE", "1_000"}, {"DOUBLE", "Inf"}, {"DOUBLE", "1e400"},
+	{"DOUBLE", "0.1"}, {"DOUBLE", "0.30000000000000004"}, {"DOUBLE", "123456789012345678901234567890"},
+	{"STRING", " 40 "}, {"JSON", " [1] "},
+}
+
+// An intended value is digested as written and compared with the digest of what a device's row
+// holds, so a spelling device-management would rewrite on the way in would read as DRIFTED
+// forever. Validate accepts a value text only when it is exactly what device-management stores.
+func TestValueTextIsTheSpellingDeviceManagementStores(t *testing.T) {
+	accepted := 0
+	for _, tc := range valueSpellings {
+		s := mustParse(t, validDoc)
+		text := tc.text
+		s.Value = Value{ValueType: tc.valueType, Value: &text}
+		err := s.Validate()
+		stored, storable := storedSpelling(tc.valueType, tc.text)
+		switch {
+		case err == nil && !storable:
+			t.Errorf("%s %q accepted; device-management refuses it", tc.valueType, tc.text)
+		case err == nil && stored != tc.text:
+			t.Errorf("%s %q accepted; device-management stores it as %q, so it would never be IN_SYNC",
+				tc.valueType, tc.text, stored)
+		case err != nil && storable && stored == tc.text:
+			t.Errorf("%s %q refused (%v); device-management stores exactly that text", tc.valueType, tc.text, err)
+		case err != nil && !errors.Is(err, ErrInvalidSpec):
+			t.Errorf("%s %q refused without ErrInvalidSpec: %v", tc.valueType, tc.text, err)
+		}
+		if err == nil {
+			accepted++
+		}
+	}
+	if accepted < 10 {
+		t.Errorf("only %d spellings accepted; the table no longer exercises acceptance", accepted)
+	}
+}
+
+// Two spellings device-management stores as one value are one value: SameSubject must not see a
+// competing intent where there is none. With only stored spellings admitted, the case cannot be
+// written, and the refusal says which spelling to use.
+func TestNonCanonicalSpellingNamesTheStoredOne(t *testing.T) {
+	for _, tc := range []struct{ valueType, text, want string }{
+		{"BOOLEAN", "TRUE", `"true"`}, {"LONG", "040", `"40"`}, {"DOUBLE", "1e3", `"1000"`}, {"DOUBLE", "0x1p2", `"4"`},
+	} {
+		s := mustParse(t, validDoc)
+		text := tc.text
+		s.Value = Value{ValueType: tc.valueType, Value: &text}
+		err := s.Validate()
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s %q: Validate = %v; want a refusal naming %s", tc.valueType, tc.text, err, tc.want)
+		}
 	}
 }
 

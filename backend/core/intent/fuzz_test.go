@@ -76,6 +76,9 @@ func FuzzSpecRoundTrip(f *testing.F) {
 	f.Add("Signs_01", int64(7), "banner", "STRING", "quay \"east\"\\\né ", false, "SCHEDULE", int64(9), int64(61), int64(1), int64(1), int64(1))
 	f.Add("g", int64(2), "j", "JSON", `{"b": 1, "a": [true, null]}`, false, "SCHEDULE", int64(9), int64(61), int64(1), int64(1), int64(1))
 	f.Add("g", int64(2), "d", "DOUBLE", "-0.0e-3", false, "SCHEDULE", int64(9), int64(61), int64(1), int64(1), int64(1))
+	f.Add("g", int64(2), "d", "DOUBLE", "-0.001", false, "SCHEDULE", int64(9), int64(61), int64(1), int64(1), int64(1))
+	f.Add("g", int64(2), "b", "BOOLEAN", "TRUE", false, "SCHEDULE", int64(9), int64(61), int64(1), int64(1), int64(1))
+	f.Add("g", int64(2), "n", "LONG", "+40", false, "SCHEDULE", int64(9), int64(61), int64(1), int64(1), int64(1))
 	f.Fuzz(func(t *testing.T, group string, version int64, key, valueType, value string, unset bool,
 		class string, maxDevices, interval, lines, actuations, dwell int64) {
 		s := Spec{
@@ -97,6 +100,12 @@ func FuzzSpecRoundTrip(f *testing.F) {
 			return
 		}
 		checkRoundTrip(t, s)
+		if !s.Value.Unset {
+			if stored, ok := storedSpelling(s.Value.ValueType, *s.Value.Value); !ok || stored != *s.Value.Value {
+				t.Fatalf("Validate accepted %s %q; device-management stores %q (storable: %v)",
+					s.Value.ValueType, *s.Value.Value, stored, ok)
+			}
+		}
 		plain, err := json.Marshal(s)
 		if err != nil {
 			t.Fatal(err)
