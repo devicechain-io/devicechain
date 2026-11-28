@@ -11,11 +11,7 @@ files. `dcctl product plan` shows what applying those files would change, and `d
 makes a tenant hold them. Use it to promote a product from a development tenant to production, to
 review a change in a pull request, or to catch a tenant drifting from what is committed.
 
-:::caution Preview
-The command tree and the bundle format (`apiVersion: product.devicechain.io/v1alpha1`) are a
-preview. They are new, and a later minor release may change the format. `dcctl` reads only the
-`apiVersion` it knows and refuses any other, so a bundle is never half-understood.
-:::
+The command tree and bundle format are covered by the [versioning policy](../deployment/versioning-policy.md) from v1.10; the bundle format keeps the version `product.devicechain.io/v1alpha1`.
 
 The commands talk to the same tenant GraphQL API as the console, as the identity you sign in with.
 The server authorizes every call, so you need the permissions the console would need to make the

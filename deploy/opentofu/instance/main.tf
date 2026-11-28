@@ -139,7 +139,8 @@ locals {
   # The archive target, SUPPLIED rather than derived. The object store lives in the
   # cluster root now, so its endpoint and the key names inside its Secret are not
   # readable from here — they are outputs of that root, threaded through by dcctl
-  # (or by hand, from `tofu output`, for someone applying the two roots directly).
+  # (or by hand, from `tofu output -raw <name>`, for someone applying the two roots
+  # directly; for example, `tofu output -raw backup_endpoint_url`).
   #
   # 🔑 The key names are supplied too, not assumed. They differ by destination —
   # an in-cluster MinIO names them MINIO_ROOT_USER/MINIO_ROOT_PASSWORD and an

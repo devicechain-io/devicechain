@@ -187,7 +187,7 @@ A **policy** decides which raised alarms are delivered, to whom, and through whi
 The severity here is **uppercase** because it is the *alarm's* severity. A detection rule's own authoring severity is lowercase (`major`) and is uppercased when the alarm is raised, so a notification rule always matches the uppercase form. A rule whose severity is not one of those values (a lowercase `major`, say) is **refused at write**, rather than stored as a rule that could never match.
 
 :::caution Policies are tenant-wide
-`deviceTypeToken` on notification policies is **deprecated from v1.10**: device-type scoping was never applied. Leave it unset. Its behavior stays unchanged until removal in a future major, no earlier than v3.0. See [Device-type scoping](#device-type-scoping) for details.
+`deviceTypeToken` on notification policies is **deprecated from v1.10**: device-type scoping was never applied. Leave it unset. Its existing behavior is preserved until it is refused in a later major release, after the deprecation period. See [Device-type scoping](#device-type-scoping) for details.
 :::
 
 ### Notify when an alarm clears {#notify-on-clear}
@@ -211,7 +211,7 @@ A clear is informational, so it is handled differently from a page:
 
 ### Device-type scoping {#device-type-scoping}
 
-The policy's `deviceTypeToken` field was never applied and is deprecated from v1.10 on the create input, policy output and search criteria. These coordinates remain available with their existing behavior until removal in a future major, no earlier than v3.0: a non-blank value is refused at write, an unset or blank value is accepted and reads back as null, and any supplied search-filter value matches no API-created policy. Omit the filter to include tenant-wide policies. The dispatcher continues to skip any stored policy with a non-empty device-type scope. Policy scoping by anchor or group is planned, with no release version promised.
+The policy's `deviceTypeToken` field was never applied and is deprecated from v1.10 on the create input, policy output and search criteria. These coordinates remain available with their existing behavior until they are refused in a later major release, after the deprecation period: a non-blank value is refused at write, an unset or blank value is accepted and reads back as null, and any supplied search-filter value matches no API-created policy. Omit the filter to include tenant-wide policies. The dispatcher continues to skip any stored policy with a non-empty device-type scope. Policy scoping by anchor or group is planned, with no release version promised.
 
 ### Throttling and escalation {#throttling-and-escalation}
 

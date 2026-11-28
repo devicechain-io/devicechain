@@ -181,7 +181,7 @@ Una **política** decide qué alarmas levantadas se entregan, a quién y a trav�
 Aquí la severidad va en **mayúsculas** porque es la severidad de la *alarma*. La severidad de autoría de una regla de detección va en minúsculas (`major`) y se convierte a mayúsculas al levantar la alarma, así que una regla de notificación siempre coincide con la forma en mayúsculas. Una regla cuya severidad no sea uno de esos valores (un `major` en minúsculas, por ejemplo) se **rechaza al escribir**, en lugar de almacenarse como una regla que nunca podría coincidir.
 
 :::caution Las políticas son de alcance para todo el inquilino
-`deviceTypeToken` en las políticas de notificación está **obsoleto desde v1.10**: el acotamiento por tipo de dispositivo nunca se aplicó. Déjalo sin establecer. Su comportamiento se mantiene hasta su eliminación en una futura versión mayor, como pronto v3.0. Consulta [Acotamiento por tipo de dispositivo](#device-type-scoping) para más detalles.
+`deviceTypeToken` en las políticas de notificación está **obsoleto desde v1.10**: el acotamiento por tipo de dispositivo nunca se aplicó. Déjalo sin establecer. Su comportamiento se mantiene hasta que se rechace en una versión mayor posterior, una vez transcurrido el período de obsolescencia. Consulta [Acotamiento por tipo de dispositivo](#device-type-scoping) para más detalles.
 :::
 
 ### Notificar cuando una alarma se resuelve {#notify-on-clear}
@@ -205,7 +205,7 @@ Una resolución es informativa, así que se trata de forma distinta a un aviso:
 
 ### Acotamiento por tipo de dispositivo {#device-type-scoping}
 
-El campo `deviceTypeToken` de la política nunca se aplicó y está obsoleto desde v1.10 en la entrada de creación, la salida de la política y los criterios de búsqueda. Estas coordenadas siguen disponibles con su comportamiento actual hasta su eliminación en una futura versión mayor, como pronto v3.0: un valor que no esté en blanco se rechaza al escribir; un valor omitido o en blanco se acepta y se lee como null; y cualquier valor del filtro de búsqueda no encuentra ninguna política creada mediante la API. Omite el filtro para incluir las políticas de todo el inquilino. El despachador sigue omitiendo cualquier política almacenada con un alcance de tipo de dispositivo no vacío. Se prevé acotar las políticas por ancla o grupo, sin prometer una versión de lanzamiento.
+El campo `deviceTypeToken` de la política nunca se aplicó y está obsoleto desde v1.10 en la entrada de creación, la salida de la política y los criterios de búsqueda. Estas coordenadas siguen disponibles con su comportamiento actual hasta que se rechacen en una versión mayor posterior, una vez transcurrido el período de obsolescencia: un valor que no esté en blanco se rechaza al escribir; un valor omitido o en blanco se acepta y se lee como null; y cualquier valor del filtro de búsqueda no encuentra ninguna política creada mediante la API. Omite el filtro para incluir las políticas de todo el inquilino. El despachador sigue omitiendo cualquier política almacenada con un alcance de tipo de dispositivo no vacío. Se prevé acotar las políticas por ancla o grupo, sin prometer una versión de lanzamiento.
 
 ### Limitación de frecuencia y escalado {#throttling-and-escalation}
 

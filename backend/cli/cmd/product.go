@@ -22,7 +22,7 @@ var (
 
 var productCmd = &cobra.Command{
 	Use:   "product",
-	Short: "Export, plan and apply a tenant's product as files (preview)",
+	Short: "Export, plan and apply a tenant's product as files",
 	Long: `Promote a tenant's product through git: export it to a directory of files, review a change
 as a plan, and apply the files to the same or another tenant.
 
@@ -32,8 +32,8 @@ dashboards, outbound connectors and inbound integrations. Everything is read and
 the same tenant GraphQL the console uses, as the identity you sign in with, so the server
 authorizes every call; this command checks no permission itself.
 
-This command tree is PREVIEW: the bundle format (apiVersion product.devicechain.io/v1alpha1)
-is new and may change in a later minor release.
+The command tree and bundle format are covered by the versioning policy from v1.10; the bundle
+format keeps the version product.devicechain.io/v1alpha1.
 
 SECRETS ARE HANDLES, NEVER VALUES. The platform never reveals a stored connector credential or
 an integration's bearer token, so an export cannot contain one. A connector's credential is

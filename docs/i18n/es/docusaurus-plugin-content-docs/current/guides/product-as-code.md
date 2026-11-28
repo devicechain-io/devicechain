@@ -12,12 +12,7 @@ archivos, y `dcctl product apply` hace que un tenant los contenga. Úsalo para p
 un tenant de desarrollo a producción, para revisar un cambio en una pull request o para detectar que
 un tenant se ha desviado de lo que está confirmado.
 
-:::caution Vista previa
-El árbol de comandos y el formato del paquete (`apiVersion: product.devicechain.io/v1alpha1`) están
-en vista previa. Son nuevos, y una versión menor posterior puede cambiar el formato. `dcctl` solo lee
-la `apiVersion` que conoce y rechaza cualquier otra, de modo que un paquete nunca se entiende a
-medias.
-:::
+El árbol de comandos y el formato del paquete están cubiertos por la [política de versiones](../deployment/versioning-policy.md) desde v1.10; el formato del paquete conserva la versión `product.devicechain.io/v1alpha1`.
 
 Los comandos hablan con la misma API GraphQL de tenant que la consola, con la identidad con la que
 inicias sesión. El servidor autoriza cada llamada, así que necesitas los permisos que la consola
