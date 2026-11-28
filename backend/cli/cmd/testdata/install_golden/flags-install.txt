@@ -1,5 +1,5 @@
 command: dcctl install
-flags: 40
+flags: 41
 
 --alert-config
   type: string
@@ -109,6 +109,12 @@ flags: 40
   default: "false"
   no-value default: "true"
   usage: print what would happen without applying changes
+
+--expose-lan
+  type: bool
+  default: "false"
+  no-value default: "true"
+  usage: local provider: create the kind cluster with its ports (80, 443 and the MQTT ports 1883-1885) published on every host interface instead of 127.0.0.1 only, so other machines on the network can reach the console and the broker. Off by default: a local install is reachable only from this machine. Applies only when the cluster is created
 
 --ha
   type: bool

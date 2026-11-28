@@ -53,3 +53,24 @@ func TestTheSweepMarkLeadsTheEnvironment(t *testing.T) {
 // environCapForTest is the sweep's cap (64 KiB), restated so this test runs on every
 // platform, not only where the sweep is built.
 const environCapForTest = 64 << 10
+
+// The escrow passphrase never reaches a marked command, whether its environment is its
+// own or dcctl's inherited one.
+func TestTheSweepMarkDropsTheEscrowPassphrase(t *testing.T) {
+	cmd := exec.Command("true")
+	cmd.Env = []string{"A=1", "DCCTL_ESCROW_PASSPHRASE=own"}
+	mark(cmd)
+	t.Setenv("DCCTL_ESCROW_PASSPHRASE", "inherited")
+	inherited := exec.Command("true")
+	mark(inherited)
+	for _, c := range []*exec.Cmd{cmd, inherited} {
+		for _, kv := range c.Env {
+			if strings.HasPrefix(kv, "DCCTL_ESCROW_PASSPHRASE=") {
+				t.Fatalf("a marked command carries %q", kv)
+			}
+		}
+	}
+	if len(cmd.Env) != 2 || cmd.Env[1] != "A=1" {
+		t.Fatalf("the rest of the environment was not kept: %q", cmd.Env)
+	}
+}

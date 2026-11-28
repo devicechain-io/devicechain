@@ -32,24 +32,35 @@ nodes:
         nodeRegistration:
           kubeletExtraArgs:
             node-labels: "ingress-ready=true"
+    # Every mapping binds LOOPBACK only. kind binds a mapping with no listenAddress on every
+    # host interface, which would put the console (plain HTTP under --no-tls, superuser
+    # sign-in included) and the MQTT broker on the LAN. `dcctl install local --expose-lan`
+    # creates the cluster with 0.0.0.0 here instead, for a device or a browser on another
+    # machine; dcctl swaps exactly these values, and refuses a config that has a different
+    # number of them than it has mappings.
     extraPortMappings:
       - containerPort: 80      # ingress HTTP
         hostPort: 80
+        listenAddress: "127.0.0.1"
         protocol: TCP
       - containerPort: 443     # ingress HTTPS
         hostPort: 443
+        listenAddress: "127.0.0.1"
         protocol: TCP
       - containerPort: 31883   # NATS MQTT device ingress (NodePort)
         hostPort: 1883
+        listenAddress: "127.0.0.1"
         protocol: TCP
       # Two more MQTT node ports, so a second and a third instance on this cluster reach their
       # brokers from the host too (dcctl gives each new local instance the first free one; see
       # localMQTTNodePorts in backend/cli/bootstrap/singletons.go, which a test holds to this list).
       - containerPort: 31884   # NATS MQTT, second local instance
         hostPort: 1884
+        listenAddress: "127.0.0.1"
         protocol: TCP
       - containerPort: 31885   # NATS MQTT, third local instance
         hostPort: 1885
+        listenAddress: "127.0.0.1"
         protocol: TCP
 
   # Uncomment to exercise PodDisruptionBudgets / anti-affinity / multi-node

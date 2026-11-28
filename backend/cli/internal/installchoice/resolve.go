@@ -29,9 +29,12 @@ func Defaults() Choices {
 // Choices is the editable input. Given must be set when a screen edits a flag.
 // Slice values retain input order; credentials remain private to resolution.
 type Choices struct {
-	Provider            string
-	KubeContext         string
-	Cluster             string
+	Provider    string
+	KubeContext string
+	Cluster     string
+	// ExposeLAN is --expose-lan: a kind cluster this install creates publishes its ports
+	// on every host interface instead of loopback.
+	ExposeLAN           bool
 	DryRun              bool
 	AssumeYes           bool
 	SkipPreflight       bool
@@ -151,6 +154,12 @@ func (c Choices) Prepare(version string, notice func(string)) (Prepared, error) 
 	if err := bootstrap.ValidateRelationalStoreWAL(c.RelationalWAL()); err != nil {
 		return Prepared{}, err
 	}
+	// --expose-lan widens how dcctl CREATES a local kind cluster. Aimed anywhere else it
+	// would do nothing, and accepting it would let an operator believe it did something.
+	if c.ExposeLAN && (c.KubeContext != "" || (c.Provider != "" && c.Provider != "local")) {
+		return Prepared{}, fmt.Errorf("--expose-lan publishes the ports of a local kind cluster dcctl creates; " +
+			"it does nothing with --kube-context or a provider other than local. Drop it")
+	}
 	if c.MaxConnections != 0 && c.MaxConnections < 100 {
 		return Prepared{}, fmt.Errorf("--max-connections must be at least 100 (got %d)", c.MaxConnections)
 	}
@@ -237,6 +246,7 @@ func (c Choices) bootstrapOptions(img bootstrap.ImageSource) bootstrap.Options {
 	return bootstrap.Options{
 		KubeContext:          c.KubeContext,
 		Cluster:              c.Cluster,
+		ExposeLAN:            c.ExposeLAN,
 		DryRun:               c.DryRun,
 		AssumeYes:            c.AssumeYes,
 		NoTLS:                c.NoTLS,

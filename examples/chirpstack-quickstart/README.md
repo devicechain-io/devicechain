@@ -48,6 +48,11 @@ must be published on a host port: port 80 on a default `dcctl install local`. Se
 if it is elsewhere. Run every script from this directory; they talk to `http://localhost`
 (`DC_URL` to change it) and use `KUBECONFIG` or `KUBE_CONTEXT` to find the cluster.
 
+A local cluster publishes that port on `127.0.0.1` only. Docker Desktop (macOS, Windows) still
+reaches it through `host.docker.internal`; on Linux, where `host.docker.internal` is the Docker
+bridge rather than loopback, create the cluster with `dcctl install local --compact --expose-lan`,
+which publishes it on every interface, on a network you trust.
+
 ## Run it
 
 ```bash

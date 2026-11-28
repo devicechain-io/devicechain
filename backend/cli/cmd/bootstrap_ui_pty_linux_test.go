@@ -70,8 +70,11 @@ func TestBootstrapUIPTYChild(t *testing.T) {
 				mark("the passphrase reached the run")
 			}
 			mark("target " + e.Instance)
+			// EscrowOutcome stands in for what the render step records once it has written
+			// the artifact and opened it back; the stubbed pipeline below writes nothing.
 			return &bootstrap.State{Instance: e.Instance, KubeContext: "kind-devicechain", Escrow: plan,
-				Values: map[string]string{"ingressHost": "devicechain.local", "scheme": "https"}}, nil
+				EscrowOutcome: "written",
+				Values:        map[string]string{"ingressHost": "devicechain.local", "scheme": "https"}}, nil
 		}
 		return e, pf, nil
 	}

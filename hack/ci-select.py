@@ -398,10 +398,21 @@ SPLITS = {
 # device-management/processor: `processor 1/3` was the last job to finish in 63 of 144 green runs
 # to 2026-11-27 (p50 20.9 min against 8.2 and 5.6 for its sisters), and the kill test below was
 # ~79% of it: 100 trials, 364 s of its leg's 463 s `go test` and ~590 s of its 749 s race step.
+#
+# device-management/model: `model 1/2` took 19-21 min on the six green main runs to 2026-11-27
+# against 6.4-9.9 for `model 2/2` (race step 1090 s against 302 s on run 46030093086), because
+# round-robin dealt both of these to it. Each fills a table to a per-tenant ceiling through SQLite
+# and is ~10 s plain but 252 s and 292 s under -race (measured locally), ~25-30x where the package
+# as a whole is ~10x. TestEvictAfterCommitStartsNoEvictionPastTheBound is as long plain (9.8 s)
+# but takes 0.00 s under -race, so it stays dealt: a leg of its own would buy nothing.
 # ---------------------------------------------------------------------------------------------
 ALONE = {
     "backend/services/device-management": {
         "processor": {"envelope-kill": "TestKillBetweenRoundZeroPubAckAndAckLosesAndDuplicatesNothing"},
+        "model": {
+            "admission-budget": "TestAdmissionLineBudgetCountsPlannedLines",
+            "revoke-ceiling": "TestRevokeStopsAtThePerTenantCeiling",
+        },
     },
 }
 

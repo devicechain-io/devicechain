@@ -12,6 +12,8 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
+
+	"github.com/devicechain-io/dcctl/internal/secretenv"
 )
 
 // Build stamps, injected via ldflags by the two real build paths: the makefile
@@ -109,6 +111,9 @@ Command line interface for interacting with DeviceChain components`),
 // expects. Someone who has decided they want out now must not be made to argue
 // with a cleanup path.
 func Execute() {
+	// First, before any command runs or any child is started: a secret dcctl accepts
+	// through its environment is moved into memory, so nothing dcctl starts inherits it.
+	secretenv.Capture()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {

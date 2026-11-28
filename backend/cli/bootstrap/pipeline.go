@@ -302,6 +302,11 @@ type State struct {
 	// value writes nothing, which is what every test and every internal pipeline
 	// construction wants.
 	Escrow EscrowPlan
+	// EscrowOutcome is what this run settled about the artifact at Escrow.Path: "written"
+	// (written and opened back), "verified" (already there, and opened with this run's
+	// passphrase to the key being deployed), "present, not opened ..." (already there and
+	// naming the key, with no passphrase to open it), or "" when it settled none.
+	EscrowOutcome string
 	// Restore is the settled database-restore intent (ADR-028 / ADR-020 A2.5):
 	// which archive each store recovers FROM, and how far it replays. Resolved in
 	// the command layer for the same reason as Escrow — every way it can be wrong is

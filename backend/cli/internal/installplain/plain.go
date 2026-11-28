@@ -29,6 +29,7 @@ import (
 	"os"
 
 	"github.com/devicechain-io/dcctl/internal/installflow"
+	"golang.org/x/term"
 )
 
 // Presenter runs an engine and renders it as plain text.
@@ -40,6 +41,20 @@ type Presenter struct {
 	Stdin io.Reader
 	// ReadHidden reads a secret answer with echo off. Nil reads os.Stdin's terminal.
 	ReadHidden func() ([]byte, error)
+	// StdoutIsTerminal answers whether Stdout is a person's terminal. Nil asks Stdout
+	// itself (IsTerminal).
+	//
+	// 🔴 A ONE-TIME DISCLOSURE IS SHOWN ONLY ON A TERMINAL. Redirected output is a CI log, a
+	// file, a pipe into something else — kept, copied and read by people the value was never
+	// for. So off a terminal the run is offered no reveal sink at all, and the report names
+	// where the value is kept instead of printing it.
+	StdoutIsTerminal func() bool
+}
+
+// IsTerminal reports whether w is a terminal.
+func IsTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
 }
 
 // errIncomplete is returned when the engine reported no error but the run did not
@@ -81,8 +96,15 @@ func (p Presenter) Run(ctx context.Context, e installflow.Engine, req installflo
 		}
 	}
 	broker := installflow.NewBroker(hub, Responder{Out: con.Stdout, In: p.Stdin, ReadHidden: p.ReadHidden}, req.AssumeYes)
-	sum, err := hub.Run(ctx, e, req, installflow.Runtime{Prompts: broker, Preflight: preflight, Console: con,
-		Reveals: Reveals{W: con.Stdout}})
+	rt := installflow.Runtime{Prompts: broker, Preflight: preflight, Console: con}
+	atTerminal := p.StdoutIsTerminal
+	if atTerminal == nil {
+		atTerminal = func() bool { return IsTerminal(p.Stdout) }
+	}
+	if atTerminal() {
+		rt.Reveals = Reveals{W: con.Stdout}
+	}
+	sum, err := hub.Run(ctx, e, req, rt)
 	<-hub.Done()
 	if err == nil && !sum.Succeeded() {
 		err = errIncomplete

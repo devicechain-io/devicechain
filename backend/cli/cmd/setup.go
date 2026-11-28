@@ -26,6 +26,7 @@ var (
 	setupKubeContext string
 	setupCluster     string
 	setupCompact     bool
+	setupExposeLAN   bool
 	setupHA          bool
 	setupNoSplash    bool
 )
@@ -212,6 +213,9 @@ func setupInstallChoices(fs *pflag.FlagSet) installchoice.Choices {
 	if fs.Changed("ha") {
 		c.HA, c.Given["ha"] = setupHA, true
 	}
+	if fs.Changed("expose-lan") {
+		c.ExposeLAN, c.Given["expose-lan"] = setupExposeLAN, true
+	}
 	return c
 }
 
@@ -273,6 +277,22 @@ func shellWord(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+// receiptEscrowOutcome is what the escrow receipt may say of the artifact a run settled.
+// Only a run that succeeded and wrote the artifact, or opened the one already there, says
+// it opens: an artifact the run found and could not open is never presented as checked.
+func receiptEscrowOutcome(st *bootstrap.State, runErr error) installtui.EscrowOutcome {
+	if runErr != nil {
+		return installtui.EscrowFoundNotOpened
+	}
+	switch st.EscrowOutcome {
+	case "written":
+		return installtui.EscrowWrittenAndChecked
+	case "verified":
+		return installtui.EscrowOpened
+	}
+	return installtui.EscrowFoundNotOpened
 }
 
 // setupInstanceScreens is the instance stage on the cluster t: the hand-over, the
@@ -350,6 +370,7 @@ func init() {
 	setupLocalCmd.Flags().StringVar(&setupCluster, "cluster", bootstrap.DefaultClusterName, "Preview. Start from this local kind cluster, created if it does not exist; it can be changed on screen")
 	setupLocalCmd.Flags().BoolVar(&setupCompact, "compact", false, "Preview. Start with the small-footprint cluster preset (as dcctl install --compact); it can be changed on screen")
 	setupLocalCmd.Flags().BoolVar(&setupHA, "ha", false, "Preview. Start with the HA cluster topology (as dcctl install --ha); it can be changed on screen")
+	setupLocalCmd.Flags().BoolVar(&setupExposeLAN, "expose-lan", false, "Preview. "+exposeLANUsage+" (as dcctl install --expose-lan)")
 	setupLocalCmd.Flags().BoolVar(&setupNoSplash, "no-splash", false, "Preview. Skip the DeviceChain logo shown before the first screen")
 	setupLocalCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return refusedBeforeStart(err) })
 	setupCmd.AddCommand(setupLocalCmd)
