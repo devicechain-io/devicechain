@@ -4,33 +4,43 @@
 package processor
 
 import (
-	"bytes"
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
-// captureLog swaps the global logger for one writing into a buffer, for the test's lifetime.
-func captureLog(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	var buf bytes.Buffer
-	prev := log.Logger
-	log.Logger = zerolog.New(&buf)
-	t.Cleanup(func() { log.Logger = prev })
-	return &buf
+// logSink is this test binary's one sanctioned destination for the global logger,
+// installed before any test starts; tests toggle capture on it rather than swapping
+// the logger, which would race code that logs from goroutines the test does not own.
+var logSink *dctest.LogSink
+
+func TestMain(m *testing.M) {
+	logSink = dctest.InstallLogSink()
+	os.Exit(m.Run())
 }
 
+// captureLog collects the global logger's output for the rest of the test.
+func captureLog(t *testing.T) *dctest.LogSink {
+	t.Helper()
+	return logSink.Capture(t)
+}
+
+// sinkMarker is logged by a test that asserts a WARN is ABSENT, and then looked for: a
+// detached sink captures nothing, and "no warning" must not pass for that reason.
+const sinkMarker = "q13-presence-gate-off-sink-attached"
+
 // gateOffWarnings counts the repeated gate-off WARN lines in a captured log.
-func gateOffWarnings(buf *bytes.Buffer) int {
+func gateOffWarnings(logs *dctest.LogSink) int {
 	n := 0
-	for _, line := range strings.Split(buf.String(), "\n") {
+	for _, line := range strings.Split(logs.String(), "\n") {
 		if strings.Contains(line, `"level":"warn"`) && strings.Contains(line, "presence gate is still OFF") {
 			n++
 		}
@@ -84,6 +94,10 @@ func TestAWiredGateCountsNothing(t *testing.T) {
 	}
 	if got := gateOffWarnings(logs); got != 0 {
 		t.Fatalf("a wired gate must not warn that it is off:\n%s", logs)
+	}
+	log.Info().Msg(sinkMarker)
+	if !strings.Contains(logs.String(), sinkMarker) {
+		t.Fatal("the log capture is detached, so the absence of a WARN above proves nothing")
 	}
 }
 
