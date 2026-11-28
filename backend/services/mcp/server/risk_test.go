@@ -132,7 +132,7 @@ func TestEveryRegisteredToolDeclaresItsRisk(t *testing.T) {
 	}
 	// The other direction: a declaration for a tool that no longer exists keeps the
 	// check green over a gap.
-	for _, declared := range catalog.Names() {
+	for _, declared := range withoutUITools(catalog.Names()) {
 		if !containsName(names, declared) {
 			t.Errorf("a risk is declared for %q, which the server does not expose", declared)
 		}

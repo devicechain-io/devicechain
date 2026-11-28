@@ -409,7 +409,7 @@ func TestActionDeclarationsArePublishedAndClassified(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, catalog := newServer(NewGraphQLClient(), WithActuation(true))
-	if !reflect.DeepEqual(toolNames(listed.Tools), catalog.Names()) {
+	if !reflect.DeepEqual(toolNames(listed.Tools), withoutUITools(catalog.Names())) {
 		t.Fatal("enabled catalog differs from served list")
 	}
 	for _, tool := range listed.Tools {

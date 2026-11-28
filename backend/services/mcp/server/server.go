@@ -166,9 +166,19 @@ func quotedStringValue(s string) string {
 // visible from the outside to exist at all.
 func newServer(gql *GraphQLClient, opts ...Option) (*mcp.Server, *Catalog) {
 	s := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion},
-		&mcp.ServerOptions{Instructions: serverInstructions})
+		&mcp.ServerOptions{
+			Instructions: serverInstructions,
+			// Logging stays (the SDK default, which a non-nil Capabilities would drop);
+			// the MCP Apps extension is advertised so a host can see it.
+			Capabilities: &mcp.ServerCapabilities{
+				Logging:    &mcp.LoggingCapabilities{},
+				Extensions: map[string]any{uiExtension: map[string]any{}},
+			},
+		})
 	t := NewTools(gql)
 	c := registerTools(s, t)
+	registerHelloView(s, c, t)
+	s.AddReceivingMiddleware(gateUI)
 	// Platform skills (skills.go): the same static catalog for every caller, served as
 	// prompts and skill:// resources from the embedded files. No downstream call.
 	registerSkills(s, platformSkills)

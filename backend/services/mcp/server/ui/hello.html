@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeviceChain hello view</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; padding: 16px; min-width: 280px;
+    font-family: var(--font-sans, system-ui, sans-serif);
+    color: var(--color-text-primary, light-dark(#171717, #f5f5f5));
+    background: var(--color-background-primary, light-dark(#ffffff, #171717));
+  }
+  h1 { font-size: 1.1rem; margin: 0 0 12px; }
+  dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; }
+  dt { color: var(--color-text-secondary, light-dark(#525252, #a3a3a3)); }
+  dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+  button {
+    margin-top: 16px; min-height: 44px; padding: 0 16px; font: inherit;
+    color: inherit; background: transparent;
+    border: 1px solid var(--color-border-primary, light-dark(#d4d4d4, #404040));
+    border-radius: var(--border-radius-md, 8px);
+  }
+</style>
+</head>
+<body>
+<h1>DeviceChain hello view</h1>
+<dl>
+  <dt>Tenant</dt><dd id="tenant">waiting for the tool result</dd>
+  <dt>Devices</dt><dd id="devices">not asked yet</dd>
+  <dt>Host</dt><dd id="host">not connected</dd>
+</dl>
+<button id="again" type="button">Count devices again</button>
+<script>
+(function () {
+  "use strict";
+  var nextId = 1;
+  var pending = {};
+  var $ = function (id) { return document.getElementById(id); };
+
+  function send(msg) { window.parent.postMessage(msg, "*"); }
+  function request(method, params) {
+    return new Promise(function (resolve, reject) {
+      var id = nextId++;
+      pending[id] = { resolve: resolve, reject: reject };
+      send({ jsonrpc: "2.0", id: id, method: method, params: params });
+    });
+  }
+  function notify(method, params) { send({ jsonrpc: "2.0", method: method, params: params || {} }); }
+
+  function applyHostContext(ctx) {
+    if (!ctx) { return; }
+    var vars = ctx.styles && ctx.styles.variables;
+    if (vars) {
+      Object.keys(vars).forEach(function (k) {
+        if (k.indexOf("--") === 0 && typeof vars[k] === "string") {
+          document.documentElement.style.setProperty(k, vars[k]);
+        }
+      });
+    }
+    if (ctx.theme === "dark" || ctx.theme === "light") {
+      document.documentElement.style.colorScheme = ctx.theme;
+    }
+  }
+  function reportSize() {
+    notify("ui/notifications/size-changed", {
+      width: Math.ceil(document.documentElement.scrollWidth),
+      height: Math.ceil(document.documentElement.scrollHeight)
+    });
+  }
+
+  function countDevices() {
+    $("devices").textContent = "asking...";
+    request("tools/call", { name: "list_devices", arguments: { pageSize: 1 } }).then(function (res) {
+      var sc = res && res.structuredContent;
+      if (res && res.isError) {
+        var t = res.content && res.content[0] && res.content[0].text;
+        $("devices").textContent = "the tool refused: " + (t || "no detail");
+      } else if (sc && typeof sc.totalRecords === "number") {
+        $("devices").textContent = String(sc.totalRecords);
+      } else {
+        $("devices").textContent = "no count in the result";
+      }
+      reportSize();
+    }, function (err) {
+      $("devices").textContent = "the host refused the call: " + (err && err.message ? err.message : "no detail");
+      reportSize();
+    });
+  }
+
+  window.addEventListener("message", function (event) {
+    if (event.source !== window.parent) { return; }
+    var m = event.data;
+    if (!m || m.jsonrpc !== "2.0") { return; }
+    if (m.id !== undefined && !m.method) {
+      var p = pending[m.id];
+      if (!p) { return; }
+      delete pending[m.id];
+      if (m.error) { p.reject(m.error); } else { p.resolve(m.result); }
+      return;
+    }
+    if (m.method === "ui/notifications/tool-result") {
+      var sc = m.params && m.params.structuredContent;
+      $("tenant").textContent = sc && typeof sc.tenant === "string" ? sc.tenant : "unknown";
+      reportSize();
+      return;
+    }
+    if (m.method === "ui/notifications/host-context-changed") {
+      applyHostContext(m.params);
+      return;
+    }
+    if (m.method === "ui/resource-teardown" && m.id !== undefined) {
+      send({ jsonrpc: "2.0", id: m.id, result: {} });
+    }
+  });
+
+  $("again").addEventListener("click", countDevices);
+
+  request("ui/initialize", {
+    protocolVersion: "2026-01-26",
+    capabilities: {},
+    clientInfo: { name: "devicechain-hello-view", version: "0.1.0" },
+    appCapabilities: { availableDisplayModes: ["inline"] }
+  }).then(function (res) {
+    applyHostContext(res && res.hostContext);
+    var h = res && res.hostInfo;
+    $("host").textContent = h && h.name ? String(h.name) + (h.version ? " " + String(h.version) : "") : "unknown";
+    notify("ui/notifications/initialized");
+    reportSize();
+    countDevices();
+  }, function (err) {
+    $("host").textContent = "initialize failed: " + (err && err.message ? err.message : "no detail");
+  });
+})();
+</script>
+</body>
+</html>
