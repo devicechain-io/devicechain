@@ -20,12 +20,13 @@ import (
 type credential struct {
 	value string
 	// found marks a value dcctl found rather than made: everything in a kubeconfig.
-	// It is registered redact-only (AddRedaction), as a whole token, and never
-	// refuses an event code. A kubeconfig holds credentials of users and plugins
-	// this run never touches, and they can be ordinary words: an unused user whose
-	// password is "install" must not stop an install, and a profile named "prod"
-	// must not be cut out of "production". dcctl's own secrets (a root key, a
-	// passphrase, a minted password, the alert and backup credentials it was given)
+	// A typed or credential-shaped value is registered redact-only (AddRedaction),
+	// as a whole token, and never refuses an event code. A kubeconfig holds
+	// credentials of users and plugins this run never touches, and they can be
+	// ordinary words: an unused user whose password is "install" must not stop an
+	// install. Ordinary plugin settings, such as a profile named "prod", are not
+	// registered. dcctl's own secrets (a root key, a passphrase, a minted password,
+	// the alert and backup credentials it was given)
 	// are registered strictly.
 	found bool
 	// typed marks a found value that is a credential by what it is, not by where it
@@ -158,7 +159,8 @@ func credentialShaped(a string) bool {
 // registerCredentials registers each value with the hub, and returns how many it
 // could not cover.
 //
-// A found value is registered redact-only, always; one of dcctl's own strictly.
+// A found value is registered redact-only if typed or credential-shaped; ordinary
+// plugin settings are skipped. One of dcctl's own is registered strictly.
 //
 // 🔴 A VALUE THE HUB REFUSES IS NOT DROPPED SILENTLY. One of dcctl's own too short for
 // a strict registration (under installflow.MinSecretBytes) is registered redact-only,
@@ -170,6 +172,9 @@ func registerCredentials(events installflow.Reporter, creds []credential) (uncov
 		return 0
 	}
 	for _, c := range creds {
+		if c.found && !c.typed && !credentialShaped(c.value) {
+			continue
+		}
 		if !c.found && events.AddSecret(c.value) == nil {
 			continue
 		}
