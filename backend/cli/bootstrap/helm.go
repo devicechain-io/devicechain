@@ -280,6 +280,11 @@ func helmInstall(ctx context.Context, st *State) error {
 	if err := writeNatsLoginSecrets(ctx, typed, st); err != nil {
 		return err
 	}
+	// ...and every area-bound area's mint credential, minted when absent and never replaced,
+	// mounted by that area and user-management only.
+	if err := ensureAreaMintSecrets(ctx, typed, st); err != nil {
+		return err
+	}
 	if err := writeOwnedSecret(ctx, typed, instanceOwner(st.Instance, st.InstanceUID),
 		instanceConfigSecret(st.Instance, doc), time.Now); err != nil {
 		return err
