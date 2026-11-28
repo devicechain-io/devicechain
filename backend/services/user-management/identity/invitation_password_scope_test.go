@@ -108,8 +108,20 @@ func TestAnInvitationPasswordSetWhileAnotherInvitationIsOpenStaysScoped(t *testi
 	require.NoError(t, err)
 	_, err = e.admin.SetMemberEnabled(globexBoss, "cfo@victim.example", true)
 	require.NoError(t, err)
+	// The operator is refused outright, loudly, rather than adding a membership the
+	// password would silently fail to enter or a system role it would carry.
 	_, err = e.admin.AddMembership(ctx, "cfo@victim.example", "initech", nil)
+	require.ErrorIs(t, err, admin.ErrInvitationPassword)
+	_, err = e.admin.AddScopedMembership(ctx, "cfo@victim.example", "initech", nil, nil)
+	require.ErrorIs(t, err, admin.ErrInvitationPassword)
+	require.NoError(t, e.store.CreateRole(ctx, &iam.Role{Scope: iam.ScopeSystem, Token: "operator", Authorities: []string{"user:read"}}))
+	_, err = e.admin.SetSystemRoles(ctx, "cfo@victim.example", []string{"operator"})
+	require.ErrorIs(t, err, admin.ErrInvitationPassword)
+	got, err := e.store.IdentityByEmail(ctx, "cfo@victim.example")
 	require.NoError(t, err)
+	require.Empty(t, got.SystemRoles, "a refused grant left a system role")
+	_, err = e.admin.SetSystemRoles(ctx, "cfo@victim.example", nil)
+	require.NoError(t, err, "clearing system roles is not a grant")
 
 	ia, err := e.m.Login(ctx, "cfo@victim.example", "inviter-chosen")
 	require.NoError(t, err)
@@ -128,6 +140,14 @@ func TestAnInvitationPasswordSetWhileAnotherInvitationIsOpenStaysScoped(t *testi
 	require.NoError(t, err)
 	_, err = e.m.SelectTenant(ctx, ia.IdentityToken, "globex")
 	require.Error(t, err, "a provider link widened a password set through an invitation")
+
+	// Once the operator sets the password, both grants go through.
+	_, err = e.admin.SetPassword(ctx, "cfo@victim.example", "operator-set")
+	require.NoError(t, err)
+	_, err = e.admin.AddMembership(ctx, "cfo@victim.example", "initech", nil)
+	require.NoError(t, err)
+	_, err = e.admin.SetSystemRoles(ctx, "cfo@victim.example", []string{"operator"})
+	require.NoError(t, err)
 }
 
 // The counterweight: a person invited by two tenants accepts the first with a password and

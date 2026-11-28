@@ -51,10 +51,25 @@ func TestInvitationPasswordScopeMigrationBackfill(t *testing.T) {
 	invitation("globex", globex, created.Add(48*time.Hour), false)
 	initech := membership(squat, "initech")
 
-	// Created by the operator long before any invitation: untouched.
+	// Made by an invitation whose membership was removed since: no membership, no
+	// invitation left, and still a password someone else may have chosen.
+	identity("removed@example.com", "hash", created)
+
+	// Made by a first invitation that was removed, then invited again much later and
+	// enabled by hand after that invitation was revoked.
+	reinvited := identity("reinvited@example.com", "hash", created)
+	again := membership(reinvited, "globex")
+	invitation("globex", again, created.Add(30*24*time.Hour), false)
+
+	// Created by the operator, member by the operator's hand only: untouched.
 	op := identity("op@example.com", "hash", created)
 	opMem := membership(op, "globex")
-	invitation("globex", opMem, created.Add(48*time.Hour), false)
+
+	// A system role: the operator's own account, untouched whatever its invitations.
+	require.NoError(t, db.Exec(`INSERT INTO iam_roles (scope, token, created_at, updated_at) VALUES ('system', 'backfill-test-role', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error)
+	su := identity("su@example.com", "hash", created)
+	require.NoError(t, db.Exec(`INSERT INTO iam_identity_system_roles (identity_id, role_id) SELECT ?, id FROM iam_roles WHERE token = 'backfill-test-role'`, su).Error)
+	invitation("acme", membership(su, "acme"), created, false)
 
 	// Made by an invitation never accepted: no password, untouched.
 	pending := identity("pending@example.com", "", created)
@@ -77,7 +92,12 @@ func TestInvitationPasswordScopeMigrationBackfill(t *testing.T) {
 	require.True(t, admits(acme), "the accepted membership no longer admits the password")
 	require.False(t, admits(globex), "a membership enabled after its invitation was revoked admits the password")
 	require.True(t, admits(initech), "an operator-added membership from before the upgrade lost the password")
+	require.True(t, flag("removed@example.com"), "an identity whose invitation membership was removed was not marked")
+	require.True(t, flag("reinvited@example.com"), "an identity invited long after it was created was not marked")
+	require.False(t, admits(again), "a re-invited membership enabled without acceptance admits the password")
 	require.False(t, flag("op@example.com"))
+	require.False(t, admits(opMem))
+	require.False(t, flag("su@example.com"))
 	require.False(t, flag("pending@example.com"))
 
 	// An older pod's insert omits both columns and gets false.
