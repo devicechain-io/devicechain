@@ -101,6 +101,8 @@ GraphQL 预览接口包括其专用的输入和结果类型、字段、参数及
 规划、创建、启动、恢复、撤销和裁定需要 `device:write` 和 `fleet:operate`；暂停和中止需要
 `device:write`；读取需要 `device:read`。代理和服务身份以及具有受限范围的成员会被拒绝。
 
+在 **v1.11** 中，device-management 的意图观测查询进入预览层级：`configurationKeyStateDigest`、`configurationKeyState`、`groupTargetsIntersect`、`previewIntentBulkChange` 和 `bulkChangeGranteeStanding`，以及它们专用的输入和结果类型与拒绝代码。它们供平台的自动化服务内部使用：每个查询只响应主体为该服务的服务令牌，个人、具有受限范围的成员和代理会被拒绝。提升条件：**进入预览后经过两个次版本（默认）**。
+
 在 **v1.10** 中，`dcctl setup local` 进入预览层级：`dcctl setup` 和 `dcctl setup local` 命令、它们的标志（`--kube-context`、`--cluster`、`--compact`、`--ha`、`--expose-lan`、`--no-splash`）、它们的屏幕以及退出状态（参见[引导式设置](./install-terminal-ui.md#setup-local)）。提升条件：**进入预览后经过两个次版本（默认）**。它所运行的 `dcctl install` 和 `dcctl bootstrap` 仍受覆盖，且不受其影响。
 
 ## 支持的升级路径 {#upgrade-paths}

@@ -853,8 +853,11 @@ func scanAttributeWriterPackages(sources map[string][]byte) ([]string, error) {
 						parts := s.fragments(call.Args[sqlArg], map[any]bool{})
 						sql := strings.Join(parts, " ")
 						table := attributeTable(sql) || attributeTable(strings.Join(parts, ""))
-						// FOR UPDATE is a read-side lock, not an UPDATE statement.
+						// FOR UPDATE is a read-side lock, not an UPDATE statement, and the
+						// deleted_at / updated_at columns a read filters or selects on are not a
+						// DELETE or an UPDATE.
 						sql = strings.ReplaceAll(sql, "for update", "")
+						sql = strings.ReplaceAll(strings.ReplaceAll(sql, "deleted_at", ""), "updated_at", "")
 						write := strings.Contains(sql, "insert") || strings.Contains(sql, "update") || strings.Contains(sql, "delete")
 						bad = table && write
 					}

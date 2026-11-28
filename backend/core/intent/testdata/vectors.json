@@ -1,5 +1,5 @@
 {
-  "compilerBuild": "core-intent/1",
+  "compilerBuild": "core-intent/2",
   "specs": [
     {
       "name": "long, dwell explicit",
@@ -140,6 +140,50 @@
         }
       ],
       "digest": "sha256:77c49eafe75d6c2db567b540979a2c5bf32b5fa02631ffdd722e849225e3a0d8"
+    },
+    {
+      "name": "stored values longer than the intended-value bound, reported by length",
+      "rows": [
+        {
+          "id": 4,
+          "token": "lamp-4",
+          "declared": "LONG",
+          "present": true,
+          "valueType": "LONG",
+          "valueDigest": "OVERSIZE:2048"
+        },
+        {
+          "id": 5,
+          "token": "lamp-5",
+          "declared": null,
+          "present": true,
+          "valueType": "JSON",
+          "valueDigest": "OVERSIZE:65536"
+        }
+      ],
+      "digest": "sha256:00cf638e7af5ea97d9d1977556650be262d24a5a7b9a4c09165f6ca91d6cab2a"
+    },
+    {
+      "name": "a hashed row beside the smallest oversize row",
+      "rows": [
+        {
+          "id": 2,
+          "token": "lamp-2",
+          "declared": "LONG",
+          "present": true,
+          "valueType": "LONG",
+          "valueDigest": "sha256:b3b50fceac38355d8742e70ec5e937e317c5d7a484b69d5e8eb7a716aca4bc68"
+        },
+        {
+          "id": 3,
+          "token": "lamp-3",
+          "declared": "STRING",
+          "present": true,
+          "valueType": "STRING",
+          "valueDigest": "OVERSIZE:1025"
+        }
+      ],
+      "digest": "sha256:162cff34f7d5fcca5e9194d15c8033aefd631e5f208633e501806cbc758b8037"
     }
   ],
   "inputs": [

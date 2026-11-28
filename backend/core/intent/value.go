@@ -23,11 +23,17 @@ import (
 //
 //	'sha256:' || encode(sha256(convert_to(value_type || ':' || value, 'UTF8')), 'hex')
 //
-// so an observation page carries a 71-byte digest whatever the size of the value. The format is
-// durable; testdata/vectors.json pins it.
+// for a stored value of at most MaxIntentValueBytes, so an observation page carries a 71-byte
+// digest whatever the size of the value; a longer value has no digest (OversizeMarker). The
+// format is durable; testdata/vectors.json pins it.
 func ValueDigest(valueType, value string) (string, error) {
 	if !ValidValueType(valueType) {
 		return "", fmt.Errorf("value digest: unknown value type %q", valueType)
+	}
+	if len(value) > MaxIntentValueBytes {
+		// Defined only up to the intended-value bound: a longer stored value is observed as
+		// OversizeMarker(len), never hashed.
+		return "", fmt.Errorf("value digest: a %d-byte value is over %d bytes; it is observed as an oversize marker", len(value), MaxIntentValueBytes)
 	}
 	sum := sha256.Sum256([]byte(valueType + ":" + value))
 	return "sha256:" + hex.EncodeToString(sum[:]), nil

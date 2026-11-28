@@ -11,6 +11,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/devicechain-io/dc-microservice/ledger"
@@ -45,7 +46,37 @@ const (
 	// MaxTokenLen bounds a group token, a configuration key and a device token. It equals
 	// core.MaxTokenLen (TestTokenGrammarAgreesWithCore holds them together).
 	MaxTokenLen = 128
+	// MaxIntentValueBytes bounds the intended value's text, in bytes. It is also the largest
+	// stored value the observation hashes: device-management reports a longer stored value as
+	// an OVERSIZE marker without reading it (OversizeMarker), and such a row is DRIFTED by
+	// construction, since no value an intent may hold is that long.
+	MaxIntentValueBytes = 1_024
+	// MaxObservedDevicesPerTenant bounds the sum of ceiling.maxDevices over a tenant's SHADOW
+	// and SUSPENDED intents. Without it, MaxIntentsPerTenant intents of MaxDevicesPerIntent
+	// devices each would be a legal five-million-row observation per interval.
+	MaxObservedDevicesPerTenant = 500_000
+	// EvaluationDutyCyclePercent is the most of the time one intent's evaluations may occupy the
+	// observation seam, whatever its size: its interval stretches to at least 100/percent times
+	// its last evaluation's wall time (EffectiveIntervalSeconds).
+	EvaluationDutyCyclePercent = 10
+	// MaxChunkBytes is the most bytes one chunk may hold as the bulk-change planner counts them,
+	// len(token)+1 per line: the planner's own request bound.
+	MaxChunkBytes = ledger.MaxRequestBytes
 )
+
+// EffectiveIntervalSeconds is the delay before an intent's next evaluation: the interval it
+// asked for, or its last evaluation's wall time divided by EvaluationDutyCyclePercent percent
+// (ten times it), rounded up to a whole second, whichever is longer. A negative wall time counts
+// as zero.
+func EffectiveIntervalSeconds(minIntervalSeconds int64, evaluation time.Duration) int64 {
+	if evaluation < 0 {
+		evaluation = 0
+	}
+	const second = int64(time.Second)
+	scaled := int64(evaluation) * 100 / EvaluationDutyCyclePercent
+	stretched := (scaled + second - 1) / second
+	return max(minIntervalSeconds, stretched)
+}
 
 // Class is an intent's class. Only supervisory classes exist (ADR-086): an intent never
 // carries a protection or safety function.
@@ -216,6 +247,9 @@ func checkValueText(valueType, text string) error {
 	}
 	if strings.IndexByte(text, 0) >= 0 {
 		return invalid("value.value holds a NUL character, which no stored value can")
+	}
+	if len(text) > MaxIntentValueBytes {
+		return invalid("value.value is %d bytes; an intended value is at most %d", len(text), MaxIntentValueBytes)
 	}
 	switch valueType {
 	case ValueTypeString:
