@@ -45,6 +45,21 @@ const (
 	// MaxTokenLen bounds a group token, a configuration key and a device token. It equals
 	// core.MaxTokenLen (TestTokenGrammarAgreesWithCore holds them together).
 	MaxTokenLen = 128
+	// MaxIntentValueBytes bounds an intended value's text, in bytes. Validate refuses a longer
+	// one, so ValueDigest is only ever needed for values of at most this size, and an observation
+	// hashes no stored value longer than it: a longer stored value is observed as an
+	// OVERSIZE:<n> marker instead (see OversizeMarker). That bounds the hashing one observation
+	// costs, whatever the devices store.
+	MaxIntentValueBytes = 1024
+	// MaxObservedDevicesPerTenant bounds the devices a tenant's intents observe together: the sum
+	// of the target member counts of every intent the tenant holds that is not RETIRED. It bounds
+	// the observation work one tenant can ask of device-management, beside the per-intent ceiling.
+	MaxObservedDevicesPerTenant = 500_000
+	// EvaluationDutyCyclePercent bounds the share of wall time an intent's evaluations may take,
+	// as an integer percent: the next evaluation is due no sooner than
+	// reconcile.minIntervalSeconds after the last one completed, and no sooner than
+	// 100/EvaluationDutyCyclePercent times the last one's wall time.
+	EvaluationDutyCyclePercent = 10
 )
 
 // Class is an intent's class. Only supervisory classes exist (ADR-086): an intent never
@@ -197,6 +212,9 @@ func (v Value) validate() error {
 	}
 	if !ValidValueType(v.ValueType) {
 		return invalid("value.valueType must be one of STRING, LONG, DOUBLE, BOOLEAN, JSON, got %q", v.ValueType)
+	}
+	if n := len(*v.Value); n > MaxIntentValueBytes {
+		return invalid("value.value is %d bytes; at most %d are accepted", n, MaxIntentValueBytes)
 	}
 	return checkValueText(v.ValueType, *v.Value)
 }

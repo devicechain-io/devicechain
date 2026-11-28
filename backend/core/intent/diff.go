@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/ledger"
 )
 
 // Code classifies one target device against an intent.
@@ -46,6 +48,8 @@ type Row struct {
 	// value: the value a bulk change line would replace.
 	Present bool
 	// ValueType and ValueDigest describe that row; both are empty when Present is false.
+	// ValueDigest is the stored value's ValueDigest, or its OversizeMarker when the stored value
+	// is longer than MaxIntentValueBytes.
 	ValueType   string
 	ValueDigest string
 }
@@ -97,7 +101,9 @@ var ErrCeilingExceeded = errors.New("the target has more members than the intent
 // Classify returns one device's code. The precedence is KEY_UNDECLARED, DECLARED_TYPE_MISMATCH,
 // IN_SYNC, DRIFTED. An unset intent needs no type match: a declared key with no row is IN_SYNC
 // and one with a row is DRIFTED. A set intent is IN_SYNC only when the row is present and both
-// its type and its value digest equal the intended ones.
+// its type and its value digest equal the intended ones. An OVERSIZE row, once the key is
+// declared with the intended type, is DRIFTED by construction and never IN_SYNC: its value is
+// longer than any value an intent may hold.
 func Classify(s Spec, row Row, at time.Time) (Code, error) {
 	want, err := IntendedValue(s, row.DeviceID, at)
 	if err != nil {
@@ -122,6 +128,9 @@ func classify(want Intended, row Row) Code {
 	if *row.DeclaredValueType != want.ValueType {
 		return CodeDeclaredTypeMismatch
 	}
+	if row.Present && isOversize(row.ValueDigest) {
+		return CodeDrifted
+	}
 	if row.Present && row.ValueType == want.ValueType && row.ValueDigest == want.ValueDigest {
 		return CodeInSync
 	}
@@ -144,7 +153,7 @@ func checkRow(row Row) error {
 		if row.ValueType == "" || strings.ContainsAny(row.ValueType, "\t\n") {
 			return fmt.Errorf("observation row %d: a present value needs a value type", row.DeviceID)
 		}
-		if !validDigest(row.ValueDigest) {
+		if !validDigest(row.ValueDigest) && !isOversize(row.ValueDigest) {
 			return fmt.Errorf("observation row %d: value digest %q is malformed", row.DeviceID, row.ValueDigest)
 		}
 	} else if row.ValueType != "" || row.ValueDigest != "" {
@@ -185,11 +194,26 @@ func Diff(s Spec, rows []Row, at time.Time) (Drift, error) {
 	return drift, nil
 }
 
-// Chunk returns the first maxLines drifted devices by ascending device id: the lines one
-// reconcile would plan. maxLines must be between 1 and MaxLinesPerReconcile.
-func Chunk(d Drift, maxLines int) ([]Line, error) {
+// MaxChunkBytes bounds Chunk's maxBytes. It is the bulk-change planner's bound on a request's
+// device list, ledger.MaxRequestBytes, so a chunk is never refused INPUT_TOO_LARGE.
+const MaxChunkBytes = ledger.MaxRequestBytes
+
+// Chunk returns the lines one reconcile would plan: the first drifted devices by ascending device
+// id, stopping at whichever bound is reached first, maxLines lines or maxBytes bytes. Bytes are
+// counted as the bulk-change planner counts them, Σ(len(token) + 1), and the planner refuses a
+// list over ledger.MaxRequestBytes: 10,000 tokens of 128 bytes are 1,290,000 bytes, so the chunk
+// for such a fleet is 8,128 lines (1,048,512 bytes).
+//
+// maxLines must be between 1 and MaxLinesPerReconcile, and maxBytes between MaxTokenLen + 1 (one
+// line of the longest token) and MaxChunkBytes. Zero drift is the empty chunk, which the caller
+// sends nowhere; a non-empty drift is never an empty chunk; a first line no bound can hold is an
+// error.
+func Chunk(d Drift, maxLines, maxBytes int) ([]Line, error) {
 	if maxLines < 1 || maxLines > MaxLinesPerReconcile {
 		return nil, fmt.Errorf("chunk: maxLines must be between 1 and %d, got %d", MaxLinesPerReconcile, maxLines)
+	}
+	if maxBytes < MaxTokenLen+1 || maxBytes > MaxChunkBytes {
+		return nil, fmt.Errorf("chunk: maxBytes must be between %d and %d, got %d", MaxTokenLen+1, MaxChunkBytes, maxBytes)
 	}
 	lines := slices.Clone(d.Lines)
 	slices.SortFunc(lines, func(a, b Line) int {
@@ -201,10 +225,19 @@ func Chunk(d Drift, maxLines int) ([]Line, error) {
 		}
 		return 0
 	})
-	if len(lines) > maxLines {
-		lines = lines[:maxLines]
+	n, bytes := 0, 0
+	for n < len(lines) && n < maxLines {
+		cost := len(lines[n].Token) + 1
+		if bytes+cost > maxBytes {
+			break
+		}
+		bytes += cost
+		n++
 	}
-	return lines, nil
+	if n == 0 && len(lines) > 0 {
+		return nil, fmt.Errorf("chunk: device %d's token is %d bytes, over maxBytes %d", lines[0].DeviceID, len(lines[0].Token), maxBytes)
+	}
+	return lines[:n], nil
 }
 
 // ObservationHasher computes the observation digest incrementally, so a caller can re-hash the
@@ -214,9 +247,10 @@ func Chunk(d Drift, maxLines int) ([]Line, error) {
 // order, of one line per member:
 //
 //	<device id in decimal> TAB <declared value type, or empty when undeclared> TAB
-//	<"1" when present, else "0"> TAB <value type> TAB <value digest> LF
+//	<"1" when present, else "0"> TAB <value type> TAB <value digest, or OVERSIZE:<n>> LF
 //
-// The device token is not in it. The declared type is, so a profile publish that changes the
+// An oversize row hashes its marker (OversizeMarker) where a hashed row has its value digest, so
+// a change of an oversize value's length moves the digest. The device token is not in it. The declared type is, so a profile publish that changes the
 // key's declared type moves the digest with no attribute write. An empty target hashes the empty
 // string. testdata/vectors.json pins the format.
 type ObservationHasher struct {

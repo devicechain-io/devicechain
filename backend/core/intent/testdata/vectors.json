@@ -141,6 +141,37 @@
       ],
       "digest": "sha256:77c49eafe75d6c2db567b540979a2c5bf32b5fa02631ffdd722e849225e3a0d8"
     }
+,
+    {
+      "name": "hashed in sync, oversize STRING, oversize LONG one byte over the cap",
+      "rows": [
+        {
+          "id": 9,
+          "token": "lamp-9",
+          "declared": "LONG",
+          "present": true,
+          "valueType": "LONG",
+          "valueDigest": "sha256:b3b50fceac38355d8742e70ec5e937e317c5d7a484b69d5e8eb7a716aca4bc68"
+        },
+        {
+          "id": 15,
+          "token": "sign-15",
+          "declared": "STRING",
+          "present": true,
+          "valueType": "STRING",
+          "valueDigest": "OVERSIZE:65536"
+        },
+        {
+          "id": 21,
+          "token": "lamp-21",
+          "declared": "LONG",
+          "present": true,
+          "valueType": "LONG",
+          "valueDigest": "OVERSIZE:1025"
+        }
+      ],
+      "digest": "sha256:76b0915e64d4d8ad2727e2ef13c6cf3b22a3e0e182c4308468b79d13425dd3ba"
+    }
   ],
   "inputs": [
     {

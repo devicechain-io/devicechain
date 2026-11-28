@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -25,9 +27,17 @@ import (
 //
 // so an observation page carries a 71-byte digest whatever the size of the value. The format is
 // durable; testdata/vectors.json pins it.
+//
+// It is defined only for a value of at most MaxIntentValueBytes, the most an intent may hold. A
+// longer value has no value digest: device-management observes it as OversizeMarker of its byte
+// length and never reads or hashes it, so a longer value here is an error.
 func ValueDigest(valueType, value string) (string, error) {
 	if !ValidValueType(valueType) {
 		return "", fmt.Errorf("value digest: unknown value type %q", valueType)
+	}
+	if len(value) > MaxIntentValueBytes {
+		return "", fmt.Errorf("value digest: a %d-byte value is over %d bytes and is observed as %s<n>, never hashed",
+			len(value), MaxIntentValueBytes, oversizePrefix)
 	}
 	sum := sha256.Sum256([]byte(valueType + ":" + value))
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
@@ -99,6 +109,44 @@ func sameValue(a, b Value) bool {
 		return a.Unset == b.Unset
 	}
 	return a.ValueType == b.ValueType && *a.Value == *b.Value
+}
+
+// oversizePrefix starts an oversize marker.
+const oversizePrefix = "OVERSIZE:"
+
+// OversizeMarker is what an observation row carries in place of a value digest when the stored
+// value is longer than MaxIntentValueBytes: "OVERSIZE:" + the value's byte length in decimal.
+// Device-management computes it in SQL from octet_length(value), which reads the stored size and
+// not the value, so an oversize value is never fetched or hashed:
+//
+//	CASE WHEN octet_length(value) <= 1024 THEN <ValueDigest> ELSE 'OVERSIZE:' || octet_length(value) END
+//
+// An oversize row is DRIFTED by construction (a value longer than any value an intent may hold
+// cannot equal one), so it is never IN_SYNC. What the marker gives up: a change from one oversize
+// value to another of the same length does not move the observation digest. The device is
+// DRIFTED before and after, so its plan line does not change either. The length is at most
+// math.MaxInt32, the range of octet_length.
+func OversizeMarker(byteLength int64) (string, error) {
+	if byteLength <= MaxIntentValueBytes || byteLength > math.MaxInt32 {
+		return "", fmt.Errorf("oversize marker: a length must be between %d and %d bytes, got %d",
+			MaxIntentValueBytes+1, math.MaxInt32, byteLength)
+	}
+	return oversizePrefix + strconv.FormatInt(byteLength, 10), nil
+}
+
+// isOversize reports whether d is exactly an OversizeMarker: the prefix, then a decimal length
+// over MaxIntentValueBytes with no sign, no leading zero and no other byte.
+func isOversize(d string) bool {
+	digits, ok := strings.CutPrefix(d, oversizePrefix)
+	if !ok {
+		return false
+	}
+	n, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil {
+		return false
+	}
+	m, err := OversizeMarker(n)
+	return err == nil && m == d
 }
 
 // validDigest reports whether d is "sha256:" followed by exactly 64 lowercase hex characters.

@@ -159,7 +159,7 @@ func TestDiffRefusesATargetOverTheCeiling(t *testing.T) {
 
 func TestChunk(t *testing.T) {
 	d := Drift{Lines: []Line{{9, "i"}, {2, "b"}, {5, "e"}, {1, "a"}}}
-	got, err := Chunk(d, 3)
+	got, err := Chunk(d, 3, MaxChunkBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,16 +169,16 @@ func TestChunk(t *testing.T) {
 	if d.Lines[0].DeviceID != 9 {
 		t.Error("Chunk reordered its argument")
 	}
-	all, _ := Chunk(d, MaxLinesPerReconcile)
+	all, _ := Chunk(d, MaxLinesPerReconcile, MaxChunkBytes)
 	if len(all) != 4 {
 		t.Errorf("Chunk under the limit returned %d lines, want 4", len(all))
 	}
 	for _, n := range []int{0, -1, MaxLinesPerReconcile + 1} {
-		if _, err := Chunk(d, n); err == nil {
+		if _, err := Chunk(d, n, MaxChunkBytes); err == nil {
 			t.Errorf("Chunk accepted maxLines %d", n)
 		}
 	}
-	one, err := Chunk(d, 1)
+	one, err := Chunk(d, 1, MaxChunkBytes)
 	if err != nil || len(one) != 1 {
 		t.Errorf("Chunk(1) = %v, %v", one, err)
 	}
