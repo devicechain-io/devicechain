@@ -554,6 +554,8 @@ dcctl upgrade local devicechain --version v1.10.0
 - **规则发送的命令现在计入租户的出站速率。** `sendCommand` 动作现在获得与连接器调用（`httpCall` 和 `publish`）大小相同的独立预算，沿用相同的出站设置和租户自定义上限：除非租户有自己的自定义上限，否则为每秒 100 个动作、突发 200。若某租户的规则发送的命令超过该上限，超出部分将被拒绝，而上一版本会照常发送。升级前，请仅将各租户的 sendCommand 峰值与其上限比较。筛选为 `sendCommand` 的 `react_actions_dispatched_total` 可供参考。该指标没有租户标签，因此是任一租户速率的上界。若某租户可能超过其上限，请提高该租户的自定义上限或平台默认值（检测引擎设置中的 `outboundCallsPerSecond` 和 `outboundBurst`，与 outbound-connectors 的值保持一致）。此外，同一规则一分钟内最多向同一设备发送 120 条命令，以切断通过所控制的设备不断重新触发自身的规则；该限制是固定的。该循环防护在一分钟内每个租户最多跟踪 16,384 个规则与设备组合，每个副本上所有租户合计最多 65,536 个。会使组合数超出任一上限的命令将以 `command_guard_full` 被拒绝，且某个租户用尽其份额不会导致其他租户的命令被拒绝。两项限制都由每个副本保存在内存中，重启或故障转移后重新开始。检测引擎在重启后根据重启前已收到的事件重新推导出的命令仍会发送，在下游只生效一次，且不占用任何一项额度。检测引擎未运行期间到达的事件属于新事件，其命令计入两项限制。被拒绝的命令不会发送。它被记录为原因为 `shed`、详细信息为 `command_rate_limited`、`command_loop` 或 `command_guard_full` 的死信（见 `dcctl dead-letters`），并计入 `result="unwanted"` 的 `react_command_refused_total`。因租户上限尚未解析而按平台默认值放行的命令，按 `cause` 在 `react_command_governance_unresolved_admissions_total` 中单独计数。超出死信预算的拒绝会被计数，并按租户每分钟汇总为一条死信。
 - **已存在的 `STRING` 指标定义会在升级后开始存储读数。** 以前声明 `STRING` 会被拒绝，因此这样的定义只可能通过其他方式创建；升级完成后，它的读数会作为文本存储，而不再被丢弃。
 - **滚动升级期间**，上一版本的 Pod 对 `STRING` 指标的处理不同，因此请在升级完成之后再声明 `STRING` 指标。尚未升级的 device-management Pod 会把已声明的 `STRING` 值作为 `declared_not_storable` 丢弃；如果一条消息在新旧 device-management Pod 之间被重新投递，其数值读数可能被存储两次，使该消息在小时汇总中的总和与计数翻倍。尚未升级的 device-state Pod 会把看起来像数字的 `STRING` 值（`"12"`）存为数字 12，并让之前的文本留在旁边，直到更新的读数替换该行。尚未升级的 event-processing Pod 会让规则把这样的值当作数字读取。
+- **新建的本地集群只能从本机访问，非终端的文本输出不再打印超级用户密码。** `dcctl install local` 创建的 kind 集群现在将端口 80、443 和 1883-1885 发布在 `127.0.0.1` 上，而不是所有网络接口。如果您需要从其他机器（网络中的设备、手机、另一台电脑）访问本地安装，请使用 `dcctl install local` 或 `dcctl setup local` 的新选项 `--expose-lan` 创建集群。已存在的集群保留其创建时的端口，直到您删除并重新创建它。另外，使用纯文本输出的 `dcctl bootstrap` 现在仅在输出为终端时显示生成的超级用户密码。管道或重定向的输出（例如 CI 日志）会改为指明保存该密码的 Secret；请使用报告中打印的 `kubectl ... get secret` 命令读取。原先从 bootstrap 输出中获取密码的脚本必须改为读取该 Secret。
+- **更新下载始终以附件形式提供。** 制品下载端点现在对所有请求（包括范围请求和 `HEAD` 请求）都返回 `Content-Type: application/octet-stream`、`Content-Disposition: attachment` 以及严格的 `Content-Security-Policy`，无论制品声明的媒体类型是什么。声明的媒体类型在目录和 API 中保持不变，下载响应还会在 `X-DeviceChain-Artifact-Media-Type` 响应头中携带它。若设备客户端此前通过下载的 `Content-Type` 获取制品类型，应改为读取该响应头；只保存字节并校验摘要的客户端无需任何更改。
 
 #### v1.10.0 新增内容 {#v1100-whats-new}
 
@@ -589,6 +591,15 @@ dcctl upgrade local devicechain --version v1.10.0
 - **`get_latest_measurements` 和 `query_measurements` 会返回 `STRING` 指标的文本。** 此前，助手读取设备最新值或历史时会把 `STRING` 指标看作空值。现在文本会作为 `text` 返回在结果的 `untrusted` 成员下，并标记为设备上报，因此助手会把它当作数据，而不是指令。数值读数保持不变，空文本则表现为没有文本。
 - **规则编辑器会在规则引用 `STRING` 指标时给出警告。** 检测规则从不读取文本读数，因此引用了在其配置文件中声明为 `STRING` 的指标的规则永远不会触发。控制台的规则表单现在会在编写规则时指出这一点并给出指标名称；规则仍会被接受并保存。API 客户端也可使用此检查：`validateDetectionRules` 接受可选的 `metrics` 列表（每项包含 `key` 和 `dataType`，最多 1,000 项），并为规则引用的每个此类指标返回一条 `namesStringMetric` 警告。省略该列表则不会给出此类警告。未知的 `dataType`，或同一键以不同类型重复列出，会被拒绝。控制台仅在配置文件含有 `STRING` 指标时才发送该列表，因此在滚动升级期间，旧版 event-processing Pod 只是暂时不为此类配置文件提供行内检查，直到升级完成。
 - **超过 64 MiB 的更新制品现在可以存储在 S3 对象存储上。** 上传到 S3 后端时，内容现在会分段流式写入存储，而不再缓冲在内存中，因此只适用于 S3 的 64 MiB 限制已经取消。在所有后端上，制品大小都由 `updates.maxArtifactBytes`（默认 512 MiB）限制；上传过程中仍会校验大小和摘要，被拒绝的上传不会留下任何残缺对象。将 `updates.maxArtifactBytes` 调高到 64 MiB 以上现在会在 S3 上生效，此前它会被悄悄限制在 64 MiB。`ARTIFACT_TOO_LARGE_FOR_BACKEND` 拒绝码不再返回。
+- **批量配置更改（Preview）。** 布尔值和数值现在采用与单独写入属性相同的规范存储格式，确保批量应用后选择器能正确匹配设备。预览和创建操作时会拒绝不符合声明类型的值。成功应用更改或撤销更改后，也会立即更新动态阈值数据。
+- **dcctl：URL 脱敏、托管文件写入与自选密钥。** `dcctl install`、`dcctl bootstrap` 和 `dcctl setup` 的三项修复：
+  - 带有用户名和密码的 URL 现在在控制台、`--output json` 输出和终端界面中始终会被脱敏，包括密码以 `/` 或数字开头的情况（`s3://user:/secret@bucket`、`s3://admin:2024/secret@bucket`）。此前，这类 URL 可能会被完整打印。不含凭据的 URL 的输出与之前完全相同。
+  - 两次同时为同一实例名称写入根密钥托管文件的运行，不会再相互替换对方的文件。其中一次运行写入该文件；另一次运行会停止，并给出与之后的运行相同的“已存在，不会覆盖”提示。
+  - 托管口令、SMTP 密码或其他由您选择的值，如果是 dcctl 某个步骤名称的一部分（例如 `install`、`bootstrap` 或 `escrow`），不再会导致已成功的运行以状态 1 退出；在提示中输入此类口令也不会再被拒绝。该值仍会从 dcctl 打印的每一行中移除。
+- **升级仍在滚动进行时，控制台和 MCP 可继续正常工作。** 当部分 Pod 仍在运行上一版本时，保存检测规则、在带有 STRING 指标的配置文件上验证规则以及读取设备的最新读数，在请求到达旧 Pod 时不再失败。控制台会改为发送旧版请求，并将旧 Pod 无法提供的文本读数显示为“升级完成后显示文本读数”。旧 Pod 不会保存用“描述”起草的规则，因为它无法记录该规则是用“描述”起草的。控制台会提示你在升级完成后再次保存。MCP 工具 `get_latest_measurements` 会返回旧版 device-state Pod 的数值读数，并在无法读取文本读数时设置 `textUnavailable`。
+- **dcctl 输出。** JSON 输出和终端界面会保留 kubeconfig 插件的普通设置，例如 `AWS_PROFILE=default` 和 `AWS_REGION=us-east-1`。根据名称或凭据特征识别出的敏感值仍会被遮蔽。
+- **MCP 构建版本与技能使用情况。** MCP 现在报告其构建版本，并通过 `devicechain_mcp_skill_reads_total{skill,kind}` 统计成功的技能提示和资源读取。标签仅包含内嵌技能名称以及 `prompt` 或 `resource`；升级时无需任何操作。
+- **MCP 技能（预览）。** MCP 服务器现在提供三个技能，即引导助手使用现有工具完成常见多步骤任务的书面流程：`alarm-storm-triage`、`device-anomaly-investigation` 和 `propose-change-for-approval`。它们以提示、`skill://` 资源以及服务器说明的形式提供，对所有调用方相同，且不授予任何权限：每一步都是普通的工具调用。MCP 页面现在还说明，客户端自行注册计划通过 Client ID Metadata Documents 实现，而不是动态客户端注册。
 
 #### 安装和设置的终端界面（可选） {#v1100-install-terminal-ui}
 
