@@ -154,6 +154,7 @@ backend/services/lwm2m-ingest/downlink/documents_test.go
 backend/services/mcp/server/alarm_suppression_test.go
 backend/services/mcp/server/command_cause_test.go
 backend/services/mcp/server/documents_test.go
+backend/services/mcp/server/tools_device_rolling_test.go
 backend/services/notification-management/processor/alarm_lookup_wire_test.go
 backend/services/notification-management/processor/documents_test.go
 backend/services/notification-management/processor/suppression_rolling_matrix_test.go

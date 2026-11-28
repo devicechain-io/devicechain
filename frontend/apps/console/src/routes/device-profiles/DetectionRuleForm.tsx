@@ -43,6 +43,7 @@ import {
   updateDetectionRule,
   listScopeGroups,
   listEntityGroupVersions,
+  RuleDoorUnavailableError,
   type DetectionRule,
   type DetectionRuleCreateRequest,
   type ScopeGroup,
@@ -745,7 +746,9 @@ export function DetectionRuleForm({
         onDone(t('ruleCreatedToast', { token: created.token }));
       }
     } catch (err) {
-      setFormError(errMessage(err));
+      // Mid-upgrade, an older server cannot record that a rule was drafted with Describe, and
+      // the rule is not saved without that mark: say when it can be, not that it failed.
+      setFormError(err instanceof RuleDoorUnavailableError ? t('ruleDescribeSaveAfterUpgrade') : errMessage(err));
     } finally {
       setBusy(false);
     }

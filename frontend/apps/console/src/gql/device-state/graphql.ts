@@ -47,6 +47,13 @@ export type LatestMeasurementsQueryVariables = Exact<{
 
 export type LatestMeasurementsQuery = { latestMeasurements: Array<{ id: string, name: string, value: number | null, textValue: string | null, occurredTime: string }> };
 
+export type LatestMeasurementsWithoutTextQueryVariables = Exact<{
+  deviceToken: string;
+}>;
+
+
+export type LatestMeasurementsWithoutTextQuery = { latestMeasurements: Array<{ id: string, name: string, value: number | null, occurredTime: string }> };
+
 export type DroppedMeasurementsQueryVariables = Exact<{
   deviceToken: string;
 }>;
@@ -113,6 +120,16 @@ export const LatestMeasurementsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<LatestMeasurementsQuery, LatestMeasurementsQueryVariables>;
+export const LatestMeasurementsWithoutTextDocument = new TypedDocumentString(`
+    query LatestMeasurementsWithoutText($deviceToken: String!) {
+  latestMeasurements(deviceToken: $deviceToken) {
+    id
+    name
+    value
+    occurredTime
+  }
+}
+    `) as unknown as TypedDocumentString<LatestMeasurementsWithoutTextQuery, LatestMeasurementsWithoutTextQueryVariables>;
 export const DroppedMeasurementsDocument = new TypedDocumentString(`
     query DroppedMeasurements($deviceToken: String!) {
   droppedMeasurements(deviceToken: $deviceToken) {

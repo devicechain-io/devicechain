@@ -381,6 +381,7 @@
   "ruleLossyOpenWarning": "This form cannot express everything this rule's stored definition says, so part of it is not shown. Saving from here would replace the original with only what you can see, and asks you to confirm first.",
   "ruleLossySaveConfirm": "Save anyway",
   "ruleLossySaveDescription": "This form cannot carry everything in the rule's stored definition. Saving replaces the stored definition with what the form shows, and the rest is removed.",
+  "ruleDescribeSaveAfterUpgrade": "This rule was drafted with Describe. The server cannot record that yet because an upgrade is in progress, so the rule was not saved. Saving it is available after the upgrade completes.",
   "ruleLossySaveTitle": "Save and lose part of this rule?",
   "ruleMemberCapDescription": "Optional retained-member backstop; defaults to the platform limit.",
   "ruleMemberCapLabel": "Member cap",
