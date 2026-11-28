@@ -163,6 +163,7 @@ backend/services/outbound-connectors/lpwan/chirpstack_test.go
 backend/services/outbound-connectors/lpwan/documents_test.go
 backend/services/outbound-connectors/lpwan/tts_test.go
 backend/services/sparkplug-ingest/downlink/reasons_test.go
+backend/services/update-management/download/headers_test.go
 backend/services/update-management/model/edge_lockstep_test.go
 backend/services/update-management/profilecheck/documents_test.go
 backend/services/user-management/basemap/catalog_test.go
