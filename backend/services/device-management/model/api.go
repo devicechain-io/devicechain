@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/internal/intentseam"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/entity"
@@ -93,6 +94,9 @@ type Api struct {
 	// RuleComparer is nil when recorded comparison is unavailable; runs fail closed.
 	RuleComparer      RuleComparer
 	PrincipalStanding PrincipalStandingChecker
+	// IntentSeam runs the automation area's observation statements under this process's seam
+	// limits. NewApi sets it; an Api without it refuses every seam question.
+	IntentSeam *intentseam.Seam
 	// skipReviewGuardForOldPodTest is test-only: emulate previous-release writes so triggers can be tested.
 	skipReviewGuardForOldPodTest bool
 
@@ -359,7 +363,7 @@ type CacheEvictor interface {
 
 // Create a new API instance.
 func NewApi(rdb *rdb.RdbManager) *Api {
-	api := &Api{}
+	api := &Api{IntentSeam: intentseam.New()}
 	api.RDB = rdb
 	return api
 }

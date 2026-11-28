@@ -7106,6 +7106,67 @@ type Query {
         limit: Int!
     ): DeviceGroupTargetPage!
     """
+    Preview. For platform services only: answers only a service token whose subject is the
+    automation service, and refuses people, scoped members and agents. Summarizes what the members
+    of one published version of a dynamic device group hold for one configuration key: the
+    member count, how many members declare the key with each value type, and one digest over
+    every member's row. Writes nothing. A target that cannot be observed is answered with
+    rejected set and a code, not with an error.
+    """
+    configurationKeyStateDigest(
+        """Preview. The published group version to observe."""
+        target: IntentSeamTargetInput!
+        """Preview. The configuration key."""
+        key: String!
+    ): ConfigurationKeyStateDigest!
+    """
+    Preview. For platform services only, as configurationKeyStateDigest. One page of the rows
+    configurationKeyStateDigest covers, ascending by device id. Pass each page's nextCursor as
+    afterId for the next. A row carries a digest of the stored value, never the value.
+    """
+    configurationKeyState(
+        """Preview. The published group version to observe."""
+        target: IntentSeamTargetInput!
+        """Preview. The configuration key."""
+        key: String!
+        """Preview. The nextCursor of the previous page. Omit it to start from the beginning."""
+        afterId: String
+        """Preview. Maximum number of rows on the page, from 1 to 1000."""
+        limit: Int!
+    ): ConfigurationKeyStatePage!
+    """
+    Preview. For platform services only, as configurationKeyStateDigest. Whether any live
+    device belongs to both published group versions. They may be versions of one group.
+    """
+    groupTargetsIntersect(
+        """Preview. The first published group version."""
+        a: IntentSeamTargetInput!
+        """Preview. The second published group version."""
+        b: IntentSeamTargetInput!
+    ): GroupTargetsIntersection!
+    """
+    Preview. For platform services only, as configurationKeyStateDigest. What planBulkChange
+    would answer for these devices and this change, computed by the same planner. Nothing is
+    written. Its refusals are planBulkChange's.
+    """
+    previewIntentBulkChange(
+        """Preview. The bulk change kind: config.set."""
+        kind: String!
+        """Preview. The change."""
+        configSet: BulkChangeConfigSetInput!
+        """Preview. The device tokens, 1 to 10000."""
+        deviceTokens: [String!]!
+    ): BulkChangePlan!
+    """
+    Preview. For platform services only, as configurationKeyStateDigest. Whether a principal
+    could run a bulk change now: whether it still holds device:write and fleet:operate in this
+    tenant.
+    """
+    bulkChangeGranteeStanding(
+        """Preview. The principal, as a bulk change records its grantee."""
+        principal: String!
+    ): BulkChangeGranteeStanding!
+    """
     Returns the anchors of each named device: one type:token entry per tracked relationship
     from the device, such as customer:acme for a device assigned to that customer. Other
     services stamp a record about a device with these when they write it, which decides
@@ -10360,4 +10421,104 @@ type BulkChangeReversalPreview {
   planDigest: String!
   """Preview. Digest to present to start the reversal."""
   contractDigest: String!
+}
+
+# Intent observation seam (Preview). Read-only questions the automation service asks about
+# devices; each answers only a service token whose subject is that service.
+
+"""Preview. One published version of a dynamic device group."""
+input IntentSeamTargetInput {
+  """Preview. The group's token."""
+  groupToken: String!
+  """Preview. The published version."""
+  version: Int!
+}
+
+"""Preview. How many members declare a configuration key with one value type."""
+type ConfigurationKeyDeclarationCount {
+  """Preview. The declared value type; null counts the members that do not declare the key."""
+  declaredValueType: String
+  """Preview. The number of members."""
+  count: Int!
+}
+
+"""Preview. A summary of what a group version's members hold for one configuration key."""
+type ConfigurationKeyStateDigest {
+  """Preview. True when the target cannot be observed; code and reason then explain why, and the other fields are empty."""
+  rejected: Boolean!
+  """
+  Preview. Why the target was refused, as a stable code; null when not rejected. One of
+  GROUP_NOT_FOUND, GROUP_NOT_A_DEVICE_GROUP, GROUP_NOT_VERSIONED (a static group),
+  GROUP_VERSION_NOT_FOUND, PROFILE_VERSION_MISSING (a member's profile names an active version
+  that does not exist) or TARGET_TOO_LARGE (more than 100000 members).
+  """
+  code: String
+  """Preview. Why the target was refused, in words; null when not rejected."""
+  reason: String
+  """Preview. The group version observed."""
+  resolvedVersion: Int!
+  """Preview. The number of members, whether or not they declare the key."""
+  memberCount: Int!
+  """Preview. The digest of every member's row, in ascending device id order; null when rejected."""
+  digest: String
+  """Preview. Members by the value type their profile declares the key with."""
+  declarations: [ConfigurationKeyDeclarationCount!]!
+  """Preview. Members holding a value for the key."""
+  presentCount: Int!
+  """Preview. Members whose stored value is longer than 1024 bytes; such a value is reported by its length and not read."""
+  oversizeCount: Int!
+}
+
+"""Preview. One member's state for one configuration key."""
+type ConfigurationKeyStateRow {
+  """Preview. The device's id."""
+  deviceId: String!
+  """Preview. The device's token."""
+  token: String!
+  """Preview. The value type the device's profile declares the key with; null when it does not declare it."""
+  declaredValueType: String
+  """Preview. Whether the device holds a value for the key."""
+  present: Boolean!
+  """Preview. The stored value's type; null when absent."""
+  valueType: String
+  """
+  Preview. sha256: followed by the hex SHA-256 of the type, a colon and the value, for a value
+  of at most 1024 bytes; OVERSIZE: followed by the length in bytes for a longer one; null when
+  absent.
+  """
+  valueDigest: String
+}
+
+"""Preview. One page of configurationKeyState."""
+type ConfigurationKeyStatePage {
+  """Preview. True when the target cannot be observed; code and reason then explain why, and rows is empty."""
+  rejected: Boolean!
+  """Preview. Why the target was refused, as configurationKeyStateDigest's code; null when not rejected."""
+  code: String
+  """Preview. Why the target was refused, in words; null when not rejected."""
+  reason: String
+  """Preview. The group version observed."""
+  resolvedVersion: Int!
+  """Preview. The rows, ascending by device id."""
+  rows: [ConfigurationKeyStateRow!]!
+  """Preview. The cursor for the next page; null when the walk is done. A full page always carries one."""
+  nextCursor: String
+}
+
+"""Preview. Whether two published group versions share a device."""
+type GroupTargetsIntersection {
+  """Preview. True when either target cannot be observed; code and reason then explain why."""
+  rejected: Boolean!
+  """Preview. Why a target was refused, as configurationKeyStateDigest's code; null when not rejected."""
+  code: String
+  """Preview. Why a target was refused, in words; null when not rejected."""
+  reason: String
+  """Preview. Whether any live device belongs to both; null when rejected."""
+  intersects: Boolean
+}
+
+"""Preview. Whether a principal could run a bulk change now."""
+type BulkChangeGranteeStanding {
+  """Preview. True or false when answered; null when no answer could be had, which is neither."""
+  qualifies: Boolean
 }

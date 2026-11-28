@@ -193,6 +193,27 @@ var rawSQLAllowList = []siteEntry{
 			"text is the model's quoted table name.",
 	},
 	{
+		Path: "backend/services/device-management/internal/intentseam/seam.go", Func: "Seam.Run", Count: 1,
+		Why: "SET LOCAL statement_timeout for the seam statement's own read-only transaction; the only " +
+			"formatted-in value is the statement's timeout in milliseconds, a package constant. It reads and writes no table",
+	},
+	{
+		Path: "backend/services/device-management/internal/intentseam/target.go", Func: "resolveTarget", Count: 2,
+		Why: "the two group lookups (entity_groups by token, entity_group_versions by group and version), package constants whose WHERE names tenant_id = ? and deleted_at IS NULL, bound to the caller's tenant; read-only, inside the seam's READ ONLY transaction",
+	},
+	{
+		Path: "backend/services/device-management/internal/intentseam/target.go", Func: "Seam.Digest", Count: 1,
+		Why: "the intent observation seam's hand-written statement (internal/intentseam). Every reference to a device-management table in it names its own tenant_id = ? bound to the caller's tenant (core.TenantFromContext, refused with ErrNoTenant before any SQL) and its own deleted_at IS NULL; the outer devices row is scoped in the text and the lowered selector fragment is AND-ed inside it; every other table is a LEFT JOIN with its predicates in ON. TestSeamSQLNamesItsTenantOnEveryTable checks those rules on the built text, binding included, and TestTheSeamSQLCheckCanFail plants each violation. Read-only (a READ ONLY transaction): the configuration-key digest over one frozen group version",
+	},
+	{
+		Path: "backend/services/device-management/internal/intentseam/target.go", Func: "Seam.Page", Count: 1,
+		Why: "the intent observation seam's hand-written statement (internal/intentseam). Every reference to a device-management table in it names its own tenant_id = ? bound to the caller's tenant (core.TenantFromContext, refused with ErrNoTenant before any SQL) and its own deleted_at IS NULL; the outer devices row is scoped in the text and the lowered selector fragment is AND-ed inside it; every other table is a LEFT JOIN with its predicates in ON. TestSeamSQLNamesItsTenantOnEveryTable checks those rules on the built text, binding included, and TestTheSeamSQLCheckCanFail plants each violation. Read-only (a READ ONLY transaction): one keyset page of the rows the digest covers, from the same builder",
+	},
+	{
+		Path: "backend/services/device-management/internal/intentseam/target.go", Func: "Seam.Intersect", Count: 1,
+		Why: "the intent observation seam's hand-written statement (internal/intentseam). Every reference to a device-management table in it names its own tenant_id = ? bound to the caller's tenant (core.TenantFromContext, refused with ErrNoTenant before any SQL) and its own deleted_at IS NULL; the outer devices row is scoped in the text and the lowered selector fragment is AND-ed inside it; every other table is a LEFT JOIN with its predicates in ON. TestSeamSQLNamesItsTenantOnEveryTable checks those rules on the built text, binding included, and TestTheSeamSQLCheckCanFail plants each violation. Read-only (a READ ONLY transaction): whether one live device satisfies two frozen selectors",
+	},
+	{
 		Path: "backend/services/device-management/model/api_attribute_owner.go", Func: "lockDeviceAttributes", Count: 1,
 		Why: "sets the transaction-local device attribute writer protocol marker (attrprotocol.MarkerSQL, " +
 			"SELECT set_config('devicechain.attr_protocol', '1', true)). It reads and writes no table; the SQL is " +

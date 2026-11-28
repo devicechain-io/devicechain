@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/ledger"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/gorm"
 )
 
 // The planner: it turns a create request into the frozen list of lines and the three digests,
@@ -287,11 +288,17 @@ func (api *Api) PlanFleetOperation(ctx context.Context, req *FleetOperationCreat
 }
 
 func (api *Api) planNormalized(ctx context.Context, n *fleetNormalized) (*FleetPlan, error) {
+	return planNormalizedOn(api.RDB.DB(ctx), n)
+}
+
+// planNormalizedOn is planNormalized on a given session, so the intent seam's preview can run the
+// same code inside its own read-only, time-bounded transaction.
+func planNormalizedOn(db *gorm.DB, n *fleetNormalized) (*FleetPlan, error) {
 	ids := make(map[string]uint, len(n.tokens))
 	for start := 0; start < len(n.tokens); start += rdb.MaxLookupKeys {
 		chunk := n.tokens[start:min(start+rdb.MaxLookupKeys, len(n.tokens))]
 		var rows []Device
-		if err := rdb.FindByKeys(api.RDB.DB(ctx).Select("id", "token"), &rows, "token", chunk); err != nil {
+		if err := rdb.FindByKeys(db.Session(&gorm.Session{}).Select("id", "token"), &rows, "token", chunk); err != nil {
 			return nil, err
 		}
 		for _, d := range rows {

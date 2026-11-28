@@ -149,6 +149,12 @@ revertir y resolver requieren `device:write` y `fleet:operate`; pausar y abortar
 `device:write`; las lecturas requieren `device:read`. Se rechazan las identidades de agente y de
 servicio y los miembros con ámbito limitado.
 
+En **v1.11** las consultas de observación de intenciones de device-management entran en el nivel de
+vista previa: `configurationKeyStateDigest`, `configurationKeyState`, `groupTargetsIntersect`, `previewIntentBulkChange` y `bulkChangeGranteeStanding`, con sus tipos de entrada y de resultado dedicados y sus códigos de rechazo. Son
+para uso interno del servicio de automatización de la plataforma: cada una responde solo a un token
+de servicio cuyo sujeto es ese servicio, y se rechazan las personas, los miembros con ámbito limitado
+y los agentes. Promoción: **dos versiones menores después de su entrada (predeterminado)**.
+
 En **v1.10** `dcctl setup local` entra en el nivel de vista previa: los comandos `dcctl setup` y
 `dcctl setup local`, sus opciones (`--kube-context`, `--cluster`, `--compact`, `--ha`,
 `--expose-lan`, `--no-splash`), sus pantallas y sus códigos de salida (consulta

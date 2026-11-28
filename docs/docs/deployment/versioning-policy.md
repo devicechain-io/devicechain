@@ -145,6 +145,12 @@ joined (default)**. Planning, creating, starting, resuming, reversing and resolv
 `device:write` and `fleet:operate`; pausing and aborting require `device:write`; reads require
 `device:read`. Agent and service identities and scoped members are refused.
 
+In **v1.11** the device-management intent observation queries join the preview tier: `configurationKeyStateDigest`, `configurationKeyState`, `groupTargetsIntersect`, `previewIntentBulkChange` and `bulkChangeGranteeStanding`,
+with their dedicated input and result types and refusal codes. They are for internal use by the
+platform's automation service: each answers only a service token whose subject is that service,
+and people, scoped members and agents are refused. Promotion: **two minors after they joined
+(default)**.
+
 In **v1.10** `dcctl setup local` joins the preview tier: the `dcctl setup` and `dcctl setup local`
 commands, their flags (`--kube-context`, `--cluster`, `--compact`, `--ha`, `--expose-lan`,
 `--no-splash`), their

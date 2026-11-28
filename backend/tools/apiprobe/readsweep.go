@@ -706,6 +706,11 @@ var sweepExemptions = map[string]string{
 	"user-management.principalStanding": "answers only device-management's own SERVICE token, which asks it under a " +
 		"profile lock when a protected profile publishes; every other caller, the tenant administrator this probe runs " +
 		"as included, is refused by design. It holds no row of its own: it reads the memberships members already sweeps",
+	"device-management.configurationKeyStateDigest": "answers only a SERVICE token whose subject is the automation service (the intent observation seam); the tenant administrator this probe runs as is refused by design. It holds no row of its own: it reads devices, attributes, profile versions and group versions, which the sweep reads through their own doors",
+	"device-management.configurationKeyState":       "answers only a SERVICE token whose subject is the automation service (the intent observation seam); the tenant administrator this probe runs as is refused by design. It holds no row of its own: it pages the rows configurationKeyStateDigest summarizes",
+	"device-management.groupTargetsIntersect":       "answers only a SERVICE token whose subject is the automation service (the intent observation seam); the tenant administrator this probe runs as is refused by design. It holds no row of its own: it reads the devices and group versions the sweep reads through their own doors",
+	"device-management.previewIntentBulkChange":     "answers only a SERVICE token whose subject is the automation service (the intent observation seam); the tenant administrator this probe runs as is refused by design. It holds no row of its own: it runs the planner planBulkChange runs, and writes nothing",
+	"device-management.bulkChangeGranteeStanding":   "answers only a SERVICE token whose subject is the automation service (the intent observation seam); the tenant administrator this probe runs as is refused by design. It holds no row of its own: it asks user-management's principalStanding, which is itself exempt",
 	"user-management.identityMemberships": "takes the IDENTITY token login returns — a credential, not a " +
 		"stored row's token — so the sweep has no value it can defend; me and members are swept",
 	"user-management.member": "addressed by email, and a missing one is a NOT_FOUND error by design; " +
