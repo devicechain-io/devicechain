@@ -575,6 +575,8 @@ type ResolvedEventsProcessor struct {
 	// diverge on replay — while it is set, the loop refuses to apply further live events until a
 	// checkpoint commits (see the items branch and checkpoint).
 	idleUncommitted bool
+	// deliveredUnknown says once that the reader cannot report its delivered sequence.
+	deliveredUnknown sync.Once
 	// replaying is loop-owned startup reconstruction mode; captured on each
 	// pending output so a deferred publish cannot turn replay into live actuation.
 	replaying bool
@@ -1751,8 +1753,10 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 	// The boundary errs toward governing. A replay reads by sequence and moves no durable, so
 	// a term that died part-way through its OWN replay leaves the next one charging that
 	// stretch again (its commands collapse downstream on their tokens; only the allowance is
-	// spent twice). The other way, a fetched batch the dead term never applied counts as
-	// delivered, which is bounded by one fetch.
+	// spent twice). The other way, messages the broker handed to the dead term that it never
+	// applied count as delivered, and are sent uncharged. That is not one fetch: the delivered
+	// sequence covers the batch in hand, the reader's fetch-ahead and a pull whose reply was
+	// lost, so it can run about two batches past what was applied.
 	delivered, err := rp.deliveredThrough()
 	if err != nil {
 		return fmt.Errorf("read how far the resolved-events durable has delivered before replay: %w", err)
@@ -2433,10 +2437,16 @@ type consumerDelivered interface {
 // deliveredThrough is how far an earlier term may have applied the stream: the durable's
 // delivered sequence, read before this term's loop fetches anything. A reader that cannot say
 // (the unit-test fakes) proves no earlier delivery, so the whole replay window is governed as
-// fresh: the guards then over-count a re-derivation rather than wave a backlog through.
+// fresh: the guards then over-count a re-derivation rather than wave a backlog through. That
+// is said once, at warn: the production reader always reports it, so a reader that does not
+// is a wrapper that forgot to forward it, and every restart then charges re-derived commands.
 func (rp *ResolvedEventsProcessor) deliveredThrough() (uint64, error) {
 	dr, ok := rp.ResolvedEventsReader.(consumerDelivered)
 	if !ok {
+		rp.deliveredUnknown.Do(func() {
+			log.Warn().Str("partition", rp.partitionID()).
+				Msg("The resolved-events reader does not report how far its durable has delivered; startup replay will treat every replayed detection as new and charge its commands to the tenant's command limits.")
+		})
 		return 0, nil
 	}
 	ctx, cancel := context.WithTimeout(rp.pctx(), backlogProbeTimeout)
