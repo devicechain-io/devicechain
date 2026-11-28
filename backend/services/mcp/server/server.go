@@ -165,9 +165,13 @@ func quotedStringValue(s string) string {
 // ratchet lists what New's own handler offers a real session — so the gap has to be
 // visible from the outside to exist at all.
 func newServer(gql *GraphQLClient, opts ...Option) (*mcp.Server, *Catalog) {
-	s := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion},
+		&mcp.ServerOptions{Instructions: serverInstructions})
 	t := NewTools(gql)
 	c := registerTools(s, t)
+	// Platform skills (skills.go): the same static catalog for every caller, served as
+	// prompts and skill:// resources from the embedded files. No downstream call.
+	registerSkills(s, platformSkills)
 	o := options{}
 	for _, opt := range opts {
 		opt(&o)
