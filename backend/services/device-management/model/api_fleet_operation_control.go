@@ -42,7 +42,11 @@ const (
 	// FleetCodeNotActivated is answered when the database does not enforce the device attribute
 	// writer protocol or the caller's tenant still has orphaned attribute rows.
 	FleetCodeNotActivated = "BULK_CHANGES_NOT_ACTIVATED"
-	FleetCodeExpired      = "OPERATION_EXPIRED"
+	// FleetCodeActivationUnverified is answered when the orphaned-attribute check could not be
+	// completed (it timed out, or the database failed): nothing is known to be wrong, and the
+	// request may be retried.
+	FleetCodeActivationUnverified = "ACTIVATION_CHECK_UNAVAILABLE"
+	FleetCodeExpired              = "OPERATION_EXPIRED"
 
 	// FleetCodeNewerThanServer refuses control that requires understanding the operation's protocol.
 	FleetCodeNewerThanServer = "OPERATION_NEWER_THAN_SERVER"
@@ -94,8 +98,14 @@ func (api *Api) fleetCheckOrphans(ctx context.Context) error {
 	if tenant, ok := core.TenantFromContext(ctx); !ok || tenant == "" {
 		return errors.New("a bulk change needs a tenant in the context")
 	}
-	orphans, err := api.CountOrphanedDeviceAttributes(ctx)
-	if err != nil || orphans > 0 {
+	orphans, err := api.HasOrphanedDeviceAttributes(ctx)
+	if err != nil {
+		// Could not tell is neither answer: not "orphans remain" (the operator would wait for a
+		// sweep that has nothing to do), and never "none remain".
+		log.Warn().Err(err).Msg("Could not check for orphaned device attribute rows before a bulk change start or resume.")
+		return fleetErr(FleetCodeActivationUnverified, "could not verify that no orphaned device attribute rows remain; retry")
+	}
+	if orphans {
 		return fleetErr(FleetCodeNotActivated, "orphaned device attribute rows remain; the sweep removes them")
 	}
 	return nil
@@ -392,12 +402,22 @@ func (api *Api) fleetAdmitDispatching(ctx context.Context, tx *gorm.DB, tenant s
 
 // Count line state, irrespective of the header's dispatch/evidence: aborted operations
 // can still be awaiting evidence. Only the candidate's remaining plans add new exposure.
+//
+// Two counts, of disjoint sets (POSTED, and the candidate's PLANNED), each written so an index
+// answers it: the open lines are exactly the predicate of the partial index
+// ix_fleet_operation_lines_evidence_open (keyed by tenant), and the candidate's plans are its
+// (operation_id) range. As one OR'd predicate no index served the AMBIGUOUS arm, so the count read
+// every retained line under the admission locks. The literals are the index's predicate, spelled
+// as it is, so the planner can prove the index applies.
 func fleetEvidenceOpenCount(tx *gorm.DB, op *FleetOperation) (int64, error) {
-	var n int64
-	err := tx.Model(&FleetOperationLine{}).Where(`((posting = ? AND (settlement IS NULL OR settlement = ?) AND code <> ?)
-		OR (operation_id = ? AND posting = ?))`, FleetPostingPosted, string(ledger.SettlementAmbiguous), "TARGET_ERASED",
-		op.ID, FleetPostingPlanned).Count(&n).Error
-	return n, err
+	var open, planned int64
+	if err := tx.Model(&FleetOperationLine{}).
+		Where("posting = 'POSTED' AND (settlement IS NULL OR settlement = 'AMBIGUOUS') AND code <> 'TARGET_ERASED'").
+		Count(&open).Error; err != nil {
+		return 0, err
+	}
+	err := tx.Model(&FleetOperationLine{}).Where("operation_id = ? AND posting = ?", op.ID, FleetPostingPlanned).Count(&planned).Error
+	return open + planned, err
 }
 
 // PauseFleetOperation moves a RUNNING operation to PAUSED. Once it returns, no line of the operation

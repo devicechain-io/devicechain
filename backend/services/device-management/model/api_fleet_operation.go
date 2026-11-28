@@ -269,19 +269,20 @@ func (api *Api) fleetAdmit(ctx context.Context, tx *gorm.DB, lines int) error {
 		if err := db.Model(&FleetOperation{}).Select("COALESCE(SUM(target_count), 0) AS n").Where("dispatch = ?", FleetDispatchPlanning).Scan(&planning).Error; err != nil {
 			return err
 		}
-		var unposted, retained int64
+		var unposted int64
 		if err := db.Model(&FleetOperationLine{}).Where("posting = ?", FleetPostingPlanned).Count(&unposted).Error; err != nil {
-			return err
-		}
-		if err := db.Model(&FleetOperationLine{}).Count(&retained).Error; err != nil {
 			return err
 		}
 		reserved := planning.N.Int64
 		if int(unposted+reserved)+lines > s.unposted {
 			return exceeded(s.name+".unpostedLines", "the %s already has %d lines waiting to post (limit %d)", s.name, unposted+reserved, s.unposted)
 		}
-		if int(retained+reserved)+lines > s.retained {
-			return exceeded(s.name+".retainedLines", "the %s already retains %d operation lines (limit %d)", s.name, retained+reserved, s.retained)
+		retained, err := fleetRetainedLines(db)
+		if err != nil {
+			return err
+		}
+		if int(retained)+lines > s.retained {
+			return exceeded(s.name+".retainedLines", "the %s already retains %d operation lines (limit %d)", s.name, retained, s.retained)
 		}
 		if s.hour > 0 {
 			now := time.Now()
@@ -301,6 +302,26 @@ func (api *Api) fleetAdmit(ctx context.Context, tx *gorm.DB, lines int) error {
 		}
 	}
 	return nil
+}
+
+// fleetRetainedLines is the retained-lines budget's count: the lines every operation in db's scope
+// holds, plus the target count a PLANNING header has reserved, read from the operation headers.
+//
+// 🔴 NOT A COUNT OF THE LINES TABLE. That count ran under the admission locks (the instance one
+// included) and read every retained line, up to the instance's whole budget, on every create. The
+// headers give the same number exactly. Create step two writes an operation's target_count lines in
+// the transaction that sets its plan digest and moves it out of PLANNING, and nothing else inserts
+// a line; retention deletes them, adding what it deleted to purged_line_count in the same
+// transaction, and stamps lines_purged_at once none is left. So a header with no lines_purged_at
+// holds target_count - purged_line_count lines when its plan digest is set, and has reserved
+// target_count while it is PLANNING. A PLANNING header abandoned and aborted never had its plan
+// digest set and holds nothing. A previous-release pod's purge does not add to purged_line_count,
+// which only overstates what is retained until that operation's purge completes.
+func fleetRetainedLines(db *gorm.DB) (int64, error) {
+	var held struct{ N sql.NullInt64 }
+	err := db.Model(&FleetOperation{}).Select("COALESCE(SUM(target_count - purged_line_count), 0) AS n").
+		Where("lines_purged_at IS NULL AND (dispatch = ? OR plan_digest <> '')", FleetDispatchPlanning).Scan(&held).Error
+	return held.N.Int64, err
 }
 
 func (api *Api) fleetCreateStepTwo(ctx context.Context, tenant string, op *FleetOperation, plan *FleetPlan, actor string) (*FleetOperation, error) {

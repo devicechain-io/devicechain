@@ -95,6 +95,8 @@ func indexNames(t *testing.T, db *gorm.DB, table string) []string {
 func TestFleetOperationModelsMatchTheMigration(t *testing.T) {
 	migrated := sqlitetest.OpenMemory(t, nil)
 	require.NoError(t, schema.NewFleetOperationsSchema().Migrate(migrated))
+	// The columns appended to these tables since, in chain order.
+	require.NoError(t, schema.NewFleetOperationPurgedLineCountSchema().Migrate(migrated))
 	live := sqlitetest.OpenMemory(t, nil)
 	require.NoError(t, live.AutoMigrate(fleetModels...))
 
