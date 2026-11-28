@@ -29,7 +29,7 @@ import (
 // skillSession connects a real client through New's handler, under a token for tenant
 // with the given scopes, with the proposal tools switched on or off, and counts every
 // request that reaches the GraphQL upstream.
-func skillSession(t *testing.T, tenant, scopes string, actuation bool) (*mcp.ClientSession, *atomic.Int64) {
+func skillSession(t *testing.T, tenant, scopes string, actuation bool, opts ...Option) (*mcp.ClientSession, *atomic.Int64) {
 	t.Helper()
 	hits := &atomic.Int64{}
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -38,8 +38,9 @@ func skillSession(t *testing.T, tenant, scopes string, actuation bool) (*mcp.Cli
 	}))
 	t.Cleanup(up.Close)
 	iss, validator := mustIssuerValidator(t)
+	opts = append(opts, WithActuation(actuation), WithCommandProposals(actuation))
 	handler, _ := New(testResource, "https://as.example.com", validator, testClient(up.URL), DefaultLimits(),
-		WithActuation(actuation), WithCommandProposals(actuation))
+		opts...)
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 	tok, err := iss.IssueOAuthAccess(tenant, "a@"+tenant+".example", []string{"viewer"},

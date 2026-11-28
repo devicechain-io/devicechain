@@ -419,6 +419,14 @@ Prefix: `devicechain_updatemanagement_`. The service runs in the `default` and `
 | `update_rollout_transitions_total{to}` | Rollouts the service moved on its own: `completed`, `paused_failure_threshold`, or `paused_artifact_not_assignable` (the artifact was retired or lost its required signature). |
 | `update_reports_total{verdict,kind}` | Update progress and inventory reports, by `kind` (`progress`, `inventory`) and the verdict the update state machine gave: `APPLIED`, or why not (`DUPLICATE`, `STALE_ATTEMPT`, `DIGEST_MISMATCH`, `WRONG_COMPONENT`, `REGRESSION`, `UNCONFIRMED`, `NOT_CANCELLABLE`, `LATE`, `CONFLICT`, `INVALID_ATTEMPT`, `WRONG_KIND`, `UNKNOWN_ASSIGNMENT`). A rising non-applied rate from one fleet is a device-side bug; judge it on `kind="progress"`, since an inventory report from a device with nothing assigned is answered `UNKNOWN_ASSIGNMENT` or `UNCONFIRMED` by design. |
 
+## MCP {#mcp}
+
+Prefix: `devicechain_mcp_`.
+
+| Metric | Means |
+| --- | --- |
+| `skill_reads_total{skill,kind}` | Successful embedded skill reads. `skill` is `alarm-storm-triage`, `device-anomaly-investigation` or `propose-change-for-approval`; `kind` is `prompt` for `prompts/get` or `resource` for `resources/read`, including supporting files. Listings and unknown names or URIs do not increment the counter or create series. No tenant, device or user labels. |
+
 ## Every service {#every-service}
 
 Prefix: `devicechain_<area>_`, where `<area>` is the service's name without dashes (`devicechain_devicemanagement_ready`). Every service exports these.

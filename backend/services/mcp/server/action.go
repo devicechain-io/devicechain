@@ -10,6 +10,7 @@ import (
 
 	coreauth "github.com/devicechain-io/dc-microservice/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type Impact string
@@ -33,10 +34,17 @@ type options struct {
 	actuation        bool
 	commandProposals bool
 	sessionCaps      *sessionCaps // unexported small-cap test seam; no typed-config key
+	skillReads       *prometheus.CounterVec
 }
 
 // Option configures optional MCP capabilities.
 type Option func(*options)
+
+// WithSkillReadCounter records successful embedded skill reads in the service's registry.
+// The server supplies only embedded names and the fixed prompt/resource kinds as labels.
+func WithSkillReadCounter(counter *prometheus.CounterVec) Option {
+	return func(o *options) { o.skillReads = counter }
+}
 
 // WithActuation enables Preview proposal tools; each caller still needs an act scope.
 func WithActuation(enabled bool) Option { return func(o *options) { o.actuation = enabled } }

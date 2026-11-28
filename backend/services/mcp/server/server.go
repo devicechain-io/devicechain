@@ -6,6 +6,7 @@ package server
 import (
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"time"
@@ -17,10 +18,32 @@ import (
 )
 
 // serverName / serverVersion identify this MCP server to clients (initialize).
-const (
-	serverName    = "devicechain"
-	serverVersion = "0.1.0"
-)
+const serverName = "devicechain"
+
+var serverVersion = moduleBuildVersion()
+
+func moduleBuildVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	return versionFromBuildInfo(info)
+}
+
+// Service images have no shared linker version stamp. Follow event-processing's
+// EngineBuild: prefer the module version, then the embedded source revision.
+// An unstamped development build retains its module version, without inventing one.
+func versionFromBuildInfo(info *debug.BuildInfo) string {
+	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	for _, setting := range info.Settings {
+		if setting.Key == "vcs.revision" && setting.Value != "" {
+			return setting.Value
+		}
+	}
+	return info.Main.Version
+}
 
 // sessionTimeout bounds idle MCP sessions. The SDK never reaps sessions when this
 // is zero, so an authenticated client that repeatedly re-initializes (exactly what
@@ -165,17 +188,17 @@ func quotedStringValue(s string) string {
 // ratchet lists what New's own handler offers a real session — so the gap has to be
 // visible from the outside to exist at all.
 func newServer(gql *GraphQLClient, opts ...Option) (*mcp.Server, *Catalog) {
+	o := options{}
+	for _, opt := range opts {
+		opt(&o)
+	}
 	s := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion},
 		&mcp.ServerOptions{Instructions: serverInstructions})
 	t := NewTools(gql)
 	c := registerTools(s, t)
 	// Platform skills (skills.go): the same static catalog for every caller, served as
 	// prompts and skill:// resources from the embedded files. No downstream call.
-	registerSkills(s, platformSkills)
-	o := options{}
-	for _, opt := range opts {
-		opt(&o)
-	}
+	registerSkills(s, platformSkills, o.skillReads)
 	registerProposals(s, c, t, o.actuation)
 	registerCommandProposals(s, c, t, o.actuation && o.commandProposals)
 	s.AddReceivingMiddleware(filterActionScopes(c))
