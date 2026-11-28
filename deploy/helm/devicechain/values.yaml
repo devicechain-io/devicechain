@@ -124,8 +124,10 @@ instance:
   # service-token mint credential (key `credential`). Only areas that mint through the area-bound
   # endpoint have one; each is mounted into that area ALONE and into user-management, which checks
   # it, at /etc/dci-mint/<area>/credential. An area not listed uses `dci-<id>-mint-<area>`, the
-  # Secret `dcctl` writes. Such an area never holds the shared service secret: without its
-  # credential it gets no service token at all.
+  # Secret `dcctl` writes. The area-bound endpoint enforces the area's authority ceiling on every
+  # token minted through it, and the area's own client never uses the shared service secret. That
+  # is not yet a limit on the area as a whole: until the area is given a restricted instance
+  # document, its pod still mounts the instance document, which carries the shared service secret.
   areaMintSecrets: {}
   # Instance-wide configuration mounted at /etc/dci-config/instance and read by
   # every service (infrastructure endpoints + persistence). Rendered verbatim as

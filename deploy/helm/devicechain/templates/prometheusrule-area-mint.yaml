@@ -2,8 +2,10 @@
 Alerting rules for the area-bound service-token mint.
 
 WHY THIS GROUP EXISTS. An area-bound area obtains service tokens only from user-management's
-area-bound endpoint, with a credential of its own; the token's subject is that area and the
-authorities it may ask for are its ceiling, enforced. The area's code asks only for what is in its
+area-bound endpoint, with a credential of its own; the token's subject is that area, and the
+authorities it may ask for THERE are its ceiling, enforced. (This watches that endpoint only: until
+the area is given a restricted instance document its pod also holds the shared service secret, and
+a request through the shared-secret endpoint is not counted here.) The area's code asks only for what is in its
 ceiling, so a request for anything else -- an authority outside it, the super-authority, or a
 subject of its choosing -- is never a misconfiguration the area made on its own: it is the area
 running code it should not be running, or a credential that has left it. The request was refused,

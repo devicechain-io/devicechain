@@ -13,17 +13,26 @@ import (
 //
 // The shared-secret mint (ServiceTokenPath) trusts its caller completely: whoever holds the secret
 // names the subject and the authorities, and the ceiling is only observed. An area in
-// AreaBoundCallers never holds that secret. It presents a credential of its own instead, minted per
-// area by dcctl and mounted only into that area and user-management, and the endpoint:
+// AreaBoundCallers does not USE that secret (svcclient discards it for such a subject). It presents
+// a credential of its own instead, minted per area by dcctl and mounted only into that area and
+// user-management, and the endpoint:
 //
 //   - derives the subject from the credential that matched — a request body naming one is refused;
 //   - ENFORCES the ceiling: every requested authority must be in ServiceCeiling(area), and the
 //     super-authority is refused outright;
 //   - is served by no previous release, so an area-bound client talking to an older user-management
-//     gets a 404 and no token, which is the fail-closed outcome (it has no shared secret to fall back
-//     to, and svcclient would not use one if it had).
+//     gets a 404 and no token, which is the fail-closed outcome (svcclient never falls back to the
+//     shared secret).
 //
 // The shared-secret endpoint is unchanged by any of this.
+//
+// 🔴 WHAT THIS DOES NOT YET GIVE. The ceiling is enforced on tokens minted THROUGH this endpoint. It
+// is not a boundary on the area as a whole while the area's pod still HOLDS the shared secret, and it
+// does today: dcctl writes infrastructure.serviceAuth.secret into the instance document and the chart
+// mounts that one document into every Deployment, so code in an area-bound pod could read it and mint
+// any subject and any authority through ServiceTokenPath. The boundary holds only once the area-bound
+// areas are given a restricted instance document without that key. Until then nothing may claim the
+// area "cannot" obtain more than its ceiling.
 
 const (
 	// AreaServiceTokenPath is the user-management endpoint (internal listener only, like

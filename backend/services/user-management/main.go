@@ -755,7 +755,9 @@ func registerServiceTokenHandler() {
 	))
 	// The AREA-BOUND mint, beside it on the same internal listener: an area in
 	// auth.AreaBoundCallers presents its own credential (mounted here per area, never in the
-	// instance document), the subject is the area that matched, and the ceiling is ENFORCED.
+	// instance document), the subject is the area that matched, and the ceiling is ENFORCED for
+	// tokens minted here. (The area's pod still holds the shared secret until it is given a
+	// restricted instance document; see auth.AreaServiceTokenPath.)
 	// Nothing about the shared-secret endpoint above changes.
 	internalAuthMux().Handle(auth.AreaServiceTokenPath, identity.AreaServiceTokenHandler(
 		auth.AreaBoundCallerNames(),

@@ -287,8 +287,11 @@ together.
 {{/*
 devicechain.areaBoundAreas — the functional areas that obtain service tokens ONLY through the
 area-bound mint: each presents a credential of its own, the token's subject is that area and nothing
-else, and user-management enforces the area's authority ceiling. Such an area never holds the shared
-service secret. The Go side is auth.AreaBoundCallers (backend/core/auth); a test holds the two
+else, and user-management enforces the area's authority ceiling on every token minted that way.
+🔴 NOT YET A BOUNDARY ON THE AREA: this chart still mounts the full instance document, shared service
+secret included, into every Deployment, these areas among them, so a pod of one could still mint
+through the shared-secret endpoint. That holds until the area-bound areas are given a restricted
+instance document. The Go side is auth.AreaBoundCallers (backend/core/auth); a test holds the two
 together.
 */}}
 {{- define "devicechain.areaBoundAreas" -}}

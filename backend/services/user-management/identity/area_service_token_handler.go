@@ -20,8 +20,10 @@ import (
 )
 
 // The area-bound mint (auth.AreaServiceTokenPath). Unlike the shared-secret mint beside it, this one
-// is an AUTHORIZATION boundary, and each of its three rules closes one way to widen what an area can
-// obtain:
+// is an AUTHORIZATION boundary for the tokens it issues, and each of its three rules closes one way to
+// widen what an area can obtain THROUGH IT. (It is not a boundary on the area while the area's pod
+// also holds the shared secret, which it does until the area-bound areas get a restricted instance
+// document: see auth.AreaServiceTokenPath.)
 //
 //  1. THE SUBJECT IS DERIVED, NEVER ACCEPTED. It is the area whose mounted credential matched. The
 //     body is decoded strictly, so a body naming a subject is a 400, not a field quietly ignored.

@@ -20,9 +20,11 @@ import (
 // The mint credential of an AREA-BOUND area (auth.AreaBoundCallers), in a Secret of its own.
 //
 // An area-bound area obtains service tokens only by presenting this credential to user-management's
-// area-bound endpoint, which derives the token's subject from it and enforces the area's ceiling.
-// The area never holds the shared service secret. So the credential is the area's whole identity
-// toward the issuer, and it lives where the per-area broker logins live: a Secret named for the area,
+// area-bound endpoint, which derives the token's subject from it and enforces the area's ceiling on
+// every token minted that way. Its client never uses the shared service secret — but its pod still
+// mounts the instance document, which carries it (helmValues writes infrastructure.serviceAuth into
+// every area's document), until the area-bound areas are given a restricted one. The credential
+// lives where the per-area broker logins live: a Secret named for the area,
 // mounted by that area's Deployment and by user-management (which checks it), and by nothing else
 // (templates/deployment.yaml). It is never a key in the instance document, which every pod mounts,
 // and never a Helm value.
