@@ -127,6 +127,7 @@ backend/services/device-management/model/authored_sim_alarm_wire_test.go
 backend/services/device-management/model/authored_sim_fleetpulse_command_test.go
 backend/services/device-management/model/fleet_operation_gate_test.go
 backend/services/device-management/processor/connect_snippet_golden_test.go
+backend/services/device-management/schema/migration_fleet_line_evidence_close_index_test.go
 backend/services/event-management/model/upgrade_notes_bounds_test.go
 backend/services/event-management/processor/backfill/deps_test.go
 backend/services/event-management/processor/backfill/plansource_test.go
