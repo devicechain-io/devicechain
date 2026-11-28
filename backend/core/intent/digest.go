@@ -14,7 +14,7 @@ import (
 // plan, and it is an input of InputsDigest, so changing it re-plans every intent once. Change it
 // whenever any of those semantics change; TestPinnedVectors fails until it is changed in step
 // with the vectors.
-const CompilerBuild = "core-intent/1"
+const CompilerBuild = "core-intent/2"
 
 // inputsDigestVersion versions the InputsDigest envelope itself.
 const inputsDigestVersion = 1
