@@ -13,7 +13,7 @@ import (
 func TestExistingEscrowPromptAsksForTheOriginalPassphrase(t *testing.T) {
 	m := newPassphraseModel(SecretQuestion{Question: installflow.Question{
 		Question: "bootstrap.escrow-existing-passphrase",
-		Params: []installflow.Param{{Name: "artifact", Value: installflow.Text("/k/prod.escrow")}},
+		Params:   []installflow.Param{{Name: "artifact", Value: installflow.Text("/k/prod.escrow")}},
 	}}, nil)
 	screen := m.screen(bsTheme{width: 120})
 	body := strings.Join(screen.body, "\n")

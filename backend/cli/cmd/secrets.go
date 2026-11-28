@@ -77,7 +77,7 @@ artifact against a live instance, use "dcctl secrets escrow verify".`,
 var secretsEscrowVerifyCmd = &cobra.Command{
 	Use:   "verify <file>",
 	Short: "Compare an escrow header with a live instance, or open it with --open",
-	Long:  `Compare a root-key escrow artifact with the root key a live instance is running.
+	Long: `Compare a root-key escrow artifact with the root key a live instance is running.
 
 By default, compare only the cleartext header fingerprint with the key in the instance's
 configuration Secret (read through --kube-context, or the current context). This needs no
