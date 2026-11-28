@@ -145,7 +145,7 @@ linkMetrics: true
 
 `apply` 只会把凭据发送给尚未设置凭据的连接器。平台无法告诉你存储了什么，因此无法判断变量是否已更改；传入 `--rotate-secrets` 可把凭据发送给所有已设置变量的连接器。需要凭据而其变量未设置的连接器会阻塞计划。从连接器文件中删除 `credential` 会删除已存储的凭据。
 
-入站集成的持有者令牌由服务器在创建集成时生成。`apply` 不会请求它，因此它从不会被接收、打印或保存。请在控制台中轮换该集成的令牌以签发一个。
+入站集成的持有者令牌由服务器在创建集成时生成。`apply` 不会请求它，因此它从不会被接收、打印或保存。要签发一个，请运行 [`dcctl product rotate-integration-token <integration-token>`](../reference/dcctl.md#dcctl-product-rotate-integration-token)（它只在 stdout 上打印新令牌，旧令牌立即失效），或在控制台中轮换。
 
 ## apply 如何收敛 {#apply}
 

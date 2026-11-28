@@ -85,7 +85,7 @@ Slack 入站 webhook 使用 `"auth":"none"`，省略 `secret`。下面的原生 
 
 通用 webhook 的 `text` 是纯文本摘要，使用设备令牌或来源信息，而不包含设备名称；Slack 用户应使用原生 [Slack 通道](#create-a-slack-channel)。
 
-Webhook 通道的 JSON 正文包含告警的 `eventType`（`RAISED`、`ESCALATED`、`DEESCALATED`、`CLEARED`、`ACKNOWLEDGED`，定时重新通知则为 `RENOTIFIED`）、`alarmToken`、`alarmKey`、`severity`、`state`、来源的 `originatorType` 与 `originatorId`（已知时），以及各个时间。当告警所属设备已知时，还会包含 `deviceToken`、`deviceName` 和 `deviceTypeToken`；某个键的值未知时（例如设备没有名称）会省略该键，绝不会发送空值。定时重新通知（`RENOTIFIED`）和调度器拾取的延迟 `CLEARED` 通知也会在已知时包含这些设备和来源字段。升级前已发送过通知的告警，其后续此类通知会省略这些字段。
+Webhook 通道的 JSON 正文包含告警的 `eventType`（`RAISED`、`ESCALATED`，定时重新通知为 `RENOTIFIED`，在设置了 [`notifyOnClear`](#notify-on-clear) 的策略上为 `CLEARED`；确认和降级不会投递）、`alarmToken`、`alarmKey`、`severity`、`state`、来源的 `originatorType` 与 `originatorId`（已知时），以及各个时间。当告警所属设备已知时，还会包含 `deviceToken`、`deviceName` 和 `deviceTypeToken`；某个键的值未知时（例如设备没有名称）会省略该键，绝不会发送空值。定时重新通知（`RENOTIFIED`）和调度器拾取的延迟 `CLEARED` 通知也会在已知时包含这些设备和来源字段。升级前已发送过通知的告警，其后续此类通知会省略这些字段。
 
 可在 Webhook 通道的 `config` 中设置可选的 `linkBaseUrl`，值为控制台的 `http` 或 `https` 基础 URL（推荐 `https`），例如 `"linkBaseUrl":"https://console.example.com"`。此时，正文会包含 `alarmUrl`，并在告警指明其设备时包含 `deviceUrl`。基础 URL 不得包含查询字符串或片段，因为链接通过追加路径构建。未设置 `linkBaseUrl` 时，这两个键均会省略。如果已存储的 Webhook 配置中的 `linkBaseUrl` 无效，投递时会跳过该值，省略这两个链接并记录警告。
 
@@ -139,11 +139,10 @@ PagerDuty 渠道发送 Events API v2 事件，并把告警的生命周期映射�
 
 | 告警事件 | PagerDuty 动作 |
 | --- | --- |
-| 触发、升级、降级，或被策略的升级通知再次通知 | `trigger`（对已打开 incident 的重复事件会更新它，而不是再开一个） |
-| 已确认 | `acknowledge` |
-| 已清除 | `resolve` |
+| 触发、升级，或被策略的升级通知再次通知 | `trigger`（对已打开 incident 的重复事件会更新它，而不是再开一个） |
+| 已清除（仅限设置了 `notifyOnClear: true` 的策略） | `resolve` |
 
-告警严重程度映射到 PagerDuty 的严重程度：`CRITICAL` 对应 `critical`，`MAJOR` 对应 `error`，`MINOR` 和 `WARNING` 对应 `warning`，其他对应 `info`。要让策略能解决 incident，请让清除和确认这两种转换与触发走同一个渠道。
+告警严重程度映射到 PagerDuty 的严重程度：`CRITICAL` 对应 `critical`，`MAJOR` 对应 `error`，`MINOR` 和 `WARNING` 对应 `warning`，其他对应 `info`。要让策略能解决 incident，请在策略上设置 `notifyOnClear: true`（参见[告警清除时通知](#notify-on-clear)）。在 DeviceChain 中确认告警会停止其升级，但不会确认 PagerDuty incident。
 
 `config` 接受 `region`（`us` 为默认，`eu` 选择 `events.eu.pagerduty.com`）、`source`（事件来源，默认 `devicechain`）和 `linkBaseUrl`。
 
@@ -361,7 +360,7 @@ query {
 
 每个渠道还会提供从投递记录读取的 `deliveryHealth { lastSuccessAt lastFailureAt consecutiveFailures }`。`consecutiveFailures` 统计自该渠道上次投递成功以来失败和被拒绝的尝试次数。`NOT_ATTEMPTED` 记录不计入渠道的失败，因为它们描述的是平台没有执行的操作；`errorCode` 为 `BUDGET_SPENT` 的 `FAILED` 记录同样不计入：该告警所有投递的可用时间在这次尝试进行中耗尽，是平台中止了它。对于没有 `notification:read` 的调用方（例如可写但不可读的调用方在变更中拿到的渠道），`deliveryHealth` 为 null。
 
-需要注意两点：
+需要注意三点：
 
 - **投递记录绝不会延迟通知。** 记录在尝试之后、在投递路径之外写入。如果数据库无法接收某条记录，该记录会被丢弃，并计入 `devicechain_notificationmanagement_ledger_writes_total{outcome="failed"}`（等待写入的记录过多时计入 `outcome="dropped"`）。有记录能证明发生过尝试；没有记录并不能证明没有尝试。
 - **收件人属于个人数据。** 记录会在 7 天后删除（与已解决的通知状态相同的保留期），或在 notification-management 配置的 `AttemptRetentionSeconds` 之后删除。删除租户时，这些记录也会随之清除。

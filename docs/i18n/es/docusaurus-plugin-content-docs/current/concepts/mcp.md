@@ -9,7 +9,7 @@ Puedes dejar que un asistente de IA — Claude Desktop y Claude Code, Cursor, VS
 El servidor se construye sobre un principio: **un agente de IA nunca puede hacer más que la persona que lo autorizó.** No es una puerta de enlace amplia y con permisos excesivos. Es una capa delgada y curada de lecturas y propuestas sobre la API GraphQL existente de la plataforma, y porta el propio token con alcance de inquilino del usuario que inició sesión.
 
 :::note Estado
-**Disponible hoy:** un servicio `mcp` opcional con doce herramientas de lectura curadas, respaldado por un servidor de autorización OAuth 2.1 completo en `user-management`, herramientas en vista previa para proponer acciones sobre alarmas para revisión humana, y [skills](#skills) en vista previa que guían a un asistente en tareas habituales de varios pasos. Un administrador registra los clientes; el autorregistro está planeado mediante Client ID Metadata Documents. Este repositorio es la fuente de verdad de lo que se compila actualmente.
+**Disponible hoy:** un servicio `mcp` opcional con doce herramientas de lectura curadas, respaldado por un servidor de autorización OAuth 2.1 completo en `user-management`, herramientas en vista previa para proponer acciones sobre alarmas y comandos para revisión humana, y [skills](#skills) en vista previa que guían a un asistente en tareas habituales de varios pasos. Un administrador registra los clientes; el autorregistro está planeado mediante Client ID Metadata Documents. Este repositorio es la fuente de verdad de lo que se compila actualmente.
 :::
 
 El servidor de autorización admite el flujo de código de autorización con PKCE, metadatos RFC 8414, rotación de tokens de actualización y vinculación de audiencia RFC 8707. Un administrador registra los clientes; consulta [Cómo se conecta un cliente](#how-a-client-connects).
@@ -83,7 +83,7 @@ Los campos que antes estaban junto a un token (el `name`, `description` y `exter
 
 ## Acciones de agentes: quién puede actuar y cómo detenerlo (vista previa) {#agent-actions}
 
-DeviceChain avanza hacia permitir que un asistente actúe, no solo lea: reconocer una alarma, enviar un comando, proponer una regla o un despliegue. Los controles siguientes deciden **si un asistente puede pedir actuar**, y un asistente ya puede proponer una acción sobre alarmas para que la aprueben personas ([Propuestas y aprobaciones](#agent-proposals)). Las herramientas MCP en vista previa permiten proponer acciones sobre alarmas; la aprobación humana final de una propuesta `ACK` o `CLEAR` ejecuta la acción como la persona que la aprueba. Un agente nunca puede aprobar, y MCP no ofrece herramientas de aprobación, rechazo ni ejecución. Todas las superficies de esta sección están en el [nivel de vista previa](../deployment/versioning-policy.md#preview-interfaces), salvo la marca `agent` de las cuentas de servicio, que es estable: quitarla más adelante convertiría las cuentas de agente de nuevo en integraciones con los permisos de escritura de sus roles.
+DeviceChain avanza hacia permitir que un asistente actúe, no solo lea: reconocer una alarma, enviar un comando, proponer una regla o un despliegue. Los controles siguientes deciden **si un asistente puede pedir actuar**, y un asistente ya puede proponer una acción sobre alarmas para que la aprueben personas ([Propuestas y aprobaciones](#agent-proposals)). Las herramientas MCP en vista previa permiten proponer acciones sobre alarmas y comandos; la aprobación humana final de una propuesta `ACK` o `CLEAR` ejecuta la acción como la persona que la aprueba, y la aprobación de una propuesta de comando pone el comando en cola. Un agente nunca puede aprobar, y MCP no ofrece herramientas de aprobación, rechazo ni ejecución. Todas las superficies de esta sección están en el [nivel de vista previa](../deployment/versioning-policy.md#preview-interfaces), salvo la marca `agent` de las cuentas de servicio, que es estable: quitarla más adelante convertiría las cuentas de agente de nuevo en integraciones con los permisos de escritura de sus roles.
 
 **Un asistente nunca tiene un permiso de escritura.** Cuando una persona autoriza a un asistente para un alcance de acción, el token que recibe lleva un permiso de *propuesta* en lugar del permiso de escritura de la persona: `alarm:propose` en lugar de `alarm:write`, `command:propose` en lugar de `command:write`. El permiso de propuesta se calcula a partir de lo que la persona tiene en ese momento, y se vuelve a calcular en cada renovación, así que una persona que pierde `alarm:write` le quita `alarm:propose` a su asistente en el plazo de vida de un token. Ningún rol puede conceder un permiso de propuesta, y el `*` de un superusuario nunca cuenta como tal. Toda operación existente que cambia datos comprueba el permiso de escritura, así que un token de asistente robado no puede cambiar nada, aunque se envíe directamente a la API en vez de a través del servidor MCP.
 
@@ -149,7 +149,7 @@ El asistente **propone** una acción y las personas deciden. En esta **vista pre
 - **Rechazo y caducidad.** `rejectAgentProposal` termina una propuesta en espera, con una nota opcional. Una propuesta que nadie decide antes de su caducidad pasa a `EXPIRED`, y una propuesta caducada no puede aprobarse, se haya registrado ya o no.
 - **Lectura.** `agentProposals` y `agentProposal` listan las propuestas: una persona necesita `alarm:read`, y un asistente solo ve las propuestas que su propio cliente hizo para la persona para la que actúa. Cada propuesta y cada decisión quedan registradas también en el diario de auditoría.
 
-### Reviewing proposals in the console (preview) {#approvals-inbox}
+### Revisar propuestas en la consola (vista previa) {#approvals-inbox}
 
 Abre **Supervisión > Aprobaciones**. Para revisar alarmas, la bandeja requiere una membresía en el inquilino sin
 restricción de alcance con `agent:admin` o un aprobador actual (rol aprobador, `alarm:write` y segundo factor activo), y el interruptor de acciones de agentes de la instancia
@@ -192,7 +192,7 @@ aprobación final que supera todas las comprobaciones hechas justo antes de conf
 propuestas se aceptan de nuevo en cuanto la política las permite, y una propuesta que estaba en
 espera se puede aprobar entonces.
 
-### Proponer acciones (Preview) {#proposing-actions}
+### Proponer acciones (vista previa) {#proposing-actions}
 
 Cuatro herramientas MCP estáticas permiten proponer acciones para revisión humana. Solo aparecen cuando la clave de configuración `agentActuation.enabled` del servicio MCP es `true` (por defecto es `false`) y el token del solicitante lleva el alcance de acción adecuado junto con `read-only`. `propose_command` también necesita `infrastructure.mcp.commandProposals`:
 
@@ -245,7 +245,7 @@ MCP se está convirtiendo en una forma estándar de dar a los asistentes de IA c
 - **Lecturas y propuestas curadas.** Las herramientas de lectura envían consultas. Las herramientas de mutación guardan propuestas sobre alarmas o comandos para revisión humana. No hay consulta genérica ni herramientas de aprobación o ejecución.
 - **Cada llamada se autentica y se vuelve a verificar.** En cada solicitud, el servidor valida el token portador contra las claves públicas de `user-management` y hace cumplir un alcance de solo lectura. Después, el servicio GraphQL subyacente vuelve a aplicar de forma independiente las mismas verificaciones de inquilino y rol que recibe la consola.
 
-Conecta un asistente y podrá *leer dispositivos, estado, mediciones y alarmas* de tu inquilino. No puede alcanzar otro inquilino, cambiar nada ni ejecutar una consulta arbitraria.
+Conecta un asistente y podrá *leer dispositivos, estado, mediciones y alarmas* de tu inquilino. No puede alcanzar otro inquilino, cambiar nada por sí mismo ni ejecutar una consulta arbitraria: las herramientas de propuestas en vista previa solo guardan solicitudes que aprueba una persona.
 
 ## Qué se registra {#audit}
 
@@ -345,7 +345,7 @@ Algunos límites son decisiones y otros son cotas de la implementación actual. 
 
 **Deliberado, y sin previsión de cambio:**
 
-- **Las propuestas necesitan personas.** Las [herramientas de propuestas](#proposing-actions) en vista previa permiten pedir acciones sobre alarmas según la política de agentes del inquilino. La aprobación humana final de una propuesta `ACK` o `CLEAR` en la bandeja Approvals de la consola ejecuta la acción como la persona que la aprueba. Un agente nunca puede aprobar; MCP no ofrece herramientas de aprobación, rechazo ni ejecución.
+- **Las propuestas necesitan personas.** Las [herramientas de propuestas](#proposing-actions) en vista previa permiten pedir acciones sobre alarmas o comandos según la política de agentes del inquilino. La aprobación humana final de una propuesta `ACK` o `CLEAR` en la bandeja Approvals de la consola ejecuta la acción como la persona que la aprueba, y la aprobación de una propuesta de comando pone el comando en cola. Un agente nunca puede aprobar; MCP no ofrece herramientas de aprobación, rechazo ni ejecución.
 - **Sin acceso entre inquilinos.** El token tiene alcance limitado a un inquilino, elegido por el usuario en el momento de la concesión. La pertenencia a un inquilino nunca es un parámetro de una herramienta, así que no hay ningún argumento que un agente pueda variar para alcanzar otro inquilino.
 - **Sin consultas arbitrarias.** Solo el conjunto de herramientas curado es alcanzable; no existe `run_graphql`.
 - **Ninguna credencial de servicio en ninguna ruta de código que ejecute.** Esto es más fuerte que «no usa un token de servicio»: ninguna ruta de código del servidor MCP echa mano de una credencial propia, así que un agente no tiene ninguna autoridad prestada que explotar. Toda lectura hacia abajo sale bajo el token del propio solicitante, y un agente sin permiso para leer algo recibe el mismo rechazo que recibiría una persona. (Su pod monta la configuración de instancia igual que la de cualquier otro servicio. Eso es fontanería de despliegue, no algo que el servidor use.)
@@ -356,6 +356,7 @@ Algunos límites son decisiones y otros son cotas de la implementación actual. 
 - Los resultados se paginan de 25 en 25 por defecto y 100 como máximo, y una consulta de varios dispositivos admite como mucho 50 tokens por llamada. Un agente que examine una flota grande la recorre por páginas.
 - El servidor lee como máximo 8 MiB de cualquier respuesta descendente. Eso acota lo que obtiene de las propias APIs de la plataforma; no es un límite que anuncie al agente.
 - Una sesión caduca por inactividad a los 30 minutos.
+- Un llamador (el usuario del token) puede tener como máximo 16 sesiones activas, y el servidor como máximo 1.024. Una sesión nueva que supera cualquiera de los dos topes se rechaza con HTTP 429 y `Retry-After: 1`, así que reutiliza una sesión o cierra las que no uses. `initialize` debe enviarse solo, no dentro de un lote JSON-RPC.
 - Un lote JSON-RPC lleva como máximo 16 mensajes, y cada llamador (el usuario del token) puede enviar 20 mensajes por segundo, con una ráfaga de 40; un lote de N cuenta como N. Un lote que supera el tope se rechaza completo con un error JSON-RPC (nada de lo que contiene se ejecuta), y un llamador que supera la tasa recibe HTTP 429 con una cabecera `Retry-After`. Para cambiarlos, defina `maxBatchEntries`, `callsPerSecond` y `callsBurst` en `functionalAreas.mcp.config`; `callsBurst` no puede ser menor que `maxBatchEntries`, y un valor no válido detiene el servicio al arrancar.
 
 **Habilitar el servicio no basta para poder usarlo.** Hay dos interruptores independientes. Activar solo el primero es la forma habitual de acabar con un servidor que responde pero al que no se puede llegar:

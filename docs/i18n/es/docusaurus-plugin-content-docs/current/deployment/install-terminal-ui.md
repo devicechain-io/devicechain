@@ -328,7 +328,9 @@ teclas escritas por adelantado no pueden aprobar nada.
 interactivo (no CI, no `TERM=dumb`), y no tiene `--yes`. Sin un terminal no cambia nada y sale con
 2, indicando los dos comandos que se deben ejecutar en su lugar. Sus opciones (`--kube-context`,
 `--cluster`, `--compact`, `--ha`, `--no-splash`) solo fijan dónde empiezan las pantallas; cada una
-se puede cambiar en ellas.
+se puede cambiar en ellas. `--expose-lan` no aparece en las pantallas: publica los puertos del
+clúster local en todas las interfaces del host en lugar de solo en 127.0.0.1, y como kind fija los
+puertos de un clúster al crearlo, la opción solo se aplica cuando setup crea el clúster.
 
 Si sales o la instancia falla después de la etapa del clúster, el clúster sigue instalado. Setup lo
 indica e imprime el comando `dcctl bootstrap … --ui=tui` exacto que crea la instancia en las

@@ -9,7 +9,7 @@ You can let an AI assistant — Claude Desktop and Claude Code, Cursor, VS Code 
 The server is built on one principle: **an AI agent can never do more than the person who authorized it.** It is not a broad, over-permissioned gateway. It is a thin, curated layer for reads and proposals over the platform's existing GraphQL API, and it carries the signed-in user's own tenant-scoped token.
 
 :::note Status
-**Available today:** an opt-in `mcp` service with twelve curated read tools, fronted by a full OAuth 2.1 authorization server on `user-management`, Preview tools for proposing alarm actions for human review, and Preview [skills](#skills) that guide an assistant through common multi-step tasks. Clients are registered by an administrator; self-registration is planned through Client ID Metadata Documents. This repository is the source of truth for what currently builds.
+**Available today:** an opt-in `mcp` service with twelve curated read tools, fronted by a full OAuth 2.1 authorization server on `user-management`, Preview tools for proposing alarm actions and commands for human review, and Preview [skills](#skills) that guide an assistant through common multi-step tasks. Clients are registered by an administrator; self-registration is planned through Client ID Metadata Documents. This repository is the source of truth for what currently builds.
 :::
 
 The authorization server supports the authorization-code flow with PKCE, RFC 8414 metadata, refresh-token rotation and RFC 8707 audience binding. An administrator registers clients; see [How a client connects](#how-a-client-connects).
@@ -83,7 +83,7 @@ Fields that used to sit beside a token (a device's `name`, `description` and `ex
 
 ## Agent actions: who may act, and the off switch (preview) {#agent-actions}
 
-DeviceChain is building toward letting an assistant act, not only read: acknowledge an alarm, send a command, propose a rule or a rollout. The controls below decide **whether an assistant may ask to act at all**, and an assistant can now propose an alarm action for people to approve ([Proposals and approvals](#agent-proposals)). The Preview MCP tools can propose alarm actions; the final human approval of an `ACK` or `CLEAR` proposal executes the action as the approving person. Agents can never approve, and MCP offers no approval, rejection or execution tool. Every surface in this section is in the [preview tier](../deployment/versioning-policy.md#preview-interfaces), except the `agent` flag on service accounts, which is stable: removing it later would turn agent accounts back into integrations holding their roles' write permissions.
+DeviceChain is building toward letting an assistant act, not only read: acknowledge an alarm, send a command, propose a rule or a rollout. The controls below decide **whether an assistant may ask to act at all**, and an assistant can now propose an alarm action for people to approve ([Proposals and approvals](#agent-proposals)). The Preview MCP tools can propose alarm actions and commands; the final human approval of an `ACK` or `CLEAR` proposal executes the action as the approving person, and approval of a command proposal queues the command. Agents can never approve, and MCP offers no approval, rejection or execution tool. Every surface in this section is in the [preview tier](../deployment/versioning-policy.md#preview-interfaces), except the `agent` flag on service accounts, which is stable: removing it later would turn agent accounts back into integrations holding their roles' write permissions.
 
 **An assistant never holds a write permission.** When a person authorizes an assistant for an action scope, the token it receives carries a *proposal* permission instead of the person's write permission: `alarm:propose` in place of `alarm:write`, `command:propose` in place of `command:write`. A proposal permission is worked out from what the person holds at that moment, and is worked out again at every refresh, so a person who loses `alarm:write` takes `alarm:propose` away from their assistant within one token lifetime. No role can grant a proposal permission, and a superuser's `*` never counts as one. Every existing operation that changes data checks the write permission, so a stolen assistant token cannot change anything, even when it is sent straight to the API instead of through the MCP server.
 
@@ -238,7 +238,7 @@ MCP is becoming a standard way to give AI assistants real capabilities. The risk
 - **Curated reads and proposals.** Read tools issue queries. Mutation tools store alarm or command proposals for human review. There is no generic query escape hatch, approval tool or execution tool.
 - **Every call is authenticated and re-checked.** On each request the server validates the bearer token against `user-management`'s public keys and enforces a read-only scope. The underlying GraphQL service then independently re-applies the same tenant and role checks the console gets.
 
-Connect an assistant, and it can *read devices, state, measurements, and alarms* for your tenant. It cannot reach another tenant, change anything, or run an arbitrary query.
+Connect an assistant, and it can *read devices, state, measurements, and alarms* for your tenant. It cannot reach another tenant, change anything on its own, or run an arbitrary query: the Preview proposal tools only store requests that a person approves.
 
 ## What is recorded {#audit}
 
@@ -338,7 +338,7 @@ Some limits are decisions and some are bounds of the current implementation. Eac
 
 **Deliberate, and not scheduled to change:**
 
-- **Proposals require people.** The Preview [proposal tools](#proposing-actions) let an assistant ask for alarm actions under the tenant's agent policy. The final human approval of an `ACK` or `CLEAR` proposal in the console Approvals inbox executes the action as the approving person. An agent can never approve; MCP offers no approval, rejection or execution tool.
+- **Proposals require people.** The Preview [proposal tools](#proposing-actions) let an assistant ask for alarm actions or commands under the tenant's agent policy. The final human approval of an `ACK` or `CLEAR` proposal in the console Approvals inbox executes the action as the approving person, and approval of a command proposal queues the command. An agent can never approve; MCP offers no approval, rejection or execution tool.
 - **No cross-tenant access.** The token is scoped to one tenant, chosen by the user at grant time. Tenancy is never a tool parameter, so there is no argument an agent can vary to reach another tenant.
 - **No arbitrary queries.** Only the curated tool set is reachable; there is no `run_graphql`.
 - **No service credential in any code path it runs.** This is stronger than "it does not use a service token": no code path in the MCP server reaches for a credential of its own, so an agent has no borrowed authority to exploit. Every downstream read goes out under the caller's own token, and an agent with no permission to read something gets the same refusal a person would. (Its pod mounts the instance configuration like every other service's does. That is deployment plumbing, not something the server uses.)
@@ -349,6 +349,7 @@ Some limits are decisions and some are bounds of the current implementation. Eac
 - Results are paged at 25 by default and 100 at most, and a multi-device lookup takes at most 50 tokens per call. An agent surveying a large fleet pages through it.
 - The server reads at most 8 MiB from any single downstream response. That bounds what it fetches from the platform's own APIs; it is not a limit it advertises to the agent.
 - A session idles out after 30 minutes.
+- One caller (the token's user) may hold at most 16 live sessions, and the server at most 1,024. A new session past either cap is refused with HTTP 429 and `Retry-After: 1`, so reuse a session or close unused ones. `initialize` must be sent on its own, not in a JSON-RPC batch.
 - A JSON-RPC batch carries at most 16 messages, and each caller (the token's user) may send 20 messages a second, with a burst of 40; a batch of N counts as N. A batch over the cap is refused whole with a JSON-RPC error (nothing in it runs), and a caller over the rate gets HTTP 429 with a `Retry-After` header. Set `maxBatchEntries`, `callsPerSecond` and `callsBurst` under `functionalAreas.mcp.config` to change them; `callsBurst` may not be below `maxBatchEntries`, and an invalid value stops the service at startup.
 
 **Enabling the service is not enough to use it.** There are two independent switches. Turning on only the first is the common way to end up with a server that answers but cannot be reached:
