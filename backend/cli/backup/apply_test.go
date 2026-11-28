@@ -346,11 +346,18 @@ func TestFilesystemWriterNeverClobbersANewKey(t *testing.T) {
 }
 
 func TestFilesystemWriterRefusesUnverifiedBytes(t *testing.T) {
-	for name, src := range map[string]string{"short": "back", "long": "backup!", "changed": "BACKUP"} {
+	// Each refusal names what differs, so an operator can tell a truncated set
+	// from altered bytes.
+	for name, tc := range map[string]struct{ src, says string }{
+		"short":   {"back", "size 4"},
+		"long":    {"backup!", "size 7"},
+		"changed": {"BACKUP", "SHA-256"},
+	} {
 		t.Run(name, func(t *testing.T) {
 			root, target, _ := filesystemTarget(t, nil)
-			if err := target.write(context.Background(), "sample/a/b/c", record("backup"), strings.NewReader(src), false); err == nil {
-				t.Fatal("unverified bytes committed")
+			err := target.write(context.Background(), "sample/a/b/c", record("backup"), strings.NewReader(tc.src), false)
+			if err == nil || !strings.Contains(err.Error(), tc.says) {
+				t.Fatalf("unverified bytes: %v, want an error naming %q", err, tc.says)
 			}
 			if got := readTree(t, root); len(got) != 0 {
 				t.Fatalf("left %v on the target", got)
