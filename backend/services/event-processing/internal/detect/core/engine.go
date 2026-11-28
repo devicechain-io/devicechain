@@ -554,7 +554,7 @@ func (e *Engine) Descope(ruleID, series string, at time.Time) bool {
 // owed: deleting the device already cascaded its alarm objects, so downstream holds nothing to
 // resolve.
 //
-// stale is asked once per rule with that rule's id and the series' raised-latch time (raised=false
+// stale is asked once per rule with that rule's id and the raise's input decision time (raised=false
 // when it holds none), so the caller can tell state that PREDATES the device's current incarnation
 // from state the current one wrote. Returns the number of entries dropped. Runs on the single-writer
 // loop; the caller marks the checkpoint dirty when > 0.
@@ -574,8 +574,8 @@ func (e *Engine) dropSeriesOfRule(id, series string, stale func(string, time.Tim
 		return 0
 	}
 	key := SeriesKey{Rule: id, Series: series}
-	raisedAt, raised := e.raised[key]
-	if !stale(id, raisedAt, raised) {
+	_, raised := e.raised[key]
+	if !stale(id, e.raiseInput(key), raised) {
 		return 0
 	}
 	n := dropOneKey(e.raised, key)

@@ -221,7 +221,8 @@ func (e *Engine) snapshotRuns() ([]snapRun, []snapBreak) {
 // run at all; left that way, the series' next match would open a fresh run and a late break
 // between the raise and that match would be taken for one older than the run and ignored, leaving
 // the alarm raised across a real break. Such a series is given the run its raise implies: held for
-// the hold up to the raise, with the raise as its newest match.
+// the hold up to the raise's input decision time, with that input as its newest match.
+// The emitted stamp may be bumped to order alarm edges; it does not extend the run.
 func (e *Engine) restoreRuns(runs []snapRun, breaks []snapBreak) {
 	for _, s := range runs {
 		lastMatch := s.LastMatch
@@ -233,12 +234,13 @@ func (e *Engine) restoreRuns(runs []snapRun, breaks []snapBreak) {
 	for _, s := range breaks {
 		e.runs[SeriesKey{Rule: s.Rule, Series: s.Series}] = durState{lastBreak: s.At}
 	}
-	for key, raisedAt := range e.raised {
+	for key := range e.raised {
 		r, ok := e.rules[key.Rule]
 		if !ok || r.Kind != Duration {
 			continue
 		}
 		if _, has := e.runs[key]; !has {
+			raisedAt := e.raiseInput(key)
 			e.runs[key] = durState{running: true, since: raisedAt.Add(-r.Hold), lastMatch: raisedAt}
 		}
 	}
