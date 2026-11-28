@@ -48,9 +48,10 @@ func TestRestoreValidationBeforeCluster(t *testing.T) {
 		{[]string{"sample", "--from", "../backup/testdata/good"}, "--plan or --apply is required"},
 		{[]string{"sample", "--plan=false"}, "--plan or --apply is required"},
 		{[]string{"sample", "--plan", "--apply", "--only", "object-store"}, "mutually exclusive"},
-		// --apply never means "everything": streams are not applied in this release.
+		// --apply never means "everything": the resource must be explicit.
 		{[]string{"sample", "--apply", "--from", "../backup/testdata/good"}, "--only object-store"},
-		{[]string{"sample", "--apply", "--only", "stream", "--from", "../backup/testdata/good"}, "stream restore is not implemented"},
+		{[]string{"sample", "--apply", "--only", "stream"}, "--from is required"},
+		{[]string{"sample", "--apply", "--only", "stream", "--from", "../backup/testdata/tampered-hash"}, "SHA-256 mismatch"},
 		{[]string{"sample", "--plan", "--only", "object-store"}, "apply only to --apply"},
 		{[]string{"sample", "--plan", "--overwrite-target"}, "apply only to --apply"},
 		{[]string{"sample", "--apply", "--only", "object-store"}, "--from is required"},

@@ -83,7 +83,26 @@ func TestBootstrapUIPTYChild(t *testing.T) {
 		for _, s := range bootstrap.NewDefaultPipeline().Steps {
 			p.Steps = append(p.Steps, bootstrap.Step{Name: s.Name, Run: func(context.Context, *bootstrap.State) error { return nil }})
 		}
-		p.Steps[0].Run = func(context.Context, *bootstrap.State) error { mark("pipeline ran"); return nil }
+		p.Steps[0].Run = func(ctx context.Context, _ *bootstrap.State) error {
+			// The journey test holds the fake run until it observes the progress
+			// table. An instantaneous fake can otherwise finish between frames.
+			for {
+				_, err := os.Stat(marker + ".await-progress")
+				if os.IsNotExist(err) {
+					break
+				}
+				if err != nil {
+					return err
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(10 * time.Millisecond):
+				}
+			}
+			mark("pipeline ran")
+			return nil
+		}
 		return p
 	}
 	rootCmd.SetArgs(args)
@@ -222,6 +241,9 @@ func settle() { time.Sleep(900 * time.Millisecond) }
 // terminal handed back.
 func TestBootstrapUIPTYTheInstanceJourney(t *testing.T) {
 	r := startBootstrapUIPTY(t, "bootstrap", "local", "acme", "--ui=tui", "--skip-preflight")
+	if err := os.WriteFile(r.marker+".await-progress", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	r.waitShows("the instance screen", "Choose the instance to create")
 	if !strings.Contains(stripCSI(r.screen()), "(from the command line)") {
 		t.Fatalf("the instance screen is not seeded with the command line's name:\n%q", r.screen())
@@ -249,6 +271,10 @@ func TestBootstrapUIPTYTheInstanceJourney(t *testing.T) {
 	r.press(pass)
 	time.Sleep(300 * time.Millisecond)
 	r.press("\r")
+	r.waitShows("the bootstrap stage table", "Creating the instance")
+	if err := os.Remove(r.marker + ".await-progress"); err != nil {
+		t.Fatal(err)
+	}
 	r.waitShows("the escrow receipt", "Root-key escrow written and checked")
 	r.press("\r")
 	r.waitShows("the instance success", "Instance acme is ready.")

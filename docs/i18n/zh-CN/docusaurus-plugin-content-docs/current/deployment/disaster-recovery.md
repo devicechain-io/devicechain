@@ -407,9 +407,23 @@ dcctl restore devicechain --from ./backup-set --plan --blob-directory /mnt/targe
 
 `backup inspect --verify` 必须带 `--verify`，不访问集群，也不写入。它验证清单及每个已列出快照的大小和 SHA-256；出错时返回非零状态。成功仅证明所列字节与清单一致：不验证清单真实性，不检查原生归档内部，也不证明清单完整或检查点一致。
 
-`restore` 必须带 `--from`，并且 `--plan` 与 `--apply` 二选一。`--plan` 不做任何更改。`--apply --only object-store` 恢复对象存储（见下文）；**尚未实现流恢复**，不带 `--only object-store` 的 `--apply` 会被拒绝。`restore --plan` 连接前先验证本地字节、实例/租户身份、必需清单覆盖范围及可用快照元数据，然后读取目标流状态和对象字节，输出 create/replace/skip 操作而不执行。缺少身份的旧清单可检查，但不能用于规划。缺失需保留的条目、未知条目或错误策略均被拒绝。仅当 `absent_gateway_streams` 中显式记录且目标也不存在时，才允许省略 `$MQTT_msgs`。在分片实例上，计划会列出每个分片组流，且备份只能规划到分片布局相同（`count` 和后缀均相同）、且其代理上没有该布局未声明的分片组流的实例。使用较早版本 dcctl 为分片实例创建的备份不记录布局，也不包含分片组流，因此对分片目标会被拒绝。
+`restore` 必须带 `--from`，并且 `--plan` 与 `--apply` 二选一。`--plan` 不做任何更改。`--apply --only object-store` 恢复对象存储（见下文）；`--apply --only stream` 恢复备份中的 JetStream 流及消费者。`--apply` 必须显式选择 `--only`。`restore --plan` 连接前先验证本地字节、实例/租户身份、必需清单覆盖范围及可用快照元数据，然后读取目标流状态和对象字节，输出 create/replace/skip 操作而不执行。缺少身份的旧清单可检查，但不能用于规划。缺失需保留的条目、未知条目或错误策略均被拒绝。仅当 `absent_gateway_streams` 中显式记录且目标也不存在时，才允许省略 `$MQTT_msgs`。在分片实例上，计划会列出每个分片组流，且备份只能规划到分片布局相同（`count` 和后缀均相同）、且其代理上没有该布局未声明的分片组流的实例。使用较早版本 dcctl 为分片实例创建的备份不记录布局，也不包含分片组流，因此对分片目标会被拒绝。
 
 对于非空目标流，缺少最后消息时间、时间戳更新、序列号更高或消息更多都会导致拒绝。目标对象有额外内容或内容不同（包括后端不同）也会拒绝；匹配对象会跳过，相同内容的子集可补齐。目标存储缺失或不可读属于错误。`--force-foreign` 仅允许实例/租户身份不匹配：不会绕过覆盖范围或数据丢失检查，也不迁移 subject、租户、blob 引用或后端。规划期间请冻结目标写入；输出只是一次观察，不是锁，也不为后续执行预留状态。
+
+#### 恢复流 {#restore-streams}
+
+```bash
+dcctl restore devicechain --from ./backup-set --apply --only stream
+# 显式替换备份中已有的流：
+dcctl restore devicechain --from ./backup-set --apply --only stream --overwrite-target
+```
+
+此命令仅恢复备份中的流、消息以及消费者配置和状态；不会写入对象存储，也不需要 `--blob-directory`。如果流已存在，即使为空，也必须传入 `--overwrite-target`。替换会先删除现有流及消费者，再上传快照；此过程具有破坏性，并非原子操作。不会删除备份中没有的流。操作期间应停止写入及流和消费者的创建。重试时，已恢复的流需要 `--overwrite-target`。
+
+备份必须属于同一实例且分片组布局相同；即使指定 `--force-foreign`，也不会迁移流名称和 subject。删除目标流之前，会将每个备份文件复制到私有临时文件并重新检查大小和 SHA-256。上传采用有界分块，每块都等待确认。只有服务器最终响应成功且流状态匹配，才会输出该流的 `restored` 行。校验不符、上传不完整或服务器错误都会使操作停止并返回非零状态；此前已完成的流仍保留恢复结果。替换失败时，原流可能已被删除。恢复完成前请保留备份。
+
+此命令使用与备份相同的已部署 broker 凭据和 TLS（`--nats-url` 或默认端口转发）。**当前 broker-admin 授权不允许恢复。** 运维人员需要提供 `$JS.API.STREAM.RESTORE.<stream>`、服务器返回的上传 subject `$JS.SNAPSHOT.RESTORE.<stream>.<token>`，以及替换时所需的 `$JS.API.STREAM.DELETE.<stream>` 发布权限，另需已有的流信息、列表和管理员回复 inbox 权限。dcctl 不会扩大授权。使用当前权限时，恢复会被拒绝或超时；尝试替换前请先配置所需权限。
 
 #### 恢复对象存储 {#restore-object-store}
 

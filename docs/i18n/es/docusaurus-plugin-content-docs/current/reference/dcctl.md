@@ -41,7 +41,7 @@ dcctl [command]
 * [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files
 * [dcctl relationship](#dcctl-relationship)	 - Add, list and remove typed entity relationships
 * [dcctl resgen](#dcctl-resgen)	 - Generate configuration resources
-* [dcctl restore](#dcctl-restore)	 - Verify a backup and print a restore plan, or restore its object store
+* [dcctl restore](#dcctl-restore)	 - Verify a backup and print a restore plan, or restore its objects or streams
 * [dcctl secrets](#dcctl-secrets)	 - Inspect and verify instance secret material
 * [dcctl setup](#dcctl-setup)	 - Preview. Guided set-up: a cluster, then an instance on it
 * [dcctl sim](#dcctl-sim)	 - Create and drive DeviceChain simulations
@@ -2915,7 +2915,7 @@ dcctl resgen [flags]
 
 ## dcctl restore {#dcctl-restore}
 
-Verify a backup and print a restore plan, or restore its object store
+Verify a backup and print a restore plan, or restore its objects or streams
 
 ### Synopsis
 
@@ -2927,10 +2927,18 @@ Freeze target writers while planning; a plan is an observation, not a reservatio
 target holding any object that differs from the backup, or is not in it, unless --overwrite-target is given;
 objects already identical are left alone, so an interrupted restore is finished by running it again.
 Every object is checked against the verified backup before it is committed, and the target is read back at
-the end. Stream restore is not implemented: --apply without --only object-store is refused.
+the end.
+
+--apply --only stream restores captured JetStream streams, messages and consumers. Existing streams
+are refused unless --overwrite-target explicitly authorizes deleting and replacing them. Replacement
+is destructive and not atomic. Freeze writers and stream/consumer creation throughout the restore.
+Snapshot size and SHA-256 are rechecked before replacement; each chunk is acknowledged and success
+requires the server's final restore response. No objects are written and --blob-directory is not needed.
+Uses backup's broker credentials; the current broker-admin grant lacks restore/upload permissions.
+--apply requires --only object-store or --only stream; it never defaults to everything.
 
 ```
-dcctl restore <instance> --from <backup-set> (--plan | --apply --only object-store) [flags]
+dcctl restore <instance> --from <backup-set> (--plan | --apply --only object-store|stream) [flags]
 ```
 
 ### Examples
@@ -2940,6 +2948,8 @@ dcctl restore <instance> --from <backup-set> (--plan | --apply --only object-sto
   dcctl restore acme --from ./acme-backup --plan --kube-context prod
   dcctl restore acme-copy --from ./acme-backup --plan --force-foreign
   dcctl restore acme --from ./acme-backup --apply --only object-store --blob-directory /mnt/acme-blob
+  dcctl restore acme --from ./acme-backup --apply --only stream
+  dcctl restore acme --from ./acme-backup --apply --only stream --overwrite-target
 ```
 
 ### Options
@@ -2952,8 +2962,8 @@ dcctl restore <instance> --from <backup-set> (--plan | --apply --only object-sto
   -h, --help                    help for restore
       --kube-context string     Kubernetes context of the installed instance
       --nats-url string         Reachable broker URL (default: port-forward)
-      --only string             With --apply, the resource to restore: object-store (the only one this release applies)
-      --overwrite-target        With --apply, replace target objects that differ from the backup; objects not in the backup are kept
+      --only string             With --apply, the resource to restore: object-store or stream (required)
+      --overwrite-target        With --apply, replace differing objects or delete and replace existing captured streams; resources not in the backup are kept
       --plan                    Print a plan without applying it
 ```
 
