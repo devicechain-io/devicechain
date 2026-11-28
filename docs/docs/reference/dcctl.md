@@ -37,7 +37,7 @@ dcctl [command]
 * [dcctl product](#dcctl-product)	 - Export, plan and apply a tenant's product as files
 * [dcctl relationship](#dcctl-relationship)	 - Add, list and remove typed entity relationships
 * [dcctl resgen](#dcctl-resgen)	 - Generate configuration resources
-* [dcctl restore](#dcctl-restore)	 - Verify a backup and print a read-only restore plan
+* [dcctl restore](#dcctl-restore)	 - Verify a backup and print a restore plan, or restore its object store
 * [dcctl secrets](#dcctl-secrets)	 - Inspect and verify instance secret material
 * [dcctl setup](#dcctl-setup)	 - Preview. Guided set-up: a cluster, then an instance on it
 * [dcctl sim](#dcctl-sim)	 - Create and drive DeviceChain simulations
@@ -2911,16 +2911,22 @@ dcctl resgen [flags]
 
 ## dcctl restore {#dcctl-restore}
 
-Verify a backup and print a read-only restore plan
+Verify a backup and print a restore plan, or restore its object store
 
 ### Synopsis
 
 Verify local backup bytes, identity and coverage before connecting to the installed instance.
-Read target stream state and blob bytes; refuse possible newer-data loss. No restore is applied.
-Freeze target writers while planning; this is an observation, not a reservation for a later apply.
+--plan reads target stream state and blob bytes, refuses possible newer-data loss and prints the plan; it changes nothing.
+Freeze target writers while planning; a plan is an observation, not a reservation for a later apply.
+
+--apply --only object-store writes the backup's objects into the target instance's blob store. It refuses a
+target holding any object that differs from the backup, or is not in it, unless --overwrite-target is given;
+objects already identical are left alone, so an interrupted restore is finished by running it again.
+Every object is checked against the verified backup before it is committed, and the target is read back at
+the end. Stream restore is not implemented: --apply without --only object-store is refused.
 
 ```
-dcctl restore <instance> --from <backup-set> --plan [flags]
+dcctl restore <instance> --from <backup-set> (--plan | --apply --only object-store) [flags]
 ```
 
 ### Examples
@@ -2929,18 +2935,22 @@ dcctl restore <instance> --from <backup-set> --plan [flags]
   dcctl restore acme --from ./acme-backup --plan
   dcctl restore acme --from ./acme-backup --plan --kube-context prod
   dcctl restore acme-copy --from ./acme-backup --plan --force-foreign
+  dcctl restore acme --from ./acme-backup --apply --only object-store --blob-directory /mnt/acme-blob
 ```
 
 ### Options
 
 ```
-      --blob-directory string   Read-only mounted/exported target filesystem blob PVC root
+      --apply                   Restore the resources named by --only into the target instance
+      --blob-directory string   Mounted/exported target filesystem blob PVC root (read-only for --plan, writable for --apply)
       --force-foreign           Allow a foreign instance or tenant identity; never bypass loss or coverage checks
       --from string             Local verified backup-set directory (required)
   -h, --help                    help for restore
       --kube-context string     Kubernetes context of the installed instance
       --nats-url string         Reachable broker URL (default: port-forward)
-      --plan                    Print a plan without applying it (required)
+      --only string             With --apply, the resource to restore: object-store (the only one this release applies)
+      --overwrite-target        With --apply, replace target objects that differ from the backup; objects not in the backup are kept
+      --plan                    Print a plan without applying it
 ```
 
 ### SEE ALSO
@@ -2983,7 +2993,7 @@ one BEFORE the day you need it.
 
 * [dcctl secrets](#dcctl-secrets)	 - Inspect and verify instance secret material
 * [dcctl secrets escrow show](#dcctl-secrets-escrow-show)	 - Print what an escrow artifact says about itself (no passphrase needed)
-* [dcctl secrets escrow verify](#dcctl-secrets-escrow-verify)	 - Check that an escrow artifact holds the root key a live instance is running
+* [dcctl secrets escrow verify](#dcctl-secrets-escrow-verify)	 - Compare an escrow header with a live instance, or open it with --open
 
 ## dcctl secrets escrow show {#dcctl-secrets-escrow-show}
 
@@ -3021,24 +3031,23 @@ dcctl secrets escrow show <file> [flags]
 
 ## dcctl secrets escrow verify {#dcctl-secrets-escrow-verify}
 
-Check that an escrow artifact holds the root key a live instance is running
+Compare an escrow header with a live instance, or open it with --open
 
 ### Synopsis
 
-Check that a root-key escrow artifact holds the root key a live instance is running.
+Compare a root-key escrow artifact with the root key a live instance is running.
 
-The check compares key digests: the artifact's against the digest of the key in the instance's
-configuration Secret (read through --kube-context, or the current context). It needs no
-passphrase and decrypts nothing, so it is safe to run as often as you like, from a scheduled
-job or a CI gate.
+By default, compare only the cleartext header fingerprint with the key in the instance's
+configuration Secret (read through --kube-context, or the current context). This needs no
+passphrase and decrypts nothing. A matching header does not prove the artifact can open.
 
-A mismatch means the artifact is intact but belongs to a different key (usually the instance
-was re-bootstrapped after the file was written, or the file belongs to another instance), so
-the instance has no usable escrow. The command exits non-zero in that case.
+With --open, decrypt and authenticate the artifact and compare the recovered key bytes
+with the running key. Supply the original passphrase using --escrow-passphrase-file or
+DCCTL_ESCROW_PASSPHRASE (the file takes precedence). This mode never prompts. A missing or
+wrong passphrase, damaged artifact, or different key exits non-zero.
 
-```
-  dcctl secrets escrow verify --instance prod ./prod-rootkey.escrow
-```
+Without --open, a fingerprint mismatch also exits non-zero: the header names a different
+key, usually because the instance was re-bootstrapped or the file belongs to another instance.
 
 ```
 dcctl secrets escrow verify <file> [flags]
@@ -3047,17 +3056,21 @@ dcctl secrets escrow verify <file> [flags]
 ### Examples
 
 ```
-  # exits non-zero when the artifact does not hold the key the instance is running
+  # compare the header only; this does not check recoverability
   dcctl secrets escrow verify --instance prod ./prod-rootkey.escrow
-  dcctl secrets escrow verify --instance prod --kube-context prod ./prod-rootkey.escrow
+  # prove that the artifact opens to the key the instance is running
+  dcctl secrets escrow verify --instance prod --open --escrow-passphrase-file ./passphrase ./prod-rootkey.escrow
+  dcctl secrets escrow verify --instance prod --open --kube-context prod ./prod-rootkey.escrow
 ```
 
 ### Options
 
 ```
-  -h, --help                  help for verify
-      --instance string       instance id to check the artifact against (required)
-      --kube-context string   kube-context to target (default: current)
+      --escrow-passphrase-file string   read the original passphrase for --open from this file (or $DCCTL_ESCROW_PASSPHRASE)
+  -h, --help                            help for verify
+      --instance string                 instance id to check the artifact against (required)
+      --kube-context string             kube-context to target (default: current)
+      --open                            decrypt the artifact and compare its key bytes with the live instance (requires a passphrase)
 ```
 
 ### SEE ALSO
@@ -3922,7 +3935,7 @@ dcctl upgrade <provider> <instance> [flags]
       --drop-legacy-ingress                     stop rendering the Ingress objects beside the Gateway: run it once DNS points at the new controller, and before 'dcctl install --remove-legacy-ingress' removes ingress-nginx, which it refuses to do while any Ingress object still names its class
       --dry-run                                 print what would happen without changing anything
       --escrow-file string                      where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on
-      --escrow-passphrase-file string           read the escrow passphrase from this file (or $DCCTL_ESCROW_PASSPHRASE). Only needed to WRITE an escrow for an instance that has none — checking an existing one needs no passphrase
+      --escrow-passphrase-file string           read the escrow passphrase from this file (or $DCCTL_ESCROW_PASSPHRASE). Needed to write a missing escrow or open an existing one; without it, only the cleartext header is checked
       --event-store-checkpoint-timeout string   set the event store's checkpoint_timeout, a Postgres time such as 15min (between 30s and 1d; default 15min). An empty value returns to the default. Applied now and kept by later upgrades when the flag is omitted (recorded beside the instance's infrastructure state on this machine). Reload-only: the event store does not restart
       --event-store-max-wal-mib int             set the event store's max_wal_size, in MiB (at least 64). An upgrade derives it as a fifth of the event store volume, never below 1024, so a store close to full can keep the previous allowance with 1024. 0 returns to the derived value. Applied now and kept by later upgrades when the flag is omitted (recorded beside the instance's infrastructure state on this machine). Reload-only: the event store does not restart
   -h, --help                                    help for upgrade

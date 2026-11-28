@@ -33,7 +33,9 @@ var ErrAcceptNeedsOneProof = integrity.NewRefusal(integrity.ClassInvalid,
 //     single sign-on) and presents the identity token. It must name the invited identity.
 //   - password: a NEW account — one the invitation itself created, which has no password,
 //     no system role and no link to an identity provider — sets its password here. A
-//     tenant that requires single sign-on refuses this (SSO_REQUIRED).
+//     tenant that requires single sign-on refuses this (SSO_REQUIRED). The password is an
+//     INVITATION password: it signs in only to this tenant, and to any other tenant whose
+//     code is later accepted by signing in with it (see admitInvitedPassword).
 //
 // 🔴 THE PASSWORD PATH IS FOR AN ACCOUNT NOBODY HAS USED, AND THAT IS THE WHOLE GUARD. The
 // code is held by whoever the inviting administrator gave it to — the administrator
@@ -64,6 +66,9 @@ func (m *Manager) AcceptInvitation(ctx context.Context, code string, password, i
 	// check reads stores the transaction does not need to hold.
 	var claims *auth.Claims
 	var who *iam.Identity
+	// byPassword: the identity token comes from a PASSWORD sign-in. Only such an acceptance
+	// vouches for an invitation password (see the token branch below).
+	byPassword := false
 	if hasToken {
 		c, err := m.validator.ValidateIdentity(*identityToken)
 		if err != nil {
@@ -77,6 +82,14 @@ func (m *Manager) AcceptInvitation(ctx context.Context, code string, password, i
 			}
 			return nil, err
 		}
+		rec, err := m.loadSession(claims.SessionID, who.Email)
+		if err != nil {
+			if errors.Is(err, errSessionEnded) {
+				return nil, ErrInvalidToken
+			}
+			return nil, err
+		}
+		byPassword = rec.Method == SessionMethodPassword
 	}
 
 	digest := admin.InvitationDigest(code)
@@ -125,6 +138,15 @@ func (m *Manager) AcceptInvitation(ctx context.Context, code string, password, i
 			if who.ID != id.ID {
 				return admin.ErrInvalidInvitation
 			}
+			// Signing in with an invitation password and presenting THIS tenant's code is
+			// this tenant vouching for whoever set it: its code went to the person it
+			// invited. A sign-in through an identity provider vouches for nothing about the
+			// password, so it leaves the membership unable to admit it.
+			if id.PasswordFromInvitation && byPassword {
+				if err := tx.AdmitInvitedPassword(ctx, mem); err != nil {
+					return err
+				}
+			}
 		} else {
 			pristine, err := neverUsed(ctx, tx, id, mem)
 			if err != nil {
@@ -140,7 +162,13 @@ func (m *Manager) AcceptInvitation(ctx context.Context, code string, password, i
 			if err != nil {
 				return err
 			}
-			if err := tx.SetPasswordHash(ctx, id, string(hash)); err != nil {
+			// 🔴 NOT SetPasswordHash. Whoever holds the code set this password, and the
+			// inviting administrator holds the code too, so it proves nothing about the
+			// address. It is recorded as an invitation password that admits only THIS
+			// tenant: another tenant that later attaches a membership to the same address
+			// (inviting it, enabling it by hand, an operator adding it) is not entered with
+			// it unless that tenant vouches for it too.
+			if err := tx.SetInvitedPasswordHash(ctx, id, mem, string(hash)); err != nil {
 				return err
 			}
 		}

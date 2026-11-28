@@ -17,7 +17,6 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/devicechain-io/dc-microservice/blob"
 )
@@ -103,20 +102,10 @@ func ExportBlobs(ctx context.Context, cfg blob.Config, instance string, w io.Wri
 			return err
 		}
 	case blob.BackendS3:
-		region := cfg.Region
-		if region == "" {
-			region = "us-east-1"
-		}
-		ac, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
+		client, err := s3Client(ctx, cfg)
 		if err != nil {
 			return err
 		}
-		client := s3.NewFromConfig(ac, func(o *s3.Options) {
-			o.UsePathStyle = cfg.UsePathStyle
-			if cfg.Endpoint != "" {
-				o.BaseEndpoint = aws.String(cfg.Endpoint)
-			}
-		})
 		pages := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{Bucket: aws.String(cfg.Bucket), Prefix: aws.String(instance + "/")})
 		for pages.HasMorePages() {
 			page, err := pages.NextPage(ctx)

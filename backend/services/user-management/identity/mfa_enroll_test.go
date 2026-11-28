@@ -399,11 +399,14 @@ func TestAResetWithFailuresOutstandingNeedsANewPasswordAndChangesNothingWithout(
 	require.EqualValues(t, 10, left)
 	require.Zero(t, e.auditCount(t, rdb.AuditOpMfaReset))
 
-	// The twin: with a new password the factor goes and the password changes together.
+	// The twin: with a new password the factor goes and the password changes together. The
+	// operator chose that password, so an invitation password's tenant restriction goes too.
+	require.NoError(t, e.db().Exec("UPDATE iam_identities SET password_from_invitation = true WHERE email = 'pat@example.com'").Error)
 	_, err = e.m.ResetIdentityMfa(ctx, "pat@example.com", "pw-new")
 	require.NoError(t, err)
 	after, err = e.store.IdentityByEmail(ctx, "pat@example.com")
 	require.NoError(t, err)
+	require.False(t, after.PasswordFromInvitation, "an operator-set password kept the invitation restriction")
 	require.NotEqual(t, before.PasswordHash, after.PasswordHash)
 	require.NotEqual(t, before.SessionEpoch, after.SessionEpoch)
 	has, _, left, sealed = e.factorState(t, "pat@example.com")

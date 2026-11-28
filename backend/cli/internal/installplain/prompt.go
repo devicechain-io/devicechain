@@ -100,6 +100,13 @@ func (r Responder) respondSecret(q installflow.Question) (installflow.Response, 
 		// The purpose goes through WhiteString as a format, exactly as it always did.
 		fmt.Fprintf(r.Out, "%s\n", color.WhiteString(fmt.Sprintf("Passphrase to protect the root-key escrow for instance %q", instance)))
 		label = "  Passphrase: "
+	case installflow.QuestionEscrowExistingPassphrase:
+		artifact, ok := param(q.Params, "artifact")
+		if !ok {
+			return installflow.Response{}, fmt.Errorf("installplain: question %s needs an artifact", q.Question)
+		}
+		fmt.Fprintf(r.Out, "%s\n", color.WhiteString("Passphrase of the existing escrow at %s", artifact))
+		label = "  Passphrase: "
 	case installflow.QuestionEscrowRestorePassphrase:
 		artifact, ok := param(q.Params, "artifact")
 		if !ok {

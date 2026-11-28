@@ -274,14 +274,44 @@ func ResolveEscrowPlan(instance string, f EscrowFlags) (EscrowPlan, error) {
 		// because nothing will be written with it. See EscrowFlags.DryRun.
 		return EscrowPlan{Path: path}, nil
 	}
-	pass, err := resolveEscrowPassphrase(f, escrowQuestion{
+	question := escrowQuestion{
 		purpose: fmt.Sprintf("Passphrase to protect the root-key escrow for instance %q", instance),
 		confirm: true,
 		code:    installflow.QuestionEscrowPassphrase,
 		params:  []installflow.Param{{Name: "instance", Value: installflow.Text(instance)}},
-	})
+	}
+	var existing *escrow.Artifact
+	raw, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		existing, err = escrow.Decode(raw)
+		if err != nil {
+			return EscrowPlan{}, fmt.Errorf("%s exists but is not a readable escrow artifact (%w). "+
+				"Move it aside so a fresh one can be written, or restore the file if it matters", path, err)
+		}
+		question = escrowQuestion{
+			purpose: "Passphrase of the existing escrow at " + path,
+			confirm: false,
+			code:    installflow.QuestionEscrowExistingPassphrase,
+			params:  []installflow.Param{{Name: "artifact", Value: installflow.Text(path)}},
+		}
+	case !os.IsNotExist(err):
+		return EscrowPlan{}, fmt.Errorf("%s: reading the existing escrow: %w", path, err)
+	}
+	pass, err := resolveEscrowPassphrase(f, question)
 	if err != nil {
 		return EscrowPlan{}, err
+	}
+	// Resolve runs before any cluster work. A re-run needs the original passphrase;
+	// find a wrong one or damaged ciphertext here, rather than at render-config.
+	if existing != nil {
+		key, err := escrow.Open(existing, pass)
+		if err != nil {
+			return EscrowPlan{}, fmt.Errorf("the escrow artifact at %s does not open with the passphrase given (%v).\n"+
+				"  A re-run needs the passphrase it was written with. If it is damaged, or belongs to a key\n"+
+				"  no longer in use, move it aside to have a new one written", path, err)
+		}
+		zeroBytes(key)
 	}
 	return EscrowPlan{Path: path, Passphrase: pass}, nil
 }
@@ -1123,7 +1153,7 @@ func ReconcileEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.T
 		return "", fmt.Errorf("the escrow artifact at %s names the root key instance %q is running, but %w.\n"+
 			"  Its header matches; what it protects could not be confirmed, so as it stands it may recover\n"+
 			"  nothing. Re-run with the passphrase it was written with, or check it with\n"+
-			"  `dcctl secrets escrow verify %s --instance %s`; if it is damaged, move it aside to have a\n"+
+			"  `dcctl secrets escrow verify %s --instance %s --open`; if it is damaged, move it aside to have a\n"+
 			"  correct one written",
 			plan.Path, instance, err, plan.Path, instance)
 	}

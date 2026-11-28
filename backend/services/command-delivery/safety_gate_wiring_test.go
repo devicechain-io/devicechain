@@ -65,22 +65,40 @@ func fullInfra() mscfg.InfrastructureConfiguration {
 // absent, and ON (reader, gauge 1) when both are set. Each missing coordinate is tried alone, and
 // the decision must be recorded on the presence gate and on no other.
 func TestPresenceReaderRecordsItsDecision(t *testing.T) {
-	for name, mutate := range map[string]func(*mscfg.InfrastructureConfiguration){
-		"no secret":   func(i *mscfg.InfrastructureConfiguration) { i.ServiceAuth.Secret = "" },
-		"no hostname": func(i *mscfg.InfrastructureConfiguration) { i.DeviceState.Hostname = "" },
-		"no port":     func(i *mscfg.InfrastructureConfiguration) { i.DeviceState.Port = 0 },
+	for name, c := range map[string]struct {
+		mutate  func(*mscfg.InfrastructureConfiguration)
+		missing string
+	}{
+		"no secret": {func(i *mscfg.InfrastructureConfiguration) { i.ServiceAuth.Secret = "" },
+			"infrastructure.serviceAuth.secret"},
+		"no hostname": {func(i *mscfg.InfrastructureConfiguration) { i.DeviceState.Hostname = "" },
+			"infrastructure.deviceState.hostname"},
+		"no port": {func(i *mscfg.InfrastructureConfiguration) { i.DeviceState.Port = 0 },
+			"infrastructure.deviceState.port"},
+		// A document predating the deviceState block: both of its keys are named, so one
+		// restart fixes it.
+		"no deviceState block": {func(i *mscfg.InfrastructureConfiguration) {
+			i.DeviceState.Hostname, i.DeviceState.Port = "", 0
+		}, "infrastructure.deviceState.hostname, infrastructure.deviceState.port"},
+		"nothing": {func(i *mscfg.InfrastructureConfiguration) {
+			i.ServiceAuth.Secret, i.DeviceState.Hostname, i.DeviceState.Port = "", "", 0
+		}, "infrastructure.serviceAuth.secret, infrastructure.deviceState.hostname, infrastructure.deviceState.port"},
 	} {
 		gates, read := gateReading(t, "command-delivery")
 		infra := fullInfra()
-		mutate(&infra)
-		assert.Nil(t, presenceReader(infra, svcclient.NewPeers(infra, "command-delivery"), gates), name)
+		c.mutate(&infra)
+		reader, missing := presenceReader(infra, svcclient.NewPeers(infra, "command-delivery"), gates)
+		assert.Nil(t, reader, name)
+		assert.Equal(t, c.missing, missing, "%s: the OFF gate must name exactly what is missing", name)
 		v, ok := read(governance.GatePresence)
 		assert.True(t, ok, "%s: an OFF gate must be a present series", name)
 		assert.Equal(t, 0.0, v, name)
 	}
 
 	gates, read := gateReading(t, "command-delivery")
-	assert.NotNil(t, presenceReader(fullInfra(), svcclient.NewPeers(fullInfra(), "command-delivery"), gates))
+	reader, missing := presenceReader(fullInfra(), svcclient.NewPeers(fullInfra(), "command-delivery"), gates)
+	assert.NotNil(t, reader)
+	assert.Empty(t, missing, "a wired gate names nothing missing")
 	v, ok := read(governance.GatePresence)
 	assert.True(t, ok)
 	assert.Equal(t, 1.0, v)
@@ -202,4 +220,45 @@ func TestSiteWiringMintsItsOwnAuthorities(t *testing.T) {
 	request := <-requests
 	assert.Equal(t, ms.FunctionalArea, request.Subject)
 	assert.Equal(t, []string{string(auth.DeviceRead), string(auth.LocationInstalledRead)}, request.Authorities)
+}
+
+// TestThePresenceGateOffReasonReachesTheProcessor is a SOURCE-LEVEL check for the same reason
+// the one above is: the wiring runs only inside the NATS manager's construction callback. It
+// asserts that the second result of presenceReader -- the missing keys -- is what main.go
+// assigns to the processor's PresenceGateOff. Dropped, the gate would still read OFF on its
+// gauge but every ungated dispatch would go uncounted and unwarned.
+func TestThePresenceGateOffReasonReachesTheProcessor(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	require.NoError(t, err)
+
+	reasons := map[string]bool{}
+	assigned := 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		if len(as.Rhs) == 1 && len(as.Lhs) == 2 {
+			if call, ok := as.Rhs[0].(*ast.CallExpr); ok {
+				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "presenceReader" {
+					if reason, ok := as.Lhs[1].(*ast.Ident); ok && reason.Name != "_" {
+						reasons[reason.Name] = true
+					}
+				}
+			}
+		}
+		for i, lhs := range as.Lhs {
+			sel, ok := lhs.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "PresenceGateOff" || i >= len(as.Rhs) {
+				continue
+			}
+			if rhs, ok := as.Rhs[i].(*ast.Ident); ok && reasons[rhs.Name] {
+				assigned++
+			}
+		}
+		return true
+	})
+	require.NotEmpty(t, reasons, "presenceReader's missing-keys result is discarded")
+	assert.Equal(t, 1, assigned, "PresenceGateOff must be assigned presenceReader's missing-keys result, once")
 }

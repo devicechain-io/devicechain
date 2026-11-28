@@ -125,6 +125,9 @@ const (
 	QuestionEscrowPassphrase MessageCode = "bootstrap.escrow-passphrase"
 	// QuestionEscrowPassphraseConfirm asks for the same passphrase again.
 	QuestionEscrowPassphraseConfirm MessageCode = "bootstrap.escrow-passphrase-confirm"
+	// QuestionEscrowExistingPassphrase asks once for the original passphrase of an
+	// existing artifact. Param "artifact" is its path; opening it validates the answer.
+	QuestionEscrowExistingPassphrase MessageCode = "bootstrap.escrow-existing-passphrase"
 	// QuestionEscrowRestorePassphrase asks for the passphrase of the artifact a root key
 	// is restored from. Param "artifact" is its path. It is asked once: a wrong one fails
 	// to open the artifact, which says so.

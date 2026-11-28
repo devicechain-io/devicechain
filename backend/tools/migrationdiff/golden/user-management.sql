@@ -404,7 +404,8 @@ CREATE TABLE "user-management".iam_identities (
  last_name character varying(128),
  enabled boolean DEFAULT true NOT NULL,
  password_hash character varying(256) NOT NULL,
- session_epoch character varying(64) DEFAULT ''::character varying NOT NULL
+ session_epoch character varying(64) DEFAULT ''::character varying NOT NULL,
+ password_from_invitation boolean DEFAULT false NOT NULL
 );
 CREATE TABLE "user-management".iam_identity_links (
  id bigint NOT NULL,
@@ -485,7 +486,8 @@ CREATE TABLE "user-management".iam_memberships (
  tenant_id character varying(128) NOT NULL,
  enabled boolean DEFAULT true NOT NULL,
  managed_by bigint,
- scope jsonb
+ scope jsonb,
+ admits_invited_password boolean DEFAULT false NOT NULL
 );
 CREATE TABLE "user-management".iam_mfa_factors (
  id bigint NOT NULL,

@@ -698,6 +698,9 @@ func (api *Api) saveAttempt(ctx context.Context, row UpdateAttempt, next ota.Att
 		api.beforeSave(row)
 	}
 	cols := otaColumns(next)
+	if next.State == ota.StateUpdated && ota.State(row.State) != ota.StateUpdated {
+		cols["updated_observed_at"] = api.observedAt(ctx)
+	}
 	cols["version"] = row.Version + 1
 	cols["updated_at"] = api.now()
 	res := api.RDB.DB(ctx).Model(&UpdateAttempt{ID: row.ID, Token: row.Token}).
@@ -936,10 +939,12 @@ func (api *Api) ApplyReport(ctx context.Context, deviceToken string, rep ota.Rep
 		next, verdict := ota.Apply(row.ToOTA(asg.Token), rep, api.now())
 		if verdict != ota.VerdictApplied {
 			// A current assignment's duplicate can repair an installed-version write that failed after
-			// the attempt reached UPDATED (the two are separate statements). Use the persisted completion
-			// time: a device resend is a new message whose append time must not displace a newer observation.
+			// the attempt reached UPDATED (the two are separate statements). It is stamped with the
+			// completing report's own observation time, the key the first write was ordered by: a device
+			// resend is a new message whose append time must not displace a newer observation, and the
+			// replica's receive time can run ahead of the broker's and outrank one.
 			if verdict == ota.VerdictDuplicate && ota.State(row.State) == ota.StateUpdated && !asg.SupersededAt.Valid {
-				if err := api.recordUpdated(WithObservedAt(ctx, row.LastReportAt), deviceToken, facts, *asg, *row); err != nil {
+				if err := api.recordUpdated(WithObservedAt(ctx, completionObservedAt(*row)), deviceToken, facts, *asg, *row); err != nil {
 					return "", err
 				}
 			}
@@ -1382,6 +1387,15 @@ func (api *Api) tickOne(ctx context.Context, attemptID uint) (ota.State, error) 
 		return next.State, nil
 	}
 	return "", nil
+}
+
+// completionObservedAt is the observation time of the report that took an attempt to UPDATED. An
+// attempt an earlier release completed has none stored and falls back to its last report time.
+func completionObservedAt(row UpdateAttempt) time.Time {
+	if row.UpdatedObservedAt.Valid {
+		return row.UpdatedObservedAt.Time
+	}
+	return row.LastReportAt
 }
 
 // recordUpdated writes the version an assignment's artifact carries as installed, once the device's

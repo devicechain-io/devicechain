@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-command-delivery/config"
@@ -165,10 +166,14 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 
 	infra := Microservice.InstanceConfiguration.Infrastructure
+	presenceGate, presenceMissing := presenceReader(infra, servicePeers, safetyGates)
 	CommandDeliveryProcessor = processor.NewCommandDeliveryProcessor(Microservice, CommandResponsesReader,
 		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api,
 		tenantLifecycleGate(servicePeers, safetyGates),
-		withPullChannels(presenceReader(infra, servicePeers, safetyGates)), deadLetters, DeliveryMetrics)
+		withPullChannels(presenceGate), deadLetters, DeliveryMetrics)
+	// What switched the presence gate off, if anything: the processor counts and re-warns every
+	// dispatch made without it, so the off state is not one WARN line at startup.
+	CommandDeliveryProcessor.PresenceGateOff = presenceMissing
 	// 🔴 SET HERE, WHERE THE PROCESSOR EXISTS, AND NOT BESIDE THE Api.* ASSIGNMENTS IN
 	// afterMicroserviceInitialized -- WHICH IS WHERE THEY BELONG BY APPEARANCE AND WHERE
 	// THEY WOULD NIL-PANIC. This function is the NatsManager's construction callback, and
@@ -373,23 +378,45 @@ func withPullChannels(reader presence.Reader) presence.Reader {
 // deviceState block. Each logs at WARN with what is lost, because a gate that is off is
 // invisible in every other way — commands flow, nothing is held, and the silent losses it
 // exists to prevent resume without a single error.
-func presenceReader(infra mscfg.InfrastructureConfiguration, peers *svcclient.Peers, gates *governance.SafetyGates) presence.Reader {
-	if infra.ServiceAuth.Secret == "" {
-		log.Warn().Msg("Service secret not configured — the presence gate is OFF; commands to devices known to be offline will be published and silently dropped by the broker.")
+//
+// 🔑 WHY ABSENCE IS NOT A STARTUP REFUSAL. Upgrades roll, and an instance config document
+// supplied through instance.existingSecret, written before the deviceState block existed,
+// still starts every release before this one; refusing it would stall that instance's
+// upgrade on a key it was never asked for. So absence keeps its safe default, and what this
+// returns instead is the name of every missing key: the WARN below names them, the safety
+// gate gauge reads 0 (which the SafetyGateDisabled alert watches), and the processor counts
+// and re-warns each command it then dispatches unchecked (see PresenceGateOff). Empty means
+// the gate is wired.
+func presenceReader(infra mscfg.InfrastructureConfiguration, peers *svcclient.Peers, gates *governance.SafetyGates) (presence.Reader, string) {
+	if missing := missingPresenceConfig(infra); missing != "" {
+		log.Warn().Str("missing", missing).
+			Msg("The presence gate is OFF because its configuration is missing; commands to devices known to be offline will be published and silently dropped by the broker. Set the missing keys and restart command-delivery.")
 		gates.Set(governance.GatePresence, false)
-		return nil
-	}
-	if infra.DeviceState.Hostname == "" || infra.DeviceState.Port == 0 {
-		log.Warn().Msg("device-state endpoint not configured (infrastructure.deviceState) — the presence gate is OFF; commands to devices known to be offline will be published and silently dropped by the broker.")
-		gates.Set(governance.GatePresence, false)
-		return nil
+		return nil, missing
 	}
 	client := peers.Client(auth.StateRead)
 	url, _ := peers.URL(infra.DeviceState.Endpoint())
 	log.Info().Str("deviceState", url).
 		Msg("Presence gate enabled; commands to devices a transport reports as absent will be withheld rather than published.")
 	gates.Set(governance.GatePresence, true)
-	return presence.NewGraphQLReader(client, url)
+	return presence.NewGraphQLReader(client, url), ""
+}
+
+// missingPresenceConfig names, comma-separated and in document order, every key the presence
+// gate needs that the configuration leaves unset, or "" when it has them all. Every one is
+// named, not just the first, so a document missing two keys is fixed in one restart.
+func missingPresenceConfig(infra mscfg.InfrastructureConfiguration) string {
+	var missing []string
+	if infra.ServiceAuth.Secret == "" {
+		missing = append(missing, "infrastructure.serviceAuth.secret")
+	}
+	if infra.DeviceState.Hostname == "" {
+		missing = append(missing, "infrastructure.deviceState.hostname")
+	}
+	if infra.DeviceState.Port == 0 {
+		missing = append(missing, "infrastructure.deviceState.port")
+	}
+	return strings.Join(missing, ", ")
 }
 
 // tenantLifecycleGate is the deleted-tenant gate the dispatch path refuses work through: nil when

@@ -328,6 +328,7 @@ READERS = [
 # go.work lookup) but do not, or do so only at run time and never from a test. `check` accepts
 # these without a READERS row; each needs its reason.
 IN_MODULE = {
+    ("backend/services/device-management", "schema"): "parses ../model/api_fleet_settlement.go, a file in its own module",
     ("backend/services/update-management", "download"): "\"../\" strings are filename-sanitiser fixtures (attachmentName), not file reads",
     ("backend/cli", "backup"): "path-traversal fixtures (\"../outside\") and in-module testdata",
     ("backend/cli", "dcdir"): "walks its own module; \"../escape\" is a refused-input fixture",

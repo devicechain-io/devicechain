@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -92,7 +93,13 @@ func ensureAreaMintSecrets(ctx context.Context, typed kubernetes.Interface, st *
 		s, err := typed.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
 		switch {
 		case err == nil:
-			if len(s.Data[areaMintCredentialKey]) < auth.MinAreaCredentialLen {
+			if reason := areaMintSecretRefusal(s, instanceOwner(st.Instance, st.InstanceUID)); reason != "" {
+				return fmt.Errorf("Secret %s/%s holds the mint credential of area %s, but %s", ns, name, area, reason)
+			}
+			// Measured as both readers see it: user-management and svcclient trim the mounted
+			// file before checking its length, so a value that is only long enough with its
+			// whitespace would pass here and fail at every mint.
+			if len(strings.TrimSpace(string(s.Data[areaMintCredentialKey]))) < auth.MinAreaCredentialLen {
 				return fmt.Errorf("Secret %s/%s exists but holds no usable %q, so area %s can obtain no service token. "+
 					"Refusing to mint over it: delete the Secret to have dcctl mint a new credential, or put one of at least %d characters under %q",
 					ns, name, areaMintCredentialKey, area, auth.MinAreaCredentialLen, areaMintCredentialKey)
@@ -116,4 +123,22 @@ func ensureAreaMintSecrets(ctx context.Context, typed kubernetes.Interface, st *
 		}
 	}
 	return nil
+}
+
+// areaMintSecretRefusal says why a present mint Secret must not be used by this run, or "" when it
+// may be.
+//
+// 🔴 A SECRET DCCTL WROTE IS USED ONLY IF IT IS THIS GENERATION'S. A destroy that died halfway
+// leaves the previous instance's mint Secret behind under the same name; a rebuild that kept it
+// would hand the new instance the dead one's credential, which whoever held a copy of the old
+// Secret can still present. So a dcctl-stamped Secret is held to foreignReason, the same test every
+// other dcctl-written credential is held to. A Secret with NO dcctl stamp is the operator's own
+// credential, put there on purpose (the refusal message above invites exactly that), and is used
+// as it is: dcctl never writes it, so there is no generation to confuse it with.
+func areaMintSecretRefusal(s *corev1.Secret, want secretOwner) string {
+	own := readOwnership(s)
+	if !own.managed {
+		return ""
+	}
+	return foreignReason(own, want)
 }
