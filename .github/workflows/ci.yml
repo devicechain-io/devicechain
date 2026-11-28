@@ -4069,8 +4069,15 @@ jobs:
       - name: ConPTY smoke test ran and passed
         working-directory: backend/cli
         run: |
-          set -o pipefail
-          go test -count=1 -timeout 10m -json -run '^TestInstallOnAConPTY$' ./cmd | ../../hack/check-fleetpg-count.sh TestInstallOnAConPTY 6 1
+          # The -json stream goes to a file so that a failure prints the test's own output:
+          # the count check says only how many events failed, not why.
+          out="$RUNNER_TEMP/conpty.json"
+          rc=0
+          go test -count=1 -timeout 10m -json -run '^TestInstallOnAConPTY$' ./cmd > "$out" || rc=$?
+          if ! ../../hack/check-fleetpg-count.sh TestInstallOnAConPTY 6 1 < "$out" || [ "$rc" -ne 0 ]; then
+            jq -r 'select(.Action == "output") | .Output' "$out"
+            exit 1
+          fi
 
   ci-complete:
     name: ci-complete

@@ -151,7 +151,7 @@ servicio y los miembros con ámbito limitado.
 
 En **v1.10** `dcctl setup local` entra en el nivel de vista previa: los comandos `dcctl setup` y
 `dcctl setup local`, sus opciones (`--kube-context`, `--cluster`, `--compact`, `--ha`,
-`--no-splash`), sus pantallas y sus códigos de salida (consulta
+`--expose-lan`, `--no-splash`), sus pantallas y sus códigos de salida (consulta
 [la configuración guiada](./install-terminal-ui.md#setup-local)). Promoción: **dos versiones menores
 después de entrar (predeterminada)**. `dcctl install` y `dcctl bootstrap`, que ejecuta, siguen
 cubiertos y no cambian.

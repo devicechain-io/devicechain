@@ -27,7 +27,14 @@ func (api *Api) FleetOperationEnforcement(ctx context.Context) string {
 // without changing a byte of the body).
 func fleetOperationEnforcementStates(db *gorm.DB) ([]string, error) {
 	var states []string
-	err := db.Raw(`SELECT t.tgenabled::text
+	err := db.Raw(`SELECT t.tgenabled::text`+fleetOperationEnforcementCatalogSQL,
+		FleetOperationEnforcementFunction, FleetOperationEnforcementFunctionMD5, FleetOperationEnforcementTrigger).Scan(&states).Error
+	return states, err
+}
+
+// Shared by readiness and activation so the identity and shape of the guard
+// cannot drift between the observation and the posting-time decision.
+const fleetOperationEnforcementCatalogSQL = `
 FROM pg_catalog.pg_trigger t
 JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -39,10 +46,7 @@ WHERE n.nspname = 'device-management' AND c.relname = 'entity_attributes'
   AND p.proconfig IS NULL
   AND p.prolang = (SELECT oid FROM pg_catalog.pg_language WHERE lanname = 'plpgsql')
   AND t.tgname = ? AND NOT t.tgisinternal
-  AND (t.tgtype::integer & 31) = 31 AND t.tgqual IS NULL`,
-		FleetOperationEnforcementFunction, FleetOperationEnforcementFunctionMD5, FleetOperationEnforcementTrigger).Scan(&states).Error
-	return states, err
-}
+  AND (t.tgtype::integer & 31) = 31 AND t.tgqual IS NULL`
 
 // Inject the catalog read so the unavailable state is tested without Postgres.
 func fleetOperationEnforcement(read func() ([]string, error)) string {
@@ -54,8 +58,8 @@ func fleetOperationEnforcement(read func() ([]string, error)) string {
 	return fleetOperationEnforcementFromStates(states)
 }
 
-// fleetOperationEnforcementFromStates is the one decision both readiness and the posting-time
-// activation check make over the catalog read.
+// fleetOperationEnforcementFromStates reduces readiness's catalog states. The
+// posting-time activation SELECT applies the same ALWAYS-enabled requirement.
 func fleetOperationEnforcementFromStates(states []string) string {
 	for _, state := range states {
 		if state == "A" {

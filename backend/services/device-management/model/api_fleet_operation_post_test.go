@@ -286,6 +286,27 @@ func TestRetryBookkeepingBacksOffAndNeverChangesThePosting(t *testing.T) {
 	require.Equal(t, time.Second, fleetRetryDelay(0))
 }
 
+func TestFleetLastErrorKeepsTheNewestStamp(t *testing.T) {
+	e := postFixture(t, "v1", false)
+	runtime := func() FleetOperationRuntime {
+		var rt FleetOperationRuntime
+		require.NoError(t, e.api.RDB.DB(e.ctx).Where("operation_id = ?", e.line.OperationId).First(&rt).Error)
+		return rt
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	require.NoError(t, e.api.RecordFleetLineRetry(e.ctx, e.line.ID, "LOCK_TIMEOUT", now.Add(time.Second)))
+	require.Equal(t, "LOCK_TIMEOUT", runtime().LastErrorCode)
+	// An older record, and one at the same time, leave the newest error standing.
+	require.NoError(t, e.api.RecordFleetLineRetry(e.ctx, e.line.ID, "CONNECTION_LOST", now))
+	require.NoError(t, e.api.RecordFleetLineRetry(e.ctx, e.line.ID, "DEADLOCK", now.Add(time.Second)))
+	rt := runtime()
+	require.Equal(t, "LOCK_TIMEOUT", rt.LastErrorCode)
+	require.True(t, now.Add(time.Second).Equal(rt.LastErrorAt.Time))
+	require.Equal(t, int32(3), e.reload(t).Attempts, "the line records every retry regardless")
+	require.NoError(t, e.api.RecordFleetLineRetry(e.ctx, e.line.ID, "DEVICE_BUSY", now.Add(2*time.Second)))
+	require.Equal(t, "DEVICE_BUSY", runtime().LastErrorCode)
+}
+
 func TestOnlyRetryableFailuresAreRetried(t *testing.T) {
 	for _, err := range []error{context.DeadlineExceeded, &AttributeWriteBusyError{}} {
 		_, ok := fleetRetryableCode(err)

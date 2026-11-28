@@ -5,6 +5,7 @@
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/device-state';
 import { isForbiddenError } from '@/lib/api/errors';
+import { refusedAsUnserved, unservedField } from '@/lib/api/rolling-upgrade';
 import type {
   DeviceStatesByDeviceTokenQuery,
   LatestMeasurementsQuery,
@@ -72,11 +73,47 @@ const LATEST_MEASUREMENTS = graphql(`
   }
 `);
 
+// The same read for a device-state older than text readings, whose validator refuses a document
+// that selects textValue. During a rolling upgrade such a pod can answer any request.
+const LATEST_MEASUREMENTS_WITHOUT_TEXT = graphql(`
+  query LatestMeasurementsWithoutText($deviceToken: String!) {
+    latestMeasurements(deviceToken: $deviceToken) {
+      id
+      name
+      value
+      occurredTime
+    }
+  }
+`);
+
+const TEXT_VALUE_REFUSAL = [unservedField('LatestMeasurement', 'textValue')];
+
+/**
+ * A device's latest readings. `textServed` is false when the device-state that answered is older
+ * than text readings: a reading with no value then has text that could not be read yet (it is
+ * served once the upgrade completes), not no value at all.
+ */
+export interface LatestMeasurements {
+  readings: LatestMeasurement[];
+  textServed: boolean;
+}
+
 // getLatestMeasurements returns the current value of every measurement name for a
 // device — the live "current readings" projection. Requires state:read.
-export async function getLatestMeasurements(deviceToken: string): Promise<LatestMeasurement[]> {
-  const data = await gql('device-state', LATEST_MEASUREMENTS, { deviceToken });
-  return data.latestMeasurements;
+export async function getLatestMeasurements(deviceToken: string): Promise<LatestMeasurements> {
+  try {
+    const data = await gql('device-state', LATEST_MEASUREMENTS, { deviceToken });
+    return { readings: data.latestMeasurements, textServed: true };
+  } catch (err) {
+    if (!refusedAsUnserved(err, TEXT_VALUE_REFUSAL)) throw err;
+  }
+  // Not remembered: the next read asks the full question again, so the panel heals as soon as
+  // the upgrade completes.
+  const data = await gql('device-state', LATEST_MEASUREMENTS_WITHOUT_TEXT, { deviceToken });
+  return {
+    readings: data.latestMeasurements.map((m) => ({ ...m, textValue: null })),
+    textServed: false,
+  };
 }
 
 const DROPPED_MEASUREMENTS = graphql(`

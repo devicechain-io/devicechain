@@ -163,3 +163,43 @@ func TestFleetPostgresABusyHeadDoesNotStarveTheNextDueLine(t *testing.T) {
 		})
 	}
 }
+
+// Replica A records CONNECTION_LOST on its line and stalls before the operation's last-error update;
+// replica B meets LOCK_TIMEOUT on another line after that and records it completely. When A resumes,
+// its older error must not overwrite B's: the latest error is the one whose line record came last.
+func TestFleetPostgresAStalledRetryDoesNotOverwriteANewerLastError(t *testing.T) {
+	p := newPostPG(t, "v1")
+	var stalled bool
+	var newer FleetOperationRuntime
+	fleetRetryHook = func() {
+		if stalled {
+			return
+		}
+		stalled = true
+		require.NoError(t, p.api.RecordFleetLineRetry(p.ctx, p.lines[1].ID, "LOCK_TIMEOUT", time.Time{}))
+		rt, err := p.api.FleetOperationRuntimeOf(p.ctx, p.op)
+		require.NoError(t, err)
+		require.Equal(t, "LOCK_TIMEOUT", rt.LastErrorCode)
+		newer = *rt
+	}
+	t.Cleanup(func() { fleetRetryHook = nil })
+	require.NoError(t, p.api.RecordFleetLineRetry(p.ctx, p.lines[0].ID, "CONNECTION_LOST", time.Time{}))
+	require.True(t, stalled)
+
+	var line FleetOperationLine
+	require.NoError(t, p.api.RDB.DB(p.ctx).First(&line, p.lines[0].ID).Error)
+	require.Equal(t, "CONNECTION_LOST", line.LastErrorCode, "A's own line record stands")
+	rt, err := p.api.FleetOperationRuntimeOf(p.ctx, p.op)
+	require.NoError(t, err)
+	require.Equal(t, "LOCK_TIMEOUT", rt.LastErrorCode)
+	require.True(t, rt.LastErrorAt.Valid)
+	require.True(t, newer.LastErrorAt.Time.Equal(rt.LastErrorAt.Time), "B's stamp stands with B's code")
+
+	// A later error still replaces it: the guard orders errors, it does not freeze the first one.
+	fleetRetryHook = nil
+	require.NoError(t, p.api.RecordFleetLineRetry(p.ctx, p.lines[0].ID, "DEADLOCK", time.Time{}))
+	rt, err = p.api.FleetOperationRuntimeOf(p.ctx, p.op)
+	require.NoError(t, err)
+	require.Equal(t, "DEADLOCK", rt.LastErrorCode)
+	require.True(t, rt.LastErrorAt.Time.After(newer.LastErrorAt.Time))
+}

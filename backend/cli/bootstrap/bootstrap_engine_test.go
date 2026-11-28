@@ -62,6 +62,8 @@ func (nopWriteCloser) Close() error { return nil }
 
 func (r *rawReporter) AddRedaction(v string) error { return r.AddSecret(v) }
 
+func (r *rawReporter) AddGeneratedSecret(v string) error { return r.AddSecret(v) }
+
 func (r *rawReporter) LogWriter(installflow.StepID, string, installflow.LogLevel) (io.WriteCloser, error) {
 	return nopWriteCloser{&r.logs}, nil
 }
@@ -410,6 +412,76 @@ func TestABootstrapToolEchoingSecretsIsRedactedFromTheStream(t *testing.T) {
 	// No reveal sink: the seed was never offered, and the summary points at its Secret.
 	if len(sum.Credentials) != 1 || sum.Credentials[0].Name != "dci-acme-superuser" {
 		t.Fatalf("summary credentials %+v, want the superuser Secret", sum.Credentials)
+	}
+}
+
+// 🔴 A PASSPHRASE THAT SPELLS A STEP ID DOES NOT FAIL A BOOTSTRAP. "bootstrap" is a
+// substring of every bootstrap step id and "escrow" of the escrow step's. Typed at the
+// prompt, such a passphrase used to make the prompt's own resolution invalid, so a
+// valid answer was refused; given in the environment, it made every later event
+// invalid, so a bootstrap that had built the whole instance exited 1. Either way the
+// run must succeed with a whole stream, and the passphrase must still be cut out of
+// what a tool echoes.
+func TestAPassphraseThatSpellsAStepIDDoesNotFailTheBootstrap(t *testing.T) {
+	for _, tc := range []struct {
+		name, pass string
+		typed      bool
+	}{{"typed", "bootstrap", true}, {"from the environment", "escrow", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateEscrow(t)
+			stubTerminal(t)
+			var replies []testkit.Reply
+			if tc.typed {
+				replies = []testkit.Reply{secretReply(tc.pass), secretReply(tc.pass)}
+			} else {
+				t.Setenv(EscrowPassphraseEnv, tc.pass)
+			}
+			p := reportOnlyPipeline(t)
+			var planned string
+			var echoed bool
+			for i := range p.Steps {
+				if p.Steps[i].Name == "Install instance (Helm)" {
+					p.Steps[i].Run = func(ctx context.Context, st *State) error {
+						out(ctx).println("tool says: passphrase " + planned)
+						echoed = planned == tc.pass
+						return nil
+					}
+				}
+			}
+			e := &BootstrapEngine{Instance: "acme", SkipPreflight: true,
+				Target: func(_ context.Context, _ Console, plan EscrowPlan) (*State, error) {
+					planned = plan.Passphrase
+					return canaryState(t), nil
+				}, Pipeline: p}
+			sink := &testkit.CaptureSink{}
+			hub, err := installflow.NewHub(installflow.Options{Operation: installflow.OperationBootstrap, Sink: sink,
+				Clock: testkit.NewManualClock(testkit.Epoch)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			so, _ := hub.LogWriter("", "dcctl", installflow.LogInfo)
+			se, _ := hub.LogWriter("", "dcctl.stderr", installflow.LogInfo)
+			sum, err := hub.Run(context.Background(), e, installflow.Request{Operation: installflow.OperationBootstrap},
+				installflow.Runtime{Prompts: installflow.NewBroker(hub, testkit.NewScriptedResponder(replies...), false),
+					Console: installflow.Console{Stdout: so, Stderr: se, Flush: hub.Flush}})
+			<-hub.Done()
+			if err != nil || !sum.Succeeded() {
+				t.Fatalf("a bootstrap whose passphrase is %q: %v %s", tc.pass, err, sum.Outcome)
+			}
+			if !echoed {
+				t.Fatal("the stand-in never saw the passphrase: the test proves nothing")
+			}
+			envs := sink.Envelopes()
+			if verr := testkit.VerifyStream(envs); verr != nil {
+				t.Fatal(verr)
+			}
+			if started, finished := stepCounts(envs); finished == 0 || finished != started {
+				t.Errorf("%d steps started and %d finished", started, finished)
+			}
+			if dump := string(testkit.Dump(anySlice(envs)...)); strings.Contains(dump, "passphrase "+tc.pass) {
+				t.Error("the stream carries the passphrase a tool echoed")
+			}
+		})
 	}
 }
 
