@@ -37,6 +37,7 @@ title: 指标参考
 | `command_delivery_nudges_dropped_total` | 因队列已满而丢弃的分发触发。这是延迟信号，不是错误率：指令仍会在投递扫描时发出，扫描是所有触发之下的兜底。 |
 | `command_delivery_nudges_requested_total` | 被接受进入入队时分发队列的分发触发，每条通过 createCommand 创建的指令一个（机群批次不发出任何触发）。 |
 | `command_delivery_presence_read_errors_total` | 无法读取在线状态投影的扫描轮次；该门失败即放行，因此这里持续有速率，表示指令正在无门控地分发。 |
+| `command_delivery_presence_gate_off_dispatches_total` | 由于缺少配置（服务密钥或 device-state 端点）导致在线状态门被关闭，因而未经在线状态检查就分发的指令数。门已接通时为零。这里出现任何速率，都表示发往离线设备的指令正在被发布并丢弃：[`SafetyGateDisabled`](./observability.md#safety-gates) 告警会因同一原因触发，command-delivery 也会每小时最多一次重复输出一条点名缺失键的 WARN。 |
 | `command_delivery_disabled_gate_errors_total` | 无法为某个分发批次读取已停用设备记录（该批次不分发），或无法从 device-management 同步该记录的次数。持续有速率表示指令被延迟，而不是丢失。 |
 | `command_delivery_disabled_gate_ready` | 仪表。本进程列出租户并读取每个租户的已停用设备后为 `1`，此前为 `0`。尚未在任何地方填充过记录的租户在其为 `0` 时不会被分发；若它卡在 `0` 且 `command_delivery_disabled_gate_errors_total` 上升，说明重启发生在 user-management 或 device-management 故障期间。 |
 | `command_delivery_disabled_gate_pending_tenants` | 仪表。本进程尚未读取其已停用设备记录的租户数；这些租户的指令在等待。已删除或不再出现在列表中的租户不再计入。 |

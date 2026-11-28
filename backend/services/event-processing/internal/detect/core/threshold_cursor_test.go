@@ -90,11 +90,13 @@ func newestDecides(evs []Event, s string) (level, decided bool) {
 // edges is fmtDets without its trailing separator, for comparing against a literal.
 func edges(ds []Detection) string { return strings.TrimSpace(fmtDets(ds)) }
 
-// raisedBy reports whether a raise is stamped at, and carries the value of, a matching reading of
-// the series.
-func raisedBy(evs []Event, s string, d Detection) bool {
+// raisedBy reports whether a raise carries the value of a matching reading of the series and is
+// stamped at that reading's time or, for a fresh episode, one microsecond past the preceding fall
+// (fell; zero when the raise is the series' first edge) that the reading is not newer than.
+func raisedBy(evs []Event, s string, d Detection, fell time.Time) bool {
+	bumped := !fell.IsZero() && d.At.Equal(fell.Add(time.Microsecond))
 	for _, e := range evs {
-		if e.Key.Series == s && e.Match && e.Time.Equal(d.At) && e.Value == d.Value {
+		if e.Key.Series == s && e.Match && e.Value == d.Value && (e.Time.Equal(d.At) || (bumped && !e.Time.After(fell))) {
 			return true
 		}
 	}
@@ -105,13 +107,17 @@ func raisedBy(evs []Event, s string, d Detection) bool {
 // order, each its own message stamped at its own time, against a frontier that trails the newest
 // time seen by the lateness. A RAISED series refuses a reading older than its newest one, by up to
 // the horizon; a reading older still is applied as it would be with no cursor and restarts the
-// cursor (at the raise, if that is newer). An UNRAISED series holds nothing and refuses a match
+// cursor (at the raise, if that is newer). An UNRAISED series holds only its last fall, for ten
+// minutes from the frontier at which it fell: a raise decided no earlier than that fall, and not
+// after its emitted stamp, is stamped one microsecond past it. It refuses a match
 // behind the frontier whose message may be a redelivery (redelivered[i] for the i-th reading; nil
 // means every message may be). It returns the edges, the number of readings refused, and the number
 // of matches behind the frontier that raised because their message reached the stream promptly.
 func refThreshold(evs []Event, redelivered []bool, lateness time.Duration) ([]Detection, uint64, int) {
-	type st struct{ raisedAt, cursor time.Time }
+	type st struct{ raisedAt, stamp, cursor time.Time } // raisedAt is the decision, stamp the emitted time
+	type memo struct{ at, decided, frontier time.Time }
 	state := map[string]*st{}
+	fell := map[string]memo{}
 	var frontier time.Time
 	first := true
 	var out []Detection
@@ -122,6 +128,9 @@ func refThreshold(evs []Event, redelivered []bool, lateness time.Duration) ([]De
 			frontier, first = f, false
 		}
 		s := e.Key.Series
+		if m, ok := fell[s]; ok && frontier.After(m.frontier.Add(thresholdCursorHorizon)) {
+			delete(fell, s)
+		}
 		x, up := state[s]
 		if !up {
 			if !e.Match {
@@ -134,8 +143,12 @@ func refThreshold(evs []Event, redelivered []bool, lateness time.Duration) ([]De
 				}
 				prompt++
 			}
-			state[s] = &st{raisedAt: e.Time, cursor: e.Time}
-			out = append(out, Detection{RuleID: "r", Series: s, Kind: Threshold, At: e.Time, Value: e.Value, HasValue: e.HasValue})
+			stamp := e.Time
+			if m, ok := fell[s]; ok && !e.Time.Before(m.decided) && !e.Time.After(m.at) {
+				stamp = m.at.Add(time.Microsecond)
+			}
+			state[s] = &st{raisedAt: e.Time, stamp: stamp, cursor: e.Time}
+			out = append(out, Detection{RuleID: "r", Series: s, Kind: Threshold, At: stamp, Value: e.Value, HasValue: e.HasValue})
 			continue
 		}
 		if e.Time.Before(x.cursor) && e.Time.Add(thresholdCursorHorizon).After(x.cursor.Add(-time.Nanosecond)) {
@@ -148,7 +161,12 @@ func refThreshold(evs []Event, redelivered []bool, lateness time.Duration) ([]De
 		}
 		if !e.Match && !e.Time.Before(x.raisedAt) {
 			delete(state, s)
-			out = append(out, Detection{RuleID: "r", Series: s, Kind: Threshold, At: e.Time, Edge: EdgeResolved})
+			at := e.Time
+			if x.stamp.After(at) {
+				at = x.stamp
+			}
+			fell[s] = memo{at: at, decided: e.Time, frontier: frontier}
+			out = append(out, Detection{RuleID: "r", Series: s, Kind: Threshold, At: at, Edge: EdgeResolved})
 			continue
 		}
 		x.cursor = cur
@@ -247,7 +265,11 @@ func TestThresholdUnderReorderMatchesItsSpecification(t *testing.T) {
 						if ds[i].Edge == EdgeResolved && ds[i].At.Before(ds[i-1].At) {
 							t.Fatalf("trial %d K=%d series %s: a resolve is stamped before its raise: %s", trial, k, s, fmtDets(ds))
 						}
-						if ds[i].Edge == EdgeRaised && !raisedBy(evs, s, ds[i]) {
+						var fellAt time.Time
+						if i > 0 {
+							fellAt = ds[i-1].At
+						}
+						if ds[i].Edge == EdgeRaised && !raisedBy(evs, s, ds[i], fellAt) {
 							t.Fatalf("trial %d K=%d series %s: %s is not a matching reading of the series", trial, k, s, fmtDet(ds[i]))
 						}
 					}
@@ -299,9 +321,15 @@ func newestOf(evs []Event, s string) time.Time {
 }
 
 // mainThreshold is the Threshold rule as it behaved before the cursor, written out directly: a
-// match raises unless raised, a non-match resolves unless it is older than the raise.
+// match raises unless raised, a non-match resolves unless it is older than the raise. A fresh
+// raise decided no earlier than the last fall, and not after its emitted stamp, is stamped one
+// microsecond past it (a strictly older one keeps its own time); a fall decided before a bumped
+// raise's stamp is clamped up to it.
 func mainThreshold(evs []Event) []Detection {
 	raised := map[string]time.Time{}
+	stamp := map[string]time.Time{}
+	fell := map[string]time.Time{}
+	decided := map[string]time.Time{}
 	var out []Detection
 	for _, e := range evs {
 		s := e.Key.Series
@@ -309,11 +337,21 @@ func mainThreshold(evs []Event) []Detection {
 		if e.Match {
 			if !up {
 				raised[s] = e.Time
-				out = append(out, Detection{RuleID: "r", Series: s, Kind: Threshold, At: e.Time, Value: e.Value, HasValue: e.HasValue})
+				st := e.Time
+				if f, ok := fell[s]; ok && !st.Before(decided[s]) && !st.After(f) {
+					st = f.Add(time.Microsecond)
+				}
+				stamp[s] = st
+				out = append(out, Detection{RuleID: "r", Series: s, Kind: Threshold, At: st, Value: e.Value, HasValue: e.HasValue})
 			}
 		} else if up && !e.Time.Before(at) {
 			delete(raised, s)
-			out = append(out, Detection{RuleID: "r", Series: s, Kind: Threshold, At: e.Time, Edge: EdgeResolved})
+			st := e.Time
+			if stamp[s].After(st) {
+				st = stamp[s]
+			}
+			fell[s], decided[s] = st, e.Time
+			out = append(out, Detection{RuleID: "r", Series: s, Kind: Threshold, At: st, Edge: EdgeResolved})
 		}
 	}
 	return out

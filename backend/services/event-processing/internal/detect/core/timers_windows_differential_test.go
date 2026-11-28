@@ -27,7 +27,7 @@ import (
 // wheel that pushed an entry per event, a window that always built both deques), and every run
 // here must reproduce them exactly. A golden is a SHA-256 over the whole observable output of a
 // seed: every detection (rule, series, kind, edge, At, Value, HasValue) in drain order, plus the
-// Engine.Snapshot() bytes at every checkpoint, except the additive fell/input state — so a change
+// Engine.Snapshot() bytes at every checkpoint — so a change
 // to a timer's deadline, to firing order, to a generation number, or to other serialized state
 // moves the hash.
 //
@@ -57,10 +57,10 @@ type goldenSeed struct {
 	Mid      int    `json:"mid"`        // message index of the mid-run snapshot
 	MidSnap  string `json:"midSnap"`    // gzip+hex of the mid snapshot (first goldenSnapshotSeeds only)
 	MidHash  string `json:"midSnapSha"` // sha256 of the mid snapshot (every seed)
-	// OldTail is, for the seeds that carry MidSnap, the tail hash the PRE-CHANGE engine recorded when
-	// it continued from that snapshot. MidSnap is that engine's literal snapshot (it has no frontier
-	// version), so restoring it must re-serialize byte for byte and continue to this hash; TailHash
-	// is the current engine's own tail from its own mid snapshot.
+	// OldTail is, for the seeds that carry MidSnap, the tail hash recorded when the engine continued
+	// from that snapshot. MidSnap is an older engine's literal snapshot (it has no frontier version)
+	// and is never re-recorded, so restoring it must re-serialize byte for byte and continue to this
+	// hash; TailHash is the current engine's own tail from its own mid snapshot.
 	OldTail string `json:"oldTailHash,omitempty"`
 }
 
@@ -180,20 +180,18 @@ type diffResult struct {
 	midSnap []byte
 }
 
-// goldenSnapshotBytes excludes only the new compatibility state from historical snapshot
-// comparisons. fell is write-only in this release; detections are still compared exactly.
+// goldenSnapshotBytes is a snapshot's bytes as the golden hashes them: the whole snapshot,
+// falling-edge memos and raise inputs included. A raise input is written only for a raise
+// stamped past a same-instant fall, so it must precede the raise it belongs to; assert it.
 func goldenSnapshotBytes(t testing.TB, b []byte) []byte {
 	t.Helper()
 	var s snapshot
 	if err := json.Unmarshal(b, &s); err != nil {
 		t.Fatal(err)
 	}
-	s.Fell = nil
-	// raised.input is NOT stripped: this release never bumps, so a fresh run or a continuation
-	// of a v1.6 snapshot must never write one. Assert it rather than hide it.
 	for _, r := range s.Raised {
-		if r.Input != nil {
-			t.Fatalf("raised %s/%s carries an input time; this release must never write one", r.Rule, r.Series)
+		if r.Input != nil && !r.Input.Before(r.At) {
+			t.Fatalf("raised %s/%s carries input %v not before its stamp %v", r.Rule, r.Series, *r.Input, r.At)
 		}
 	}
 	b, err := json.Marshal(s)
@@ -343,12 +341,34 @@ func loadGolden(t testing.TB) goldenDoc {
 // TestTimersWindowsGolden is the differential test: the current engine's whole observable output,
 // over goldenSeeds randomized streams, equals what the pre-change engine produced.
 func TestTimersWindowsGolden(t *testing.T) {
-	// Exclude fell (write-only state in this release) and optional input from snapshot hashes;
-	// the detection stream is compared exactly against the unchanged recorded golden.
 	if os.Getenv("TIMERS_GOLDEN_UPDATE") == "1" {
+		// The historical mid snapshots are an older engine's literal bytes: re-recording keeps
+		// them and records only the current engine's continuation from them.
+		prior := map[int64]goldenSeed{}
+		if b, err := os.ReadFile(goldenFile); err == nil {
+			var old goldenDoc
+			if err := json.Unmarshal(b, &old); err != nil {
+				t.Fatal(err)
+			}
+			for _, g := range old.Seeds {
+				prior[g.Seed] = g
+			}
+		}
 		var d goldenDoc
 		for s := int64(0); s < goldenSeeds; s++ {
-			d.Seeds = append(d.Seeds, computeSeed(t, s))
+			g := computeSeed(t, s)
+			if old, ok := prior[s]; ok && old.MidSnap != "" {
+				rng := rand.New(rand.NewSource(s))
+				rules := diffRules(rng)
+				msgs := diffMessages(rng, rules)
+				e, err := Restore(rules, goldenLateness, ungz(t, old.MidSnap))
+				if err != nil {
+					t.Fatalf("seed %d: restore historical snapshot: %v", s, err)
+				}
+				g.MidSnap = old.MidSnap
+				g.OldTail = diffRun(t, e, msgs, old.Mid, -1, 0, rules).hash
+			}
+			d.Seeds = append(d.Seeds, g)
 		}
 		b, err := json.MarshalIndent(d, "", " ")
 		if err != nil {
@@ -386,11 +406,9 @@ func TestTimersWindowsGolden(t *testing.T) {
 }
 
 // TestTimersWindowsOldSnapshotRestores restores snapshots WRITTEN BY THE PRE-CHANGE ENGINE and
-// requires the current one to (a) re-serialize them byte-for-byte except for the additive
-// fell/input state and (b) continue to the tail the old engine produced.
+// requires the current one to (a) re-serialize them byte-for-byte and (b) continue from them to the
+// recorded tail.
 func TestTimersWindowsOldSnapshotRestores(t *testing.T) {
-	// Exclude fell (write-only state in this release) and optional input from snapshot bytes;
-	// the continued detection stream is compared exactly against the unchanged recorded golden.
 	d := loadGolden(t)
 	n := 0
 	for _, g := range d.Seeds {

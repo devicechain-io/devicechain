@@ -112,6 +112,14 @@ type DeliveryMetrics struct {
 	UndeliverableFailed prometheus.Counter
 	PresenceReadErrors  prometheus.Counter
 
+	// PresenceGateOffDispatches counts commands dispatched with no presence check because the
+	// gate was switched off at startup by missing configuration (see PresenceGateOff).
+	//
+	// 🔑 IT IS THE COST OF THE SafetyGateDisabled ALERT. That alert says the gate is off; this
+	// says how many commands went out unchecked while it was. It reads zero while the gate is
+	// wired, so it never mixes with PresenceReadErrors (gate wired, projection unreachable).
+	PresenceGateOffDispatches prometheus.Counter
+
 	// ImpactLookupFailures counts commands dispatched to a transport that gates on impact
 	// whose impact was not resolved (the owner could not decide, timed out, or is not wired), so
 	// the message went out WITHOUT the impact stamp. The
@@ -318,6 +326,10 @@ func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 		PresenceReadErrors: ms.NewCounter("command_delivery_presence_read_errors_total",
 			"Sweep passes that could not read the presence projection; the gate fails OPEN, so a "+
 				"standing rate here means commands are being dispatched ungated"),
+		PresenceGateOffDispatches: ms.NewCounter("command_delivery_presence_gate_off_dispatches_total",
+			"Commands dispatched with no presence check because the presence gate is switched off by "+
+				"missing configuration (the service secret or the device-state endpoint). Zero while the "+
+				"gate is wired; any rate here is commands to offline devices being published and dropped"),
 		ImpactLookupFailures: ms.NewCounter("command_delivery_impact_lookup_failures_total",
 			"Commands dispatched without a command-impact stamp because device-management could not "+
 				"decide the impact. A transport that gates on impact (Sparkplug reboot) fails closed on "+

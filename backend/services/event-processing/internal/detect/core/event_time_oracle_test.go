@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -138,11 +139,15 @@ func inBudget(evs []Event, order []int, lateness time.Duration) bool {
 	return true
 }
 
+// fmtSec prints an instant's offset from base in seconds, with a fraction only when it has
+// one, so a raise stamped one microsecond past a same-instant resolve is visible.
+func fmtSec(t time.Time) string { return strconv.FormatFloat(t.Sub(base).Seconds(), 'f', -1, 64) }
+
 func fmtDet(d Detection) string {
 	if d.Edge == EdgeResolved {
-		return fmt.Sprintf("Resolved@%d", int(d.At.Sub(base).Seconds()))
+		return "Resolved@" + fmtSec(d.At)
 	}
-	return fmt.Sprintf("Raised@%d=%g", int(d.At.Sub(base).Seconds()), d.Value)
+	return fmt.Sprintf("Raised@%s=%g", fmtSec(d.At), d.Value)
 }
 
 func describeSeries(evs []Event, s string) string {
@@ -178,21 +183,35 @@ func oracleSeries(r Rule, evs []Event, s string) []string {
 		return a.Value < b.Value
 	})
 	var out []string
-	var raisedAt *time.Time
+	// A fresh raise not older than the last fall's decision, and not after its emitted
+	// instant, is stamped one microsecond past the emitted fall; staleness reads the raise's
+	// own decision instant, and a fall decided before the emitted raise is clamped up to it.
+	var raisedAt, fellAt *time.Time
+	var raisedInput, fellInput time.Time
 	raise := func(t time.Time, v float64) {
 		if raisedAt != nil {
 			return
 		}
+		raisedInput = t
+		if fellAt != nil && !t.Before(fellInput) && !t.After(*fellAt) {
+			t = fellAt.Add(time.Microsecond)
+		}
 		tt := t
 		raisedAt = &tt
-		out = append(out, fmt.Sprintf("Raised@%d=%g", int(t.Sub(base).Seconds()), v))
+		out = append(out, fmt.Sprintf("Raised@%s=%g", fmtSec(t), v))
 	}
 	clear := func(t time.Time) {
-		if raisedAt == nil || t.Before(*raisedAt) {
+		if raisedAt == nil || t.Before(raisedInput) {
 			return
 		}
+		fellInput = t
+		if t.Before(*raisedAt) {
+			t = *raisedAt
+		}
 		raisedAt = nil
-		out = append(out, fmt.Sprintf("Resolved@%d", int(t.Sub(base).Seconds())))
+		ft := t
+		fellAt = &ft
+		out = append(out, "Resolved@"+fmtSec(t))
 	}
 	switch r.Kind {
 	case DeltaRate:
