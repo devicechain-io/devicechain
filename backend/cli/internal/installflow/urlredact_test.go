@@ -289,6 +289,27 @@ func TestURLRedactingWriterFiltersWholeLines(t *testing.T) {
 	}
 }
 
+// A line that passes the bound is passed on up to its last whitespace: the word being
+// written at the cut may be a credential URL whose rest has not arrived, and a half
+// handed on unfiltered is a credential half shown.
+func TestURLRedactingWriterDoesNotSplitAURLAtTheBound(t *testing.T) {
+	var b strings.Builder
+	w := NewURLRedactingWriter(&b)
+	head := strings.Repeat("y ", maxHeldLine/2) + "see https://user:dcPw"
+	if _, err := w.Write([]byte(head)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("ZX@host.example/x\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(b.String(), "dcPw") || !strings.HasSuffix(b.String(), "see https://REDACTED@host.example/x\n") {
+		t.Errorf("a URL split at the bound was shown: tail %q", b.String()[max(0, b.Len()-60):])
+	}
+}
+
 func TestRedactURLsInErrorKeepsTheChain(t *testing.T) {
 	sentinel := errors.New("exit status 1")
 	err := fmt.Errorf("ko build: %w\npushing user:dcPwZX@reg/x", sentinel)

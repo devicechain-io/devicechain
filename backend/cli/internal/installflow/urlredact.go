@@ -553,9 +553,27 @@ func (f *URLRedactingWriter) Write(p []byte) (int, error) {
 		f.pending = f.pending[i+1:]
 	}
 	if len(f.pending) > maxHeldLine {
-		return len(p), f.flushLocked()
+		return len(p), f.flushOverlongLocked()
 	}
 	return len(p), nil
+}
+
+// maxHeldWord bounds the word kept back when a line passes maxHeldLine.
+const maxHeldWord = 4 << 10
+
+// flushOverlongLocked passes on a line that has passed maxHeldLine, up to its last
+// whitespace, and keeps the word after it: that word may be a URL whose rest has
+// not arrived, and a half handed on unfiltered is a credential half shown. A word
+// longer than maxHeldWord, or no whitespace at all, passes on whole, filtered.
+func (f *URLRedactingWriter) flushOverlongLocked() error {
+	cut := bytes.LastIndexAny(f.pending, " \t") + 1
+	if cut == 0 || len(f.pending)-cut > maxHeldWord {
+		return f.flushLocked()
+	}
+	head := string(f.pending[:cut])
+	f.pending = append([]byte(nil), f.pending[cut:]...)
+	_, err := io.WriteString(f.w, RedactURLsInText(head))
+	return err
 }
 
 // Flush passes on, filtered, a last line that has not ended.
