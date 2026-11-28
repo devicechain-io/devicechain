@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ledger"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
 
@@ -529,15 +530,33 @@ func fleetRetryDelay(attempts int) time.Duration {
 // RecordFleetLineRetry notes a retryable failure on a line: one more attempt, the code, and when it may be
 // tried again (a jittered backoff). It never changes the line's posting, and its predicate keeps it from
 // touching a line that was cancelled, refused or redacted meanwhile.
+// The operation's runtime row carries the same code and when it was met: the last error the engine met
+// on this operation, which BulkChange.lastErrorCode serves. Each is its own autocommit statement, so the
+// runtime row stays outside every lock order.
 // now is a SQLite fixture input only; PostgreSQL schedules from its own clock.
 func (api *Api) RecordFleetLineRetry(ctx context.Context, lineID uint, code string, now time.Time) error {
+	db := api.RDB.DB(ctx)
 	var line FleetOperationLine
-	if err := api.RDB.DB(ctx).Select("attempts").First(&line, lineID).Error; err != nil {
+	if err := db.Select("attempts", "operation_id").First(&line, lineID).Error; err != nil {
 		return err
 	}
 	delay := fleetRetryDelay(int(line.Attempts) + 1)
 	delay += time.Duration(rand.Int64N(int64(delay)/4 + 1))
-	return api.RDB.DB(ctx).Model(&FleetOperationLine{}).Where("id = ? AND posting = ?", lineID, FleetPostingPlanned).
+	recorded := db.Model(&FleetOperationLine{}).Where("id = ? AND posting = ?", lineID, FleetPostingPlanned).
 		Updates(map[string]any{"attempts": gorm.Expr("attempts + 1"), "last_error_code": code,
-			"next_attempt_at": fleetTimestampAfter(api.RDB.DB(ctx), delay, now)}).Error
+			"next_attempt_at": fleetTimestampAfter(db, delay, now)})
+	if recorded.Error != nil || recorded.RowsAffected == 0 {
+		return recorded.Error
+	}
+	at := fleetTimestamp(db)
+	if !now.IsZero() && db.Dialector.Name() != "postgres" {
+		at = now
+	}
+	// Best effort, like the driver's heartbeat: the line's own record above is what retries run on, and a
+	// diagnostic that could not be written must not turn a recorded retry into a failed post.
+	if err := db.Model(&FleetOperationRuntime{}).Where("operation_id = ?", line.OperationId).
+		Updates(map[string]any{"last_error_code": code, "last_error_at": at}).Error; err != nil {
+		log.Warn().Err(err).Str("code", code).Msg("Unable to record a bulk change's last error; the line's own record stands")
+	}
+	return nil
 }

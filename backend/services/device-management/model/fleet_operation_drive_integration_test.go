@@ -9,6 +9,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -82,6 +83,12 @@ func TestFleetPostgresConnectionLossRecordsARetry(t *testing.T) {
 	require.Equal(t, int32(1), line.Attempts)
 	require.True(t, line.NextAttemptAt.Valid)
 	require.Zero(t, p.attrCount(t, 0))
+	// The operation reports it as the last error the engine met, stamped on the database clock.
+	rt, err := p.api.FleetOperationRuntimeOf(p.ctx, p.op)
+	require.NoError(t, err)
+	require.Equal(t, "CONNECTION_LOST", rt.LastErrorCode)
+	require.True(t, rt.LastErrorAt.Valid)
+	require.WithinDuration(t, fleetPGNow(t, p.api.RDB.DB(p.ctx)), rt.LastErrorAt.Time, time.Minute)
 }
 
 func TestFleetPostgresABusyHeadDoesNotStarveTheNextDueLine(t *testing.T) {

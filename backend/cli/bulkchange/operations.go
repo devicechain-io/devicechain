@@ -348,13 +348,22 @@ func (a API) Status(ctx context.Context, token string, w io.Writer, watch, asJSO
 
 // Lines reads every page. A missing token is checked separately because a
 // successful empty page can also represent retained-header/expired-line data.
+//
+// Pages are keyed on the last ordinal read, never numbered: the driver and settlement move lines
+// out of a posting or settlement filter while this reads, and with a page number every such move
+// shifts the later lines left, past the next page's start, so they were never returned.
 func (a API) Lines(ctx context.Context, token, posting, settlement string) ([]Line, error) {
 	if _, err := a.Get(ctx, token); err != nil {
 		return nil, err
 	}
 	lines := []Line{}
-	for page := 1; ; page++ {
-		criteria := map[string]any{"pageNumber": page, "pageSize": 1000}
+	for {
+		criteria := map[string]any{"pageNumber": 1, "pageSize": 1000}
+		if len(lines) > 0 {
+			// Left out of the first page, so a listing that fits in one page still reads a server
+			// from before the criterion.
+			criteria["afterOrdinal"] = lines[len(lines)-1].Ordinal
+		}
 		if posting != "" {
 			criteria["posting"] = posting
 		}
@@ -379,7 +388,8 @@ func (a API) Lines(ctx context.Context, token, posting, settlement string) ([]Li
 		}
 		p := out.Lines.Pagination
 		if len(out.Lines.Results) == 0 {
-			if len(lines) < *p.TotalRecords {
+			// TotalRecords counts what is left after the cursor.
+			if *p.TotalRecords > 0 {
 				return nil, errors.New("bulk change line pagination made no progress")
 			}
 			return lines, nil

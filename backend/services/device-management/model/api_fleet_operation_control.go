@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ledger"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -227,19 +228,32 @@ func (api *Api) fleetControl(ctx context.Context, token, transition string, fn f
 		// context, outlives that request, and has its own bounded database wait.
 		clearCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		clearErr := api.RDB.DB(clearCtx).Session(&gorm.Session{SkipDefaultTransaction: true}).Model(&FleetOperationRuntime{}).
+		clean := api.RDB.DB(clearCtx).Session(&gorm.Session{SkipDefaultTransaction: true})
+		// A start or resume begins a new execution epoch, and a hold an earlier epoch left is not
+		// this one's. It is cleared BEFORE the marker, while the marker still holds every driver
+		// pass off, so no pass can see the new epoch with the old hold. The dependency auto-pause
+		// does not rely on this clear: its clock never starts before the epoch did (see
+		// DriveFleetOperation), so a clear lost to a stopped process or a failed statement cannot
+		// re-pause the resumed operation either. This one keeps holdCode honest.
+		if err == nil && enteredRunning {
+			if holdErr := clean.Model(&FleetOperationRuntime{}).Where("operation_id = ?", head.ID).
+				Updates(map[string]any{"hold_code": "", "hold_since": nil, "hold_seen_at": nil}).Error; holdErr != nil {
+				log.Warn().Err(holdErr).Str("bulkChange", token).Str("transition", transition).
+					Msg("Unable to clear a bulk change's earlier hold after its transition committed; the next pass replaces it")
+			}
+		}
+		clearErr := clean.Model(&FleetOperationRuntime{}).
 			Where("operation_id = ? AND control_requested_at = ?", head.ID, request.ControlRequestedAt).
 			Update("control_requested_at", nil).Error
-		if clearErr != nil {
+		switch {
+		case clearErr == nil:
+		case err == nil:
+			// The transition committed: it is reported as done, because it is, and a retry would only
+			// be refused as illegal. A marker left behind holds the driver off for its 30 seconds.
+			log.Warn().Err(clearErr).Str("bulkChange", token).Str("transition", transition).
+				Msg("Unable to clear a bulk change's control request after its transition committed; it lapses in 30 seconds")
+		default:
 			err = errors.Join(err, clearErr)
-		}
-		// A start or resume begins a new execution epoch, and a hold an earlier epoch left is not
-		// this one's. Above all the POST_ERROR hold: its start is the dependency auto-pause clock,
-		// and carried across a pause it would re-pause a resumed operation on its first pass.
-		if err == nil && enteredRunning {
-			err = api.RDB.DB(clearCtx).Session(&gorm.Session{SkipDefaultTransaction: true}).Model(&FleetOperationRuntime{}).
-				Where("operation_id = ?", head.ID).
-				Updates(map[string]any{"hold_code": "", "hold_since": nil, "hold_seen_at": nil}).Error
 		}
 	}
 	if err != nil {

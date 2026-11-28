@@ -32,10 +32,10 @@
       "specDigest": "sha256:bcacf6bb82520d8677ddd963d2bb1572dc2563798e64527ea2710049f235e885"
     },
     {
-      "name": "double kept as exact text",
-      "input": "{\"target\":{\"groupToken\":\"g\",\"groupVersion\":7},\"point\":{\"configKey\":\"setpoint\"},\"value\":{\"valueType\":\"DOUBLE\",\"value\":\"21.50\"},\"class\":\"OPTIMIZATION\",\"ceiling\":{\"maxDevices\":50},\"reconcile\":{\"minIntervalSeconds\":300,\"maxLinesPerReconcile\":50,\"maxActuationsPerDevicePerDay\":24}}",
-      "canonical": "{\"ceiling\":{\"maxDevices\":50},\"class\":\"OPTIMIZATION\",\"point\":{\"configKey\":\"setpoint\"},\"reconcile\":{\"manualDwellSeconds\":3600,\"maxActuationsPerDevicePerDay\":24,\"maxLinesPerReconcile\":50,\"minIntervalSeconds\":300},\"target\":{\"groupToken\":\"g\",\"groupVersion\":7},\"value\":{\"value\":\"21.50\",\"valueType\":\"DOUBLE\"}}",
-      "specDigest": "sha256:758e89f4c5ce0935da524ab50b99104357c407fbca9e0744bf8f5234bda114b7"
+      "name": "double in the spelling device-management stores",
+      "input": "{\"target\":{\"groupToken\":\"g\",\"groupVersion\":7},\"point\":{\"configKey\":\"setpoint\"},\"value\":{\"valueType\":\"DOUBLE\",\"value\":\"21.5\"},\"class\":\"OPTIMIZATION\",\"ceiling\":{\"maxDevices\":50},\"reconcile\":{\"minIntervalSeconds\":300,\"maxLinesPerReconcile\":50,\"maxActuationsPerDevicePerDay\":24}}",
+      "canonical": "{\"ceiling\":{\"maxDevices\":50},\"class\":\"OPTIMIZATION\",\"point\":{\"configKey\":\"setpoint\"},\"reconcile\":{\"manualDwellSeconds\":3600,\"maxActuationsPerDevicePerDay\":24,\"maxLinesPerReconcile\":50,\"minIntervalSeconds\":300},\"target\":{\"groupToken\":\"g\",\"groupVersion\":7},\"value\":{\"value\":\"21.5\",\"valueType\":\"DOUBLE\"}}",
+      "specDigest": "sha256:ce0e3ecf205819ffb2b85146269dcbd1c0ee027f6f24503da94182922ed271d7"
     },
     {
       "name": "boolean",
