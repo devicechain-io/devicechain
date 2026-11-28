@@ -134,6 +134,9 @@ func TestShedActionIsDeadLetteredWithReasonShed(t *testing.T) {
 		t.Fatalf("wrote %d letters, want 1", len(letters))
 	}
 	e := letters[0]
+	if !strings.Contains(e.Summary, "over its outbound rate") {
+		t.Errorf("connector shed summary lost its outbound rate explanation: %q", e.Summary)
+	}
 	if e.Reason != deadletter.ReasonShed || e.Kind != deadletter.KindDetectionAction {
 		t.Errorf("reason/kind = %q/%q, want shed/detection-action", e.Reason, e.Kind)
 	}

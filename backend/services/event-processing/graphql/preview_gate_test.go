@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -187,6 +188,51 @@ func TestCompareRefusedAtInstanceCap(t *testing.T) {
 	require.False(t, out.Ok())
 	require.Equal(t, refusalBusy, out.Refusal().Reason())
 	assert.Contains(t, out.Refusal().Message(), "on this replica")
+}
+
+// A burst refusal must neither run a replay nor release the tenant's existing slot.
+func TestEvaluateBurstRefusedAndHoldsNoSlot(t *testing.T) {
+	holdPreviewBurstSlots(t)
+	s := evalSchema(t, &SchemaResolver{})
+	got, errs := evExec(t, s, previewCtx(auth.DeviceRead), evDraft(hotDefinition, evEvent("d1", evT0, "temperature", 90)))
+	require.Nil(t, errs)
+	assert.False(t, got.Ok)
+	require.NotNil(t, got.Refusal)
+	assert.Equal(t, "BUSY", *got.Refusal)
+	require.NotEmpty(t, got.Diagnostics)
+	assert.Contains(t, got.Diagnostics[0].Message, "already has a preview running")
+	assert.Empty(t, got.Edges)
+	assertPreviewBurstSlotsHeld(t)
+}
+
+func TestCompareBurstRefusedAndHoldsNoSlot(t *testing.T) {
+	holdPreviewBurstSlots(t)
+	r := &SchemaResolver{}
+	ctx := core.WithTenant(compareContext(compareServiceClaims()), "acme")
+	out, err := r.CompareRuleVersions(ctx, struct{ Input compareRuleVersionsInput }{compareRuleVersionsInput{}})
+	require.NoError(t, err)
+	assert.False(t, out.Ok())
+	require.NotNil(t, out.Refusal())
+	assert.Equal(t, refusalBusy, out.Refusal().Reason())
+	assert.Contains(t, out.Refusal().Message(), "already has a preview running")
+	assertPreviewBurstSlotsHeld(t)
+}
+
+func holdPreviewBurstSlots(t *testing.T) {
+	t.Helper()
+	old := globalPreviewGate
+	globalPreviewGate = newTestGate(4)
+	t.Cleanup(func() { globalPreviewGate = old })
+	require.Equal(t, previewAdmitted, globalPreviewGate.tryAcquire("acme"))
+	require.Equal(t, previewAdmitted, globalPreviewGate.tryAcquire("other"))
+}
+
+func assertPreviewBurstSlotsHeld(t *testing.T) {
+	t.Helper()
+	globalPreviewGate.mu.Lock()
+	defer globalPreviewGate.mu.Unlock()
+	assert.Equal(t, 2, globalPreviewGate.total)
+	assert.Equal(t, map[string]int{"acme": 1, "other": 1}, globalPreviewGate.inUse)
 }
 
 // A refused burst slot says the tenant already has one running, not that the replica is full; the
