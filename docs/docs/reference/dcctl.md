@@ -2993,7 +2993,7 @@ one BEFORE the day you need it.
 
 * [dcctl secrets](#dcctl-secrets)	 - Inspect and verify instance secret material
 * [dcctl secrets escrow show](#dcctl-secrets-escrow-show)	 - Print what an escrow artifact says about itself (no passphrase needed)
-* [dcctl secrets escrow verify](#dcctl-secrets-escrow-verify)	 - Check that an escrow artifact holds the root key a live instance is running
+* [dcctl secrets escrow verify](#dcctl-secrets-escrow-verify)	 - Compare an escrow header with a live instance, or open it with --open
 
 ## dcctl secrets escrow show {#dcctl-secrets-escrow-show}
 
@@ -3031,24 +3031,23 @@ dcctl secrets escrow show <file> [flags]
 
 ## dcctl secrets escrow verify {#dcctl-secrets-escrow-verify}
 
-Check that an escrow artifact holds the root key a live instance is running
+Compare an escrow header with a live instance, or open it with --open
 
 ### Synopsis
 
-Check that a root-key escrow artifact holds the root key a live instance is running.
+Compare a root-key escrow artifact with the root key a live instance is running.
 
-The check compares key digests: the artifact's against the digest of the key in the instance's
-configuration Secret (read through --kube-context, or the current context). It needs no
-passphrase and decrypts nothing, so it is safe to run as often as you like, from a scheduled
-job or a CI gate.
+By default, compare only the cleartext header fingerprint with the key in the instance's
+configuration Secret (read through --kube-context, or the current context). This needs no
+passphrase and decrypts nothing. A matching header does not prove the artifact can open.
 
-A mismatch means the artifact is intact but belongs to a different key (usually the instance
-was re-bootstrapped after the file was written, or the file belongs to another instance), so
-the instance has no usable escrow. The command exits non-zero in that case.
+With --open, decrypt and authenticate the artifact and compare the recovered key bytes
+with the running key. Supply the original passphrase using --escrow-passphrase-file or
+DCCTL_ESCROW_PASSPHRASE (the file takes precedence). This mode never prompts. A missing or
+wrong passphrase, damaged artifact, or different key exits non-zero.
 
-```
-  dcctl secrets escrow verify --instance prod ./prod-rootkey.escrow
-```
+Without --open, a fingerprint mismatch also exits non-zero: the header names a different
+key, usually because the instance was re-bootstrapped or the file belongs to another instance.
 
 ```
 dcctl secrets escrow verify <file> [flags]
@@ -3057,17 +3056,21 @@ dcctl secrets escrow verify <file> [flags]
 ### Examples
 
 ```
-  # exits non-zero when the artifact does not hold the key the instance is running
+  # compare the header only; this does not check recoverability
   dcctl secrets escrow verify --instance prod ./prod-rootkey.escrow
-  dcctl secrets escrow verify --instance prod --kube-context prod ./prod-rootkey.escrow
+  # prove that the artifact opens to the key the instance is running
+  dcctl secrets escrow verify --instance prod --open --escrow-passphrase-file ./passphrase ./prod-rootkey.escrow
+  dcctl secrets escrow verify --instance prod --open --kube-context prod ./prod-rootkey.escrow
 ```
 
 ### Options
 
 ```
-  -h, --help                  help for verify
-      --instance string       instance id to check the artifact against (required)
-      --kube-context string   kube-context to target (default: current)
+      --escrow-passphrase-file string   read the original passphrase for --open from this file (or $DCCTL_ESCROW_PASSPHRASE)
+  -h, --help                            help for verify
+      --instance string                 instance id to check the artifact against (required)
+      --kube-context string             kube-context to target (default: current)
+      --open                            decrypt the artifact and compare its key bytes with the live instance (requires a passphrase)
 ```
 
 ### SEE ALSO
@@ -3932,7 +3935,7 @@ dcctl upgrade <provider> <instance> [flags]
       --drop-legacy-ingress                     stop rendering the Ingress objects beside the Gateway: run it once DNS points at the new controller, and before 'dcctl install --remove-legacy-ingress' removes ingress-nginx, which it refuses to do while any Ingress object still names its class
       --dry-run                                 print what would happen without changing anything
       --escrow-file string                      where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on
-      --escrow-passphrase-file string           read the escrow passphrase from this file (or $DCCTL_ESCROW_PASSPHRASE). Only needed to WRITE an escrow for an instance that has none — checking an existing one needs no passphrase
+      --escrow-passphrase-file string           read the escrow passphrase from this file (or $DCCTL_ESCROW_PASSPHRASE). Needed to write a missing escrow or open an existing one; without it, only the cleartext header is checked
       --event-store-checkpoint-timeout string   set the event store's checkpoint_timeout, a Postgres time such as 15min (between 30s and 1d; default 15min). An empty value returns to the default. Applied now and kept by later upgrades when the flag is omitted (recorded beside the instance's infrastructure state on this machine). Reload-only: the event store does not restart
       --event-store-max-wal-mib int             set the event store's max_wal_size, in MiB (at least 64). An upgrade derives it as a fifth of the event store volume, never below 1024, so a store close to full can keep the previous allowance with 1024. 0 returns to the derived value. Applied now and kept by later upgrades when the flag is omitted (recorded beside the instance's infrastructure state on this machine). Reload-only: the event store does not restart
   -h, --help                                    help for upgrade
