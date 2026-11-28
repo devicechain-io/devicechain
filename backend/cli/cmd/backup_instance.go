@@ -33,6 +33,7 @@ type backupOptions struct {
 	InstanceID, KubeContext, Destination, NatsURL, BlobDirectory string
 	RestorePlan                                                  *backup.RestorePlan
 	PlanOutput                                                   io.Writer
+	RestoreStreams, OverwriteTarget                              bool
 }
 
 func backupInstance(ctx context.Context, opts backupOptions) error {
@@ -76,9 +77,12 @@ func backupInstance(ctx context.Context, opts backupOptions) error {
 			areas = append(areas, string(a))
 		}
 	}
-	bc, err := instanceBlobConfig(cfg.Infrastructure.Blob, opts.BlobDirectory, "filesystem blob backup requires --blob-directory pointing to a read-only mounted/exported instance PVC root")
-	if err != nil {
-		return err
+	var bc blob.Config
+	if !opts.RestoreStreams {
+		bc, err = instanceBlobConfig(cfg.Infrastructure.Blob, opts.BlobDirectory, "filesystem blob backup requires --blob-directory pointing to a read-only mounted/exported instance PVC root")
+		if err != nil {
+			return err
+		}
 	}
 	url := opts.NatsURL
 	if url == "" {
@@ -137,6 +141,9 @@ func backupInstance(ctx context.Context, opts backupOptions) error {
 		return err
 	}
 	defer nc.Close()
+	if opts.RestoreStreams {
+		return opts.RestorePlan.ApplyStreams(ctx, nc, cfg.Infrastructure.Nats.ShardGroups, opts.OverwriteTarget, opts.PlanOutput, areas)
+	}
 	export := func(ctx context.Context, w io.Writer) error {
 		return backup.ExportBlobs(ctx, bc, opts.InstanceID, w)
 	}

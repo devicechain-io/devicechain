@@ -118,9 +118,10 @@ blob bytes into an in-memory pipe; it never calls NATS restore/reconciliation or
 writes target files/objects. Freeze target mutations while planning. The output
 is an observation, not a lock or authorization for a later restore.
 
-`dcctl restore <instance> --from <set> --apply --only object-store` is the one
-apply that exists (`ApplyObjects`, apply.go); stream restore is not implemented
-and `--apply` without `--only object-store` is refused. After `PrepareRestore`
+`dcctl restore <instance> --from <set> --apply --only object-store` restores
+objects (`ApplyObjects`, apply.go). `--only stream` restores captured JetStream
+streams (`ApplyStreams`, apply_streams.go); an explicit `--only` is required.
+For object restore, after `PrepareRestore`
 it refuses, before any write: a foreign identity (references in the restored
 database carry the source instance and backend, so this is not migrated), a
 saved object whose backend differs from the target's, and, without
@@ -135,3 +136,21 @@ temp and put with the verified SHA-256 as `x-amz-checksum-sha256` and, for a
 new key, `If-None-Match: *`. The target is exported again at the end and must
 hold every backup object. A missing instance directory stays an error. A run first removes `.put-restore-*` files a hard-killed run left under the instance directory (that prefix only, through `os.Root`; an in-flight blob-store `.put-*` is still refused). An S3 object larger than one PutObject (5 GiB) is refused before the first write; multipart restore is not implemented. The filesystem target must support hard links.
 `apply_minio_integration_test.go` (tag `integration`) runs it against MinIO.
+
+Stream apply restores the native `snapshot.s2` with its captured configuration
+and state, including consumers, through `$JS.API.STREAM.RESTORE.<stream>`. It
+rechecks the bundle's size and SHA-256 into a private temporary copy and verifies
+the ZIP members before deleting an existing stream. Each upload chunk waits for
+an acknowledgment; EOF requires a successful stream-create response, followed
+by a matching stream-info read. An existing stream is refused without
+`--overwrite-target`; replacement deletes its messages and consumers and is not
+atomic. Freeze writers and stream/consumer creation throughout. A failed stream
+is named in the error and is never reported restored; earlier completed streams
+remain restored. No blob storage is read or written. Foreign instance names,
+incompatible shard layouts and unsafe source omissions are refused.
+
+The deployed broker administrator credentials and TLS are reused. The current
+`AdminPermissions` grant lacks `STREAM.RESTORE` and the server-issued
+`$JS.SNAPSHOT.RESTORE.<stream>.<token>` upload permission, and lacks `STREAM.DELETE` for
+most preserved streams (including the gateway). No grants are widened here.
+Operators must arrange those permissions before attempting replacement.
