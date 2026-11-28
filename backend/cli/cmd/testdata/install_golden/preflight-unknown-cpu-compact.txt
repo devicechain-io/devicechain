@@ -39,7 +39,7 @@ Preflight: ready, with 1 warning(s) — review above.
 
 -- stderr (0 bytes) --
 
--- engine (1669 bytes) --
+-- engine (1693 bytes) --
 {
   "Provider": "local",
   "Options": {
@@ -47,6 +47,7 @@ Preflight: ready, with 1 warning(s) — review above.
     "KubeContext": "",
     "Cluster": "devicechain",
     "CreateCluster": false,
+    "ExposeLAN": false,
     "Profile": "",
     "DryRun": false,
     "AssumeYes": false,

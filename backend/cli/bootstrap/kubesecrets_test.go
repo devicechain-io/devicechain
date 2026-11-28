@@ -142,6 +142,89 @@ func TestKubeconfigSecretsAreRedactedFromTheStream(t *testing.T) {
 	}
 }
 
+// JSON and the TUI both use whole-token redaction in events. Ordinary plugin
+// settings must survive, while typed and credential-shaped values stay covered.
+func TestKubeconfigPluginSettingsInJSONAndTUIEvents(t *testing.T) {
+	for _, mode := range []string{"json", "tui"} {
+		t.Run(mode, func(t *testing.T) {
+			writeKubeconfig(t, validKubeconfig("", "    auth-provider:\n      name: oidc\n      config:\n"+
+				"        mode: default\n        region: us-east-1\n"+
+				"        opaque: ProviderCredential1234567890\n        client-secret: cs4x\n"+
+				"    exec:\n      apiVersion: client.authentication.k8s.io/v1\n      command: aws\n"+
+				"      env:\n      - name: AWS_PROFILE\n        value: default\n"+
+				"      - name: AWS_REGION\n        value: us-east-1\n"+
+				"      - name: OPAQUE\n        value: EnvCredential1234567890\n"+
+				"      - name: API_TOKEN\n        value: tk4x\n"))
+			lines := []string{"docker context default", "namespace default", "helm default us-east-1",
+				"env EnvCredential1234567890", "provider ProviderCredential1234567890",
+				"typed env tk4x", "typed provider cs4x"}
+			e := &InstallEngine{
+				Provider: &fakeProvider{name: "local"}, Options: InstallOptions{Options: Options{AssumeYes: true}}, SkipPreflight: true,
+				Cluster: func(ctx context.Context, _ Provider, _ InstallOptions) error {
+					for _, line := range lines {
+						out(ctx).println(line)
+					}
+					return nil
+				},
+			}
+			req := installflow.Request{Operation: installflow.OperationInstall, AssumeYes: true}
+			var envs []installflow.Envelope
+			if mode == "json" {
+				var stream bytes.Buffer
+				if err := (installjson.Presenter{Stdout: &stream, RunID: "plugin-settings",
+					Clock: testkit.NewManualClock(testkit.Epoch)}).Run(t.Context(), e, req, nil); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				envs, err = installjson.DecodeStream(stream.Bytes())
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				// Capture the events delivered to the TUI, using its hub options and
+				// console log writer, without starting a terminal event loop.
+				sink := &testkit.CaptureSink{}
+				hub, err := installflow.NewHub(installflow.Options{Sink: sink,
+					Clock: testkit.NewManualClock(testkit.Epoch)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				log, err := hub.LogWriter("", "dcctl", installflow.LogInfo)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = hub.Run(t.Context(), e, req, installflow.Runtime{
+					Prompts: installflow.NewBroker(hub, nil, true),
+					Console: installflow.Console{Stdout: log, Stderr: log, Flush: hub.Flush},
+				})
+				<-hub.Done()
+				if err != nil {
+					t.Fatal(err)
+				}
+				envs = sink.Envelopes()
+				if got := hub.Redact("profile default, token tk4x"); got != "profile default, token [redacted]" {
+					t.Errorf("TUI composed line = %q", got)
+				}
+			}
+			if err := testkit.VerifyStream(envs); err != nil {
+				t.Fatal(err)
+			}
+			logs := map[string]bool{}
+			for _, env := range envs {
+				if line, ok := env.Payload.(installflow.LogLine); ok {
+					logs[line.Text.String()] = true
+				}
+			}
+			for _, want := range []string{"docker context default", "namespace default", "helm default us-east-1",
+				"env [redacted]", "provider [redacted]", "typed env [redacted]", "typed provider [redacted]"} {
+				if !logs[want] {
+					t.Errorf("missing log %q; got %v", want, logs)
+				}
+			}
+		})
+	}
+}
+
 // writeKubeconfig writes content as the only kubeconfig and points KUBECONFIG at it.
 func writeKubeconfig(t *testing.T, content string) string {
 	t.Helper()
@@ -231,9 +314,8 @@ func TestClusterIdentityDropsServerUserinfo(t *testing.T) {
 
 // 🔴 SHORT CREDENTIALS ARE STILL REDACTED, AND THE ONES THAT CANNOT BE ARE SAID. A
 // five-byte token is under the strict minimum and is registered redact-only; an exec
-// env value that is an ordinary word is redacted from the text but never refuses a
-// code that spells it; a three-byte password cannot be redacted at all, and the run
-// warns that one value is not covered.
+// env value that is an ordinary word is preserved; a three-byte password cannot
+// be redacted at all, and the run warns that one value is not covered.
 func TestShortKubeconfigCredentials(t *testing.T) {
 	writeKubeconfig(t, validKubeconfig("", "    token: tk5ab\n    password: pw3\n"+
 		"    exec:\n      apiVersion: client.authentication.k8s.io/v1\n      command: dc-plugin\n"+
@@ -252,24 +334,25 @@ func TestShortKubeconfigCredentials(t *testing.T) {
 		t.Fatalf("%v\n%s", err, stream.Bytes())
 	}
 	text := stream.String()
-	for _, v := range []string{"tk5ab", "profile default"} {
-		if strings.Contains(text, v) {
-			t.Errorf("the stream carries %q", v)
-		}
+	if strings.Contains(text, "tk5ab") {
+		t.Error("the stream carries the token")
+	}
+	if !strings.Contains(text, "profile default") {
+		t.Error("the stream redacted an ordinary profile name")
 	}
 	if !strings.Contains(text, "warning: 1 kubeconfig credential value(s) are shorter than 4 bytes") {
 		t.Errorf("no warning that the 3-byte password is not covered:\n%s", text)
 	}
 }
 
-// A text-only credential (an exec env value that is an ordinary word) is redacted
-// from text but never refuses an event code that spells it; a strict one does.
+// A found credential (a password that is an ordinary word) is redacted from text
+// but never refuses an event code that spells it; a generated one does.
 func TestRegisterCredentialsTextOnlyNeverRefusesACode(t *testing.T) {
 	hub, err := installflow.NewHub(installflow.Options{Sink: &testkit.CaptureSink{}, Clock: testkit.NewManualClock(testkit.Epoch)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := registerCredentials(hub, []credential{{value: "default", found: true}, {value: "s3cr3t-strict"}, {value: "ab"}}); n != 1 {
+	if n := registerCredentials(hub, []credential{{value: "default", found: true, typed: true}, {value: "s3cr3t-strict", generated: true}, {value: "ab"}}); n != 1 {
 		t.Errorf("%d uncovered, want 1 (the two-byte value)", n)
 	}
 	if err := hub.Emit(installflow.Event{Payload: installflow.RunStarted{Target: installflow.Target{Mode: "managed-kind"},
@@ -286,6 +369,36 @@ func TestRegisterCredentialsTextOnlyNeverRefusesACode(t *testing.T) {
 	}
 	if got := hub.Redact("profile default, key s3cr3t-strict"); strings.Contains(got, "default") || strings.Contains(got, "s3cr3t") {
 		t.Errorf("Redact: %q", got)
+	}
+}
+
+// 🔴 ONE OF DCCTL'S OWN VALUES THAT A PERSON CHOSE — the escrow passphrase, an SMTP
+// password — is registered as strictly as ever for text, cut out as a substring, and
+// never refuses an event code that spells it: "install" is a substring of every
+// install step id. Only a value dcctl generated refuses one.
+func TestRegisterCredentialsAChosenValueNeverRefusesACode(t *testing.T) {
+	for _, generated := range []bool{false, true} {
+		hub, err := installflow.NewHub(installflow.Options{Sink: &testkit.CaptureSink{}, Clock: testkit.NewManualClock(testkit.Epoch)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := registerCredentials(hub, []credential{{value: "install", generated: generated}}); n != 0 {
+			t.Fatalf("%d uncovered", n)
+		}
+		err = hub.Emit(installflow.Event{Payload: installflow.RunStarted{Target: installflow.Target{Mode: "managed-kind"},
+			Manifest: []installflow.ManifestStep{{ID: installflow.StepInstallInputs}}}})
+		if generated {
+			if !errors.Is(err, installflow.ErrInvalidEvent) {
+				t.Errorf("the control: a generated value's code was not refused: %v", err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("a manifest spelling a chosen secret was refused: %v", err)
+		}
+		if got := hub.Redact("SMTP password install rejected"); strings.Contains(got, "install") {
+			t.Errorf("Redact kept a chosen secret: %q", got)
+		}
 	}
 }
 
@@ -342,8 +455,8 @@ func TestKubeconfigExecArgsAndURLPasswordsAreRedacted(t *testing.T) {
 
 // Only a credential by type is counted as uncovered: a short token or password, and an
 // exec env value or auth-provider setting whose name says credential. AWS_PROFILE=dev
-// and an auth provider's short "mode" setting are settings: registered if they can be,
-// never counted, never warned about.
+// and an auth provider's short "mode" setting are settings: never registered,
+// counted or warned about.
 func TestOnlyATypedCredentialIsCountedUncovered(t *testing.T) {
 	writeKubeconfig(t, validKubeconfig("", "    password: pw3\n"+
 		"    auth-provider:\n      name: oidc\n      config:\n        mode: ab\n        client-secret: cs1\n"+

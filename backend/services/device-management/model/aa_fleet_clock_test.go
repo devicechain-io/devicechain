@@ -35,10 +35,15 @@ type fleetSQLRecorder struct {
 	gorm.ConnPool
 	calls  []fleetSQLCall
 	noRows bool
+	// returning answers a statement that RETURNs the database's clock.
+	returning string
 }
 
 func (r *fleetSQLRecorder) QueryContext(ctx context.Context, q string, args ...any) (*sql.Rows, error) {
 	r.calls = append(r.calls, fleetSQLCall{q, args})
+	if r.returning != "" && strings.Contains(strings.ToLower(q), "returning clock_timestamp()") {
+		return r.ConnPool.QueryContext(ctx, r.returning)
+	}
 	return r.ConnPool.QueryContext(ctx, "SELECT 0 AS attempts")
 }
 
@@ -68,17 +73,48 @@ func TestFleetPostgresRetryDeadlineUsesDatabaseTime(t *testing.T) {
 		return time.Time{}
 	}
 	t.Cleanup(func() { fleetClock = old })
+	// The line's statement returns the database time it ran at; stand in for it with a typed column.
+	stamped := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	_, err := recorder.ConnPool.ExecContext(context.Background(), "CREATE TABLE fleet_retry_stamp (recorded_at DATETIME)")
+	require.NoError(t, err)
+	_, err = recorder.ConnPool.ExecContext(context.Background(), "INSERT INTO fleet_retry_stamp VALUES (?)", stamped)
+	require.NoError(t, err)
+	recorder.returning = "SELECT recorded_at FROM fleet_retry_stamp"
 	require.NoError(t, api.RecordFleetLineRetry(context.Background(), 42, "DEVICE_BUSY", time.Now().Add(3*time.Second)))
-	require.Len(t, recorder.calls, 2)
-	q := strings.ToLower(recorder.calls[1].query)
-	require.Contains(t, q, "next_attempt_at")
-	require.Contains(t, q, "clock_timestamp()")
+	// The line's retry, stamped on the database's clock and returning that time; then the operation's last
+	// error, carrying exactly that time and only over an older one.
+	require.Len(t, recorder.calls, 3)
+	line := strings.ToLower(recorder.calls[1].query)
+	for _, part := range []string{"next_attempt_at", "clock_timestamp()", "returning clock_timestamp() as recorded_at"} {
+		require.Contains(t, line, part)
+	}
 	for _, arg := range recorder.calls[1].args {
 		_, isTime := arg.(time.Time)
 		require.False(t, isTime)
 		_, isNullTime := arg.(sql.NullTime)
 		require.False(t, isNullTime)
 	}
+	runtime := strings.ToLower(recorder.calls[2].query)
+	require.Contains(t, runtime, "fleet_operation_runtime")
+	require.Contains(t, runtime, "last_error_at is null or last_error_at < ")
+	require.NotContains(t, runtime, "clock_timestamp()", "the runtime row takes the line statement's time, not a later one")
+	var carried int
+	for _, arg := range recorder.calls[2].args {
+		if nt, ok := arg.(sql.NullTime); ok {
+			require.True(t, nt.Valid)
+			require.True(t, stamped.Equal(nt.Time))
+			carried++
+		}
+		_, isTime := arg.(time.Time)
+		require.False(t, isTime)
+	}
+	require.Equal(t, 2, carried, "the guard and the write both carry the returned time")
+}
+
+func TestFleetPostgresRetryWithoutAReturnedTimeLeavesTheLastError(t *testing.T) {
+	api, recorder := fleetRecordedPG(t)
+	require.NoError(t, api.RecordFleetLineRetry(context.Background(), 42, "DEVICE_BUSY", time.Time{}))
+	require.Len(t, recorder.calls, 2, "no returned time, no runtime write")
 }
 
 func (r *fleetSQLRecorder) ExecContext(_ context.Context, q string, args ...any) (sql.Result, error) {

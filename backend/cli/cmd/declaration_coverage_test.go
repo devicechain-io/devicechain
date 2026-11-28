@@ -103,6 +103,7 @@ var dispositions = map[string]disposition{
 	"escrow-passphrase-file":  runScoped,
 	"no-escrow":               runScoped, // whether THIS run wrote a second copy of the key
 	"restore-root-key":        runScoped, // a filesystem path
+	"ui":                      runScoped, // how THIS run is presented; it changes nothing deployed
 
 	// --- deliberately excluded, reason written in instance_types.go ---
 	//

@@ -132,7 +132,7 @@ func ParseBackupDestination(path string, warn ...func(string)) (*BackupDestinati
 		return nil, fmt.Errorf("secretAccessKey: %w", err)
 	}
 	if u.User != nil || strings.ContainsAny(d.EndpointURL, "?#") {
-		warning := fmt.Sprintf("credentials in backup endpointUrl %q (userinfo, query or fragment) are deprecated and will be refused in the next major release. "+
+		warning := fmt.Sprintf("credentials in backup endpointUrl %q (userinfo, query or fragment) are deprecated and will be refused in a later major release, after the deprecation period. "+
 			"Use a credential-free endpointUrl and the accessKeyId and secretAccessKey fields in --backup-credentials-file; "+
 			"the endpoint is stored in the dc-infra/dc-install ConfigMap for later bootstrap and destroy operations.",
 			installflow.RedactURL(d.EndpointURL))

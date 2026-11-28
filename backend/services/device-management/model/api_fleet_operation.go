@@ -269,19 +269,20 @@ func (api *Api) fleetAdmit(ctx context.Context, tx *gorm.DB, lines int) error {
 		if err := db.Model(&FleetOperation{}).Select("COALESCE(SUM(target_count), 0) AS n").Where("dispatch = ?", FleetDispatchPlanning).Scan(&planning).Error; err != nil {
 			return err
 		}
-		var unposted, retained int64
+		var unposted int64
 		if err := db.Model(&FleetOperationLine{}).Where("posting = ?", FleetPostingPlanned).Count(&unposted).Error; err != nil {
-			return err
-		}
-		if err := db.Model(&FleetOperationLine{}).Count(&retained).Error; err != nil {
 			return err
 		}
 		reserved := planning.N.Int64
 		if int(unposted+reserved)+lines > s.unposted {
 			return exceeded(s.name+".unpostedLines", "the %s already has %d lines waiting to post (limit %d)", s.name, unposted+reserved, s.unposted)
 		}
-		if int(retained+reserved)+lines > s.retained {
-			return exceeded(s.name+".retainedLines", "the %s already retains %d operation lines (limit %d)", s.name, retained+reserved, s.retained)
+		retained, err := fleetRetainedLines(db)
+		if err != nil {
+			return err
+		}
+		if int(retained)+lines > s.retained {
+			return exceeded(s.name+".retainedLines", "the %s already retains %d operation lines (limit %d)", s.name, retained, s.retained)
 		}
 		if s.hour > 0 {
 			now := time.Now()
@@ -301,6 +302,26 @@ func (api *Api) fleetAdmit(ctx context.Context, tx *gorm.DB, lines int) error {
 		}
 	}
 	return nil
+}
+
+// fleetRetainedLines is the retained-lines budget's count: the lines every operation in db's scope
+// holds, plus the target count a PLANNING header has reserved, read from the operation headers.
+//
+// 🔴 NOT A COUNT OF THE LINES TABLE. That count ran under the admission locks (the instance one
+// included) and read every retained line, up to the instance's whole budget, on every create. The
+// headers give the same number exactly. Create step two writes an operation's target_count lines in
+// the transaction that sets its plan digest and moves it out of PLANNING, and nothing else inserts
+// a line; retention deletes them, adding what it deleted to purged_line_count in the same
+// transaction, and stamps lines_purged_at once none is left. So a header with no lines_purged_at
+// holds target_count - purged_line_count lines when its plan digest is set, and has reserved
+// target_count while it is PLANNING. A PLANNING header abandoned and aborted never had its plan
+// digest set and holds nothing. A previous-release pod's purge does not add to purged_line_count,
+// which only overstates what is retained until that operation's purge completes.
+func fleetRetainedLines(db *gorm.DB) (int64, error) {
+	var held struct{ N sql.NullInt64 }
+	err := db.Model(&FleetOperation{}).Select("COALESCE(SUM(target_count - purged_line_count), 0) AS n").
+		Where("lines_purged_at IS NULL AND (dispatch = ? OR plan_digest <> '')", FleetDispatchPlanning).Scan(&held).Error
+	return held.N.Int64, err
 }
 
 func (api *Api) fleetCreateStepTwo(ctx context.Context, tenant string, op *FleetOperation, plan *FleetPlan, actor string) (*FleetOperation, error) {
@@ -405,6 +426,12 @@ type FleetOperationSearchResults struct {
 }
 
 func (api *Api) FleetOperations(ctx context.Context, c FleetOperationSearchCriteria) (*FleetOperationSearchResults, error) {
+	if c.Dispatch != nil && !fleetDispatchFilterable(ledger.Dispatch(*c.Dispatch)) {
+		return nil, fleetFilterRefused("dispatch", *c.Dispatch)
+	}
+	if c.Evidence != nil && !ledger.Evidence(*c.Evidence).Valid() {
+		return nil, fleetFilterRefused("evidence", *c.Evidence)
+	}
 	results := make([]FleetOperation, 0)
 	db, pag := api.RDB.ListOf(ctx, &FleetOperation{}, func(r *gorm.DB) *gorm.DB {
 		if c.Dispatch != nil {
@@ -430,6 +457,27 @@ type FleetLineSearchCriteria struct {
 	Posting    *string
 	Settlement *string
 	Code       *string
+	// AfterOrdinal keeps only the lines after this ordinal. Paging on it is a keyset: a line that
+	// leaves the filtered set between two pages cannot shift a later one past the reader, as it can
+	// with a page number over a set the driver and the reconciler keep changing.
+	AfterOrdinal *int32
+}
+
+// The posting, settlement, dispatch and evidence filters name closed vocabularies the database
+// constrains, so a value outside them can never match a row. It is refused rather than answered with an
+// empty page, which would read as "there are none". The values a later release reserves (and the served
+// enums already list) are accepted: they are names, and nothing holds them yet. Kind and code are open
+// vocabularies, filtered as given.
+func fleetDispatchFilterable(v ledger.Dispatch) bool {
+	return v.Valid() || v == ledger.DispatchDraft
+}
+
+func fleetPostingFilterable(v ledger.Posting) bool {
+	return v.Valid() || v == ledger.PostingDispatching || v == ledger.PostingUnknown
+}
+
+func fleetFilterRefused(field, value string) error {
+	return fleetErr(FleetCodeInvalidRequest, "%q is not a bulk change %s state", value, field)
 }
 
 // FleetLineSearchResults is one page of lines.
@@ -440,6 +488,12 @@ type FleetLineSearchResults struct {
 
 // FleetOperationLines pages one operation's lines in ordinal order.
 func (api *Api) FleetOperationLines(ctx context.Context, token string, c FleetLineSearchCriteria) (*FleetLineSearchResults, error) {
+	if c.Posting != nil && !fleetPostingFilterable(ledger.Posting(*c.Posting)) {
+		return nil, fleetFilterRefused("posting", *c.Posting)
+	}
+	if c.Settlement != nil && !ledger.Settlement(*c.Settlement).Valid() {
+		return nil, fleetFilterRefused("settlement", *c.Settlement)
+	}
 	op, err := api.fleetOperationByToken(ctx, token)
 	if err != nil {
 		return nil, err
@@ -450,6 +504,9 @@ func (api *Api) FleetOperationLines(ctx context.Context, token string, c FleetLi
 	results := make([]FleetOperationLine, 0)
 	db, pag := api.RDB.ListOf(ctx, &FleetOperationLine{}, func(r *gorm.DB) *gorm.DB {
 		r = r.Where("operation_id = ?", op.ID)
+		if c.AfterOrdinal != nil {
+			r = r.Where("ordinal > ?", *c.AfterOrdinal)
+		}
 		if c.Posting != nil {
 			r = r.Where("posting = ?", *c.Posting)
 		}

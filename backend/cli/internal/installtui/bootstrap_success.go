@@ -25,10 +25,25 @@ type InstanceFacts struct {
 	// Backups describes the instance's backups, as the cluster was installed.
 	Backups string
 	// EscrowPath is where the root-key escrow artifact is, when the run settled
-	// one; EscrowWritten says this run wrote it and checked it back.
+	// one; EscrowOutcome is what the run established about it.
 	EscrowPath    string
-	EscrowWritten bool
+	EscrowOutcome EscrowOutcome
 }
+
+// EscrowOutcome is what a finished run established about the escrow artifact. Only
+// EscrowWrittenAndChecked and EscrowOpened say the file opens; an artifact the run
+// found but could not open is never presented as checked.
+type EscrowOutcome int
+
+const (
+	// EscrowFoundNotOpened is an artifact already in place that this run did not open.
+	EscrowFoundNotOpened EscrowOutcome = iota
+	// EscrowWrittenAndChecked is an artifact this run wrote and opened back.
+	EscrowWrittenAndChecked
+	// EscrowOpened is an artifact already in place that this run opened, with its
+	// passphrase, to the key being deployed.
+	EscrowOpened
+)
 
 // passphraseFilePlaceholder stands in for the passphrase file in the equivalent
 // command: the command is a template, and the passphrase is never in it.
@@ -39,7 +54,13 @@ const passphraseFilePlaceholder = "<file holding the escrow passphrase>"
 // only as a placeholder for a protected file. targetArgs are the target's flags
 // (--kube-context or --cluster) as the command line had them.
 func BootstrapCommand(in InstanceChoices, esc EscrowChoice, targetArgs []string) string {
-	argv := quoteArgs(BootstrapArgs(in, esc, targetArgs))
+	return BootstrapCommandOf(BootstrapArgs(in, esc, targetArgs), esc)
+}
+
+// BootstrapCommandOf is BootstrapCommand for a command line already composed, word by
+// word and unquoted (BootstrapArgs, as the command layer may have adjusted it).
+func BootstrapCommandOf(words []string, esc EscrowChoice) string {
+	argv := quoteArgs(words)
 	if esc.Mode != EscrowNone {
 		argv = append(argv, "--escrow-passphrase-file="+passphraseFilePlaceholder)
 	}
@@ -49,9 +70,10 @@ func BootstrapCommand(in InstanceChoices, esc EscrowChoice, targetArgs []string)
 // BootstrapContinueCommand is the command that builds the chosen instance later, by
 // hand, as a POSIX command line: the same flags as BootstrapCommand, but with no
 // --yes and no passphrase file, so the bootstrap asks for the passphrase at the
-// terminal, as a person running it expects.
+// terminal, as a person running it expects, and with --ui=tui, so it opens on these
+// same screens, the choices seeded from its flags.
 func BootstrapContinueCommand(in InstanceChoices, esc EscrowChoice, targetArgs []string) string {
-	return strings.Join(quoteArgs(BootstrapArgs(in, esc, targetArgs)), " ")
+	return strings.Join(append(quoteArgs(BootstrapArgs(in, esc, targetArgs)), "--ui=tui"), " ")
 }
 
 // BootstrapArgs is the bootstrap command line the choices describe, word by word

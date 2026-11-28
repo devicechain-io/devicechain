@@ -353,9 +353,11 @@ de ambas:
   mismo host solo sirve una de ellas, en silencio. Un arranque inicial cuyo host ya sirve otra
   instancia se rechaza. Dale a cada instancia su propio `--host` (en un clúster local, por
   ejemplo `--host beta.localhost`).
-- **El puerto MQTT local.** En un clúster local, el puerto 1883 de tu máquina llega solo al
-  broker de la primera instancia. Los brokers de las instancias posteriores son alcanzables
-  desde dentro del clúster, y el arranque inicial lo indica cuando ocurre.
+- **El puerto MQTT local.** En un clúster local, el puerto 1883 de tu máquina llega al broker de
+  la primera instancia, y 1884 y 1885 llegan a los de la segunda y la tercera: cada nueva instancia
+  local recibe el primero de los tres que esté libre. Un clúster creado antes de que se publicaran
+  los otros dos solo tiene 1883. Los brokers de las instancias siguientes son alcanzables desde
+  dentro del clúster, y el arranque inicial lo indica cuando ocurre.
 
 #### Ingress y tu propio controlador {#ingress-controller}
 
@@ -502,9 +504,10 @@ que un fallo nombra un paso que puedes encontrar aquí:
    cuántas de sus instancias están listas; nada se deshace, y ejecutar de nuevo el mismo
    `dcctl bootstrap` termina la instancia.
 10. **Report access info** (informar de los datos de acceso) — imprime el namespace, el correo
-    del superusuario y dónde se guarda su contraseña (y la propia contraseña, una sola vez: en
-    la ejecución que la generó, o en la que termina un arranque inicial que falló antes de
-    mostrarla), y cómo llegar a la instancia.
+    del superusuario y dónde se guarda su contraseña (y la propia contraseña, una sola vez y solo
+    cuando la salida es un terminal: en la ejecución que la generó, o en la que termina un arranque
+    inicial que falló antes de mostrarla; una salida canalizada o redirigida nombra en su lugar el
+    Secret `dci-<instance>-superuser`), y cómo llegar a la instancia.
 
 :::tip `Ctrl+C` detiene una ejecución de forma limpia
 Una ejecución interrumpida detiene la herramienta de infraestructura con elegancia —termina lo
@@ -765,9 +768,18 @@ Las alertas de las instantáneas se describen en
   con `--kube-context`, a partir de imágenes publicadas, no lo comprueba ni lo usa. Donde hace
   falta, su daemon tiene que ser accesible: Docker Engine en Linux, Docker Desktop en macOS y
   Windows.
-- **Puertos libres 80, 443 y 1883 del host** para un clúster local de kind, que los publica para
-  la consola, HTTPS y MQTT. `dcctl preflight local` falla, nombrando el contenedor que ocupa uno,
+- **Puertos libres 80, 443 y 1883-1885 del host** para un clúster local de kind, que los publica
+  para la consola, HTTPS y MQTT (1884 y 1885 sirven al broker de una segunda y una tercera instancia
+  local). `dcctl preflight local` falla, nombrando el contenedor que ocupa uno,
   en lugar de dejar que la creación del clúster falle con el error de enlace de Docker.
+- **Accesible solo desde esta máquina, salvo que pida otra cosa.** El clúster de kind que crea
+  `dcctl install local` publica esos puertos en `127.0.0.1`, de modo que la consola y el broker MQTT
+  responden en esta máquina y en ninguna otra. Para llegar a ellos desde otra máquina de su red (un
+  dispositivo, un teléfono, otro ordenador), cree el clúster con `dcctl install local --expose-lan`
+  (o `dcctl setup local --expose-lan`), que los publica en todas las interfaces. Hágalo solo en una
+  red de confianza, y no con `--no-tls` ni `--dev`, que sirven el inicio de sesión de la consola por
+  HTTP sin cifrar. kind fija los puertos de un clúster al crearlo, así que la opción no cambia nada
+  en un clúster que ya existe: elimine el clúster y vuelva a crearlo para cambiarlo.
 - **En Linux, un límite de inotify más alto.** `dcctl preflight local` exige `fs.inotify.max_user_instances` de al menos 256 para un clúster local de kind, y Ubuntu 24.04 de serie trae 128, por lo que falla e imprime el comando que hay que ejecutar. La primera línea sube el límite (la segunda, `max_user_watches`, es solo un aviso) y `/etc/sysctl.d` lo conserva tras los reinicios:
 
   ```bash
@@ -1968,7 +1980,8 @@ instancia a través del ingress del clúster. El superusuario es `superuser@devi
 y no hay contraseña por defecto. El arranque genera una para la instancia, la guarda en el
 Secret `dci-<instance>-superuser` del namespace de la instancia y la imprime una sola vez, al
 final de la ejecución que la generó (o de la que termina un arranque inicial que falló antes de
-imprimirla). Para volver a leerla:
+imprimirla). Solo se imprime cuando esa salida es un terminal: la salida canalizada o redirigida,
+como un registro de CI, nombra el Secret en su lugar. Para volver a leerla, o desde un script:
 
 ```bash
 kubectl -n dci-my-instance get secret dci-my-instance-superuser -o jsonpath='{.data.password}' | base64 -d

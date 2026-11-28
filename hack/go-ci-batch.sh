@@ -9,6 +9,7 @@ root="$PWD"
 entries="${BATCH_ENTRIES:?BATCH_ENTRIES is required}"
 jq -e 'type == "array" and all(.[]; (.module | type == "string") and
   (.static | type == "boolean") and .shard == "" and .exclude == "" and
+  (.tests // "") == "" and (.skip_tests // "") == "" and
   (.race_scope == "all" or .race_scope == "changed" or .race_scope == "none"))' <<<"$entries" >/dev/null
 if [ "$(jq length <<<"$entries")" -eq 0 ]; then
   echo "batch: no selected modules; skipped"

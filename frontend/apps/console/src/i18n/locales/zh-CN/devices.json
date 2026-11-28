@@ -149,6 +149,7 @@
   "noEvents": "尚未收到此设备的任何事件。",
   "noLocationRecorded": "此设备尚未报告位置。",
   "noMeasurements": "尚未收到此设备的任何测量值。",
+  "readingTextAfterUpgrade": "升级完成后显示文本读数",
   "noStateRecorded": "尚未记录此设备的状态。",
   "noTargetsFound": "未找到目标。",
   "occurredColumn": "发生时间",

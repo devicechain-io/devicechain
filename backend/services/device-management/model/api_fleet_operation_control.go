@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ledger"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -41,7 +42,11 @@ const (
 	// FleetCodeNotActivated is answered when the database does not enforce the device attribute
 	// writer protocol or the caller's tenant still has orphaned attribute rows.
 	FleetCodeNotActivated = "BULK_CHANGES_NOT_ACTIVATED"
-	FleetCodeExpired      = "OPERATION_EXPIRED"
+	// FleetCodeActivationUnverified is answered when the orphaned-attribute check could not be
+	// completed (it timed out, or the database failed): nothing is known to be wrong, and the
+	// request may be retried.
+	FleetCodeActivationUnverified = "ACTIVATION_CHECK_UNAVAILABLE"
+	FleetCodeExpired              = "OPERATION_EXPIRED"
 
 	// FleetCodeNewerThanServer refuses control that requires understanding the operation's protocol.
 	FleetCodeNewerThanServer = "OPERATION_NEWER_THAN_SERVER"
@@ -93,8 +98,14 @@ func (api *Api) fleetCheckOrphans(ctx context.Context) error {
 	if tenant, ok := core.TenantFromContext(ctx); !ok || tenant == "" {
 		return errors.New("a bulk change needs a tenant in the context")
 	}
-	orphans, err := api.CountOrphanedDeviceAttributes(ctx)
-	if err != nil || orphans > 0 {
+	orphans, err := api.HasOrphanedDeviceAttributes(ctx)
+	if err != nil {
+		// Could not tell is neither answer: not "orphans remain" (the operator would wait for a
+		// sweep that has nothing to do), and never "none remain".
+		log.Warn().Err(err).Msg("Could not check for orphaned device attribute rows before a bulk change start or resume.")
+		return fleetErr(FleetCodeActivationUnverified, "could not verify that no orphaned device attribute rows remain; retry")
+	}
+	if orphans {
 		return fleetErr(FleetCodeNotActivated, "orphaned device attribute rows remain; the sweep removes them")
 	}
 	return nil
@@ -227,19 +238,32 @@ func (api *Api) fleetControl(ctx context.Context, token, transition string, fn f
 		// context, outlives that request, and has its own bounded database wait.
 		clearCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		clearErr := api.RDB.DB(clearCtx).Session(&gorm.Session{SkipDefaultTransaction: true}).Model(&FleetOperationRuntime{}).
+		clean := api.RDB.DB(clearCtx).Session(&gorm.Session{SkipDefaultTransaction: true})
+		// A start or resume begins a new execution epoch, and a hold an earlier epoch left is not
+		// this one's. It is cleared BEFORE the marker, while the marker still holds every driver
+		// pass off, so no pass can see the new epoch with the old hold. The dependency auto-pause
+		// does not rely on this clear: its clock never starts before the epoch did (see
+		// DriveFleetOperation), so a clear lost to a stopped process or a failed statement cannot
+		// re-pause the resumed operation either. This one keeps holdCode honest.
+		if err == nil && enteredRunning {
+			if holdErr := clean.Model(&FleetOperationRuntime{}).Where("operation_id = ?", head.ID).
+				Updates(map[string]any{"hold_code": "", "hold_since": nil, "hold_seen_at": nil}).Error; holdErr != nil {
+				log.Warn().Err(holdErr).Str("bulkChange", token).Str("transition", transition).
+					Msg("Unable to clear a bulk change's earlier hold after its transition committed; the next pass replaces it")
+			}
+		}
+		clearErr := clean.Model(&FleetOperationRuntime{}).
 			Where("operation_id = ? AND control_requested_at = ?", head.ID, request.ControlRequestedAt).
 			Update("control_requested_at", nil).Error
-		if clearErr != nil {
+		switch {
+		case clearErr == nil:
+		case err == nil:
+			// The transition committed: it is reported as done, because it is, and a retry would only
+			// be refused as illegal. A marker left behind holds the driver off for its 30 seconds.
+			log.Warn().Err(clearErr).Str("bulkChange", token).Str("transition", transition).
+				Msg("Unable to clear a bulk change's control request after its transition committed; it lapses in 30 seconds")
+		default:
 			err = errors.Join(err, clearErr)
-		}
-		// A start or resume begins a new execution epoch, and a hold an earlier epoch left is not
-		// this one's. Above all the POST_ERROR hold: its start is the dependency auto-pause clock,
-		// and carried across a pause it would re-pause a resumed operation on its first pass.
-		if err == nil && enteredRunning {
-			err = api.RDB.DB(clearCtx).Session(&gorm.Session{SkipDefaultTransaction: true}).Model(&FleetOperationRuntime{}).
-				Where("operation_id = ?", head.ID).
-				Updates(map[string]any{"hold_code": "", "hold_since": nil, "hold_seen_at": nil}).Error
 		}
 	}
 	if err != nil {
@@ -378,12 +402,22 @@ func (api *Api) fleetAdmitDispatching(ctx context.Context, tx *gorm.DB, tenant s
 
 // Count line state, irrespective of the header's dispatch/evidence: aborted operations
 // can still be awaiting evidence. Only the candidate's remaining plans add new exposure.
+//
+// Two counts, of disjoint sets (POSTED, and the candidate's PLANNED), each written so an index
+// answers it: the open lines are exactly the predicate of the partial index
+// ix_fleet_operation_lines_evidence_open (keyed by tenant), and the candidate's plans are its
+// (operation_id) range. As one OR'd predicate no index served the AMBIGUOUS arm, so the count read
+// every retained line under the admission locks. The literals are the index's predicate, spelled
+// as it is, so the planner can prove the index applies.
 func fleetEvidenceOpenCount(tx *gorm.DB, op *FleetOperation) (int64, error) {
-	var n int64
-	err := tx.Model(&FleetOperationLine{}).Where(`((posting = ? AND (settlement IS NULL OR settlement = ?) AND code <> ?)
-		OR (operation_id = ? AND posting = ?))`, FleetPostingPosted, string(ledger.SettlementAmbiguous), "TARGET_ERASED",
-		op.ID, FleetPostingPlanned).Count(&n).Error
-	return n, err
+	var open, planned int64
+	if err := tx.Model(&FleetOperationLine{}).
+		Where("posting = 'POSTED' AND (settlement IS NULL OR settlement = 'AMBIGUOUS') AND code <> 'TARGET_ERASED'").
+		Count(&open).Error; err != nil {
+		return 0, err
+	}
+	err := tx.Model(&FleetOperationLine{}).Where("operation_id = ? AND posting = ?", op.ID, FleetPostingPlanned).Count(&planned).Error
+	return open + planned, err
 }
 
 // PauseFleetOperation moves a RUNNING operation to PAUSED. Once it returns, no line of the operation

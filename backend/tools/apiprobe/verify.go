@@ -31,6 +31,10 @@ func verifyTo(ctx context.Context, argv []string, out io.Writer) error {
 		"retry budget, measured from the start of verify, for a read refused with 401 or a sign-in the "+
 			"platform refused; each retry signs in again. 0 (the default) retries nothing. Only an "+
 			"upgrade that replaces the signing key needs one")
+	var authoredVia string
+	fs.StringVar(&authoredVia, "authored-via", "",
+		"when set, every version of the seeded device profile must read exactly this one save door in "+
+			"authoredVia. The upgrade drill passes UNKNOWN when the baseline recorded no doors")
 	if err := fs.Parse(argv); err != nil {
 		return failWith(exitSetup, "%w", err)
 	}
@@ -93,6 +97,14 @@ func verifyTo(ctx context.Context, argv []string, out io.Writer) error {
 
 		checked++
 		fmt.Fprintf(out, "  ok      %-26s %s\n", r.Name, r.Token)
+	}
+
+	if authoredVia != "" {
+		n, err := checkAuthoredVia(ctx, session, c.areaURL("device-management"), rec, authoredVia)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "  ok      %-26s %d version(s) read authoredVia [%s]\n", "authored-via", n, authoredVia)
 	}
 
 	// The admin-plane rows, as the superuser. After the tenant reads, so a signing key

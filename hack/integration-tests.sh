@@ -139,6 +139,52 @@ never_started() {
   done
 }
 
+# 🔴 ONLY THE PACKAGES THE TAG CHANGES, AND THAT IS NOT A CUT. The tag is a build constraint and
+# nothing else: a package whose test binary links no file the tag adds or removes (in itself, its
+# tests, or any package it links) compiles to the SAME binary with `-tags integration` as without
+# it, and the `go` job already runs that binary for every package of every module, under -race as
+# well. Running it here again only bought time: integration (core) spent ~19 of its 21 minutes
+# re-running untagged packages (core/messaging alone ~17) and was the last job of the run to finish.
+# The environment is no difference either: the only thing this script adds is the DC_IT_PG*
+# server, and every reader of those variables is itself an integration-tagged file.
+#
+# tag_changed <on> <off> <roots> is pure, so --self-test can drive it: <on> and <off> are
+# `ImportPath|files` lines of `go list -deps -test` with and without the tag (GoFiles of a test
+# variant `p [p.test]` carry its test files), <roots> is `ImportPath|dep,dep` lines of
+# `go list -test` with the tag. A listing that differs is a changed package, matched by its exact
+# import path: a changed TEST variant `p [p.test]` changes only p's own binary, never that of a
+# package linking plain p. It prints each package whose test main `p.test` is, or links, a changed one.
+tag_changed() {
+  awk -F'|' '
+    FILENAME == ARGV[1] { on[$0] = 1; next }
+    FILENAME == ARGV[2] { off[$0] = 1; next }
+    !ready {
+      for (k in on) if (!(k in off)) { split(k, a, "|"); changed[a[1]] = 1 }
+      for (k in off) if (!(k in on)) { split(k, a, "|"); changed[a[1]] = 1 }
+      ready = 1
+    }
+    $1 ~ /\.test$/ {
+      hit = ($1 in changed)
+      n = split($2, d, ",")
+      for (i = 1; i <= n && !hit; i++) if (d[i] in changed) hit = 1
+      if (hit) { p = $1; sub(/\.test$/, "", p); print p }
+    }' "$1" "$2" "$3" | sort -u
+}
+
+# tag_changed_here runs tag_changed on the module in the current directory; it fails when the
+# package loader does.
+tag_changed_here() {
+  local t rc=0 fmt='{{.ImportPath}}|{{if .Error}}error {{end}}{{.GoFiles}}{{.CgoFiles}}'
+  t=$(mktemp -d) || return 1
+  { go list -e -deps -test -tags integration -f "$fmt" ./... > "$t/on.raw" &&
+    go list -e -deps -test -f "$fmt" ./... > "$t/off.raw" &&
+    go list -e -test -tags integration -f '{{.ImportPath}}|{{join .Deps ","}}' ./... > "$t/roots.raw" &&
+    tr -d '\r' < "$t/on.raw" > "$t/on" && tr -d '\r' < "$t/off.raw" > "$t/off" && tr -d '\r' < "$t/roots.raw" > "$t/roots" &&
+    tag_changed "$t/on" "$t/off" "$t/roots"; } || rc=1
+  rm -rf "$t"
+  return "$rc"
+}
+
 # The negative control, in the shape the other hack/ gates use: a guard is worth nothing until it
 # has been shown to fire. This one exists because a `-run` filter that matches nothing exits 0 with
 # "no tests to run", which is indistinguishable from a pass — the exact way the first draft of this
@@ -191,7 +237,29 @@ if [ "$MODE" = "self-test" ]; then
   [[ "$out" == *missing* ]] || { echo "self-test FAILED: missing module not named"; exit 1; }
   if out=$(check_plan_covers $'one\nextra' one); then echo "self-test FAILED: extra module accepted"; exit 1; fi
   [[ "$out" == *extra* ]] || { echo "self-test FAILED: extra module not named"; exit 1; }
-  echo "self-test passed: no-tests-ran, per-test and plan checks reject bad inputs and accept real coverage"
+  # The package selection. Selected: x/a (a tagged test file), x/b (links x/h, whose tagged NON-test
+  # file the tag adds) and x/o (a package that has tests only under the tag). Not selected: x/c,
+  # which links plain x/a — only x/a's TEST variant changed, and a match by package path rather
+  # than exact import path selected 12 of core's 99 packages instead of 5 — nor x/a's plain line.
+  t=$(mktemp -d)
+  printf '%s\n' 'x/a|[a.go]' 'x/a [x/a.test]|[a.go a_test.go a_it_test.go]' 'x/a.test|[_testmain.go]' \
+    'x/h|[h.go h_pg.go]' 'x/b|[b.go]' 'x/b [x/b.test]|[b.go b_test.go]' 'x/b.test|[_testmain.go]' \
+    'x/c|[c.go]' 'x/c [x/c.test]|[c.go c_test.go]' 'x/c.test|[_testmain.go]' \
+    'x/o_test [x/o.test]|[o_it_test.go]' 'x/o.test|[_testmain.go]' > "$t/on"
+  printf '%s\n' 'x/a|[a.go]' 'x/a [x/a.test]|[a.go a_test.go]' 'x/a.test|[_testmain.go]' \
+    'x/h|[h.go]' 'x/b|[b.go]' 'x/b [x/b.test]|[b.go b_test.go]' 'x/b.test|[_testmain.go]' \
+    'x/c|[c.go]' 'x/c [x/c.test]|[c.go c_test.go]' 'x/c.test|[_testmain.go]' > "$t/off"
+  printf '%s\n' 'x/a|fmt' 'x/a.test|x/a [x/a.test],fmt' 'x/b.test|x/b [x/b.test],x/h,fmt' \
+    'x/c.test|x/c [x/c.test],x/a,fmt' 'x/o.test|x/o_test [x/o.test],x/o' > "$t/roots"
+  got=$(tag_changed "$t/on" "$t/off" "$t/roots" | tr '\n' ' ')
+  [ "$got" = "x/a x/b x/o " ] || { echo "self-test FAILED: tag_changed selected [$got], want [x/a x/b x/o ]"; rm -rf "$t"; exit 1; }
+  # The counterweight: when the tag changes nothing, nothing is selected (a selection that always
+  # named every package would pass the check above as a no-op).
+  cp "$t/off" "$t/off2"
+  got=$(tag_changed "$t/off" "$t/off2" "$t/roots")
+  [ -z "$got" ] || { echo "self-test FAILED: tag_changed selected [$got] when the tag changes nothing"; rm -rf "$t"; exit 1; }
+  rm -rf "$t"
+  echo "self-test passed: no-tests-ran, per-test, plan and package-selection checks reject bad inputs and accept real coverage"
   exit 0
 fi
 
@@ -313,11 +381,28 @@ for m in "${modules[@]}"; do
   name=$m
   m="$root/$m"
   echo "=== $name ==="
+  # The packages whose test binary the tag changes (tag_changed, above). A module here carries a
+  # tagged test file by construction, so selecting nothing is this script failing, not a pass. If
+  # the package loader itself fails, the whole module runs, as it did before the selection existed.
+  pkgs=()
+  if sel=$(cd "$m" && tag_changed_here); then
+    while IFS= read -r p; do [ -n "$p" ] && pkgs+=("$p"); done <<<"$sel"
+    total=$(cd "$m" && go list ./... 2>/dev/null | grep -c . || true)
+    if [ ${#pkgs[@]} -eq 0 ]; then
+      echo "  FAILED: $name carries integration-tagged files, but no package's test binary changes under the tag"
+      rc=1
+      continue
+    fi
+    echo "  packages: ${#pkgs[@]} of $total change under the tag (the go job runs the other $((total - ${#pkgs[@]})), whose test binary is the same without it): ${pkgs[*]}"
+  else
+    echo "::warning::could not resolve which packages of $name the integration tag changes; running all of them"
+    pkgs=(./...)
+  fi
   # -timeout: go test's default of 10 minutes is per PACKAGE, and event-management's model
   # package builds tables of hundreds of chunks to test the chunk ceiling of its startup
   # migrations, which takes several minutes on its own. A package that hits the default dies
   # with a panic naming whichever test happened to be running, which reads as that test's fault.
-  out=$(cd "$m" && go test -tags integration -count=1 -p 2 -timeout 30m -v ./... 2>&1)
+  out=$(cd "$m" && go test -tags integration -count=1 -p 2 -timeout 30m -v "${pkgs[@]}" 2>&1)
   status=$?
   ran=$(printf '%s\n' "$out" | ran_count)
   # Summaries always; PASS lines are not summaries — core alone emits 1131 of them and they

@@ -1,4 +1,4 @@
--- stdout (2217 bytes) --
+-- stdout (2208 bytes) --
 
 [1/11] Ensure local registry
 standing in for Ensure local registry... done.
@@ -42,8 +42,7 @@ DeviceChain bootstrap summary
   GraphQL: http://localhost/api/<area>/graphql
   MQTT: node port 31883
   Superuser: superuser@devicechain.local
-           password: golden-seed-pw-4Kq9
-           generated for this instance and shown only this once — sign in to the admin console to create your first tenant, and change it there
+           generated for this instance and not shown by this run — read it from the Secret below, sign in to the admin console to create your first tenant, and change it there
            the superuser's seed password is kept in Secret dci-acme/dci-acme-superuser, key password (changing the password in the console does not update it):
            kubectl -n dci-acme get secret dci-acme-superuser -o jsonpath='{.data.password}' | base64 -d
   Backups: NONE — no WAL archiving and no base backups for this instance, so no point-in-time restore is possible

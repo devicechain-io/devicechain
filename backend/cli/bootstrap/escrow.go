@@ -4,11 +4,13 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,6 +22,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/secrets/escrow"
 	"github.com/devicechain-io/dcctl/dcdir"
 	"github.com/devicechain-io/dcctl/internal/installflow"
+	"github.com/devicechain-io/dcctl/internal/secretenv"
 	"github.com/fatih/color"
 	"golang.org/x/term"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -50,8 +53,9 @@ import (
 // one-word answer for a throwaway, and --dev implies it.
 const (
 	// EscrowPassphraseEnv supplies the passphrase to an automated bootstrap that has
-	// no terminal to prompt at.
-	EscrowPassphraseEnv = "DCCTL_ESCROW_PASSPHRASE"
+	// no terminal to prompt at. dcctl takes it out of its own environment at process
+	// start (secretenv.Capture), so no child it starts inherits it.
+	EscrowPassphraseEnv = secretenv.EscrowPassphrase
 
 	// EscrowFileExt is the artifact suffix. destroy keys on it to decide what to
 	// spare, so it is a constant rather than a literal in two places.
@@ -369,6 +373,16 @@ func resolveEscrowPath(instance, explicit string) (string, error) {
 	return abs, nil
 }
 
+// CheckEscrowPath is the rule a bootstrap applies to where it will write an instance's
+// escrow artifact, for a screen that asks before the run does: the path made absolute,
+// or the refusal the run itself would end with (a path inside the instance's state
+// directory, which `dcctl destroy` deletes). It is the run's own check, not a copy of
+// it, so a path a screen accepts is one the run's escrow stage accepts too. It writes
+// nothing.
+func CheckEscrowPath(instance, path string) (string, error) {
+	return resolveEscrowPath(instance, path)
+}
+
 // mustDefaultEscrowPath is only used to name the default in an error message, so a
 // missing home directory degrades to a less specific message rather than replacing
 // the real error with a different one.
@@ -440,12 +454,10 @@ func resolveEscrowPassphrase(f EscrowFlags, q escrowQuestion) (string, error) {
 	// LookupEnv, not Getenv: an empty DCCTL_ESCROW_PASSPHRASE is a broken pipeline
 	// (an unset CI secret expands to ""), not a request for an empty passphrase, and
 	// falling through to a prompt would hang a job instead of failing it.
-	if pass, ok := os.LookupEnv(EscrowPassphraseEnv); ok {
-		// Unset immediately. Bootstrap goes on to exec docker, kind, ko and tofu, all
-		// of which inherit the environment, and tofu dumps its whole environment under
-		// TF_LOG=trace. The passphrase has been read; there is no reason for it to stay
-		// reachable by every child process for the next ten minutes.
-		os.Unsetenv(EscrowPassphraseEnv)
+	// Taken from memory, not the environment: the process's entry point moved it there
+	// before any command ran, so docker, kind, ko and tofu (which dumps its whole
+	// environment under TF_LOG=trace) never inherit it. See secretenv.
+	if pass, ok := secretenv.LookupEscrowPassphrase(); ok {
 		if pass == "" {
 			return "", fmt.Errorf("%s is set but empty; unset it to use another source, or give it a value", EscrowPassphraseEnv)
 		}
@@ -513,10 +525,18 @@ func readHidden(prompt string) (string, error) {
 // WriteEscrow wraps the instance root key under the plan's passphrase and writes
 // the artifact.
 //
-// O_EXCL, so an existing file is an error rather than an overwrite. The path is
-// derived from the instance name, so re-bootstrapping an instance of the same name
-// lands on the same file — and silently replacing it would destroy the escrow of
-// the instance whose database backups the operator still has.
+// An existing file is an error rather than an overwrite. The path is derived from
+// the instance name, so re-bootstrapping an instance of the same name lands on the
+// same file — and silently replacing it would destroy the escrow of the instance
+// whose database backups the operator still has.
+//
+// 🔴 THE GUARANTEE IS THE PUBLISH, NOT THE CHECK. The read below that refuses an
+// existing artifact is only the early, cheap answer: two runs for the same instance
+// name (two clusters bootstrapped from one workstation) can both pass it, since the
+// write and the verify between it and the publish take two Argon2id passes. The
+// publish itself is therefore exclusive (publishEscrowArtifact), so the run that
+// publishes second fails loudly with the same refusal instead of replacing the
+// first run's artifact, the only second copy of a key that is already in use.
 func WriteEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.Time) error {
 	key, err := base64.StdEncoding.DecodeString(rootKeyBase64)
 	if err != nil {
@@ -551,8 +571,8 @@ func WriteEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.Time)
 		return fmt.Errorf("checking for an existing escrow artifact: %w", err)
 	}
 
-	// Written to a temporary file and renamed, so the artifact is either absent or
-	// complete and never a truncated stub that blocks its own replacement forever. It
+	// Written to a temporary file and published under its name only once whole, so
+	// the artifact is either absent or complete and never a truncated stub that blocks its own replacement forever. It
 	// is fsynced because the whole point of the file is to survive the machine, and
 	// bootstrap goes on to spend ten minutes building a cluster around a key whose
 	// only other copy would otherwise be an unflushed page.
@@ -561,7 +581,7 @@ func WriteEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.Time)
 		return fmt.Errorf("creating the escrow artifact: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename has succeeded
+	defer os.Remove(tmpName) // the published artifact is a second name for it, which stays
 
 	if err := tmp.Chmod(escrowFileMode); err != nil {
 		tmp.Close()
@@ -580,7 +600,7 @@ func WriteEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.Time)
 	}
 
 	// Prove the file opens BEFORE publishing it, so a failed check leaves nothing
-	// behind. Verifying after the rename would put an artifact that does not work at
+	// behind. Verifying after the publish would put an artifact that does not work at
 	// the destination, where the overwrite guard would then refuse every retry.
 	//
 	// This runs at all because everything else about this artifact is checked on the
@@ -591,12 +611,115 @@ func WriteEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.Time)
 		return err
 	}
 
-	if err := os.Rename(tmpName, plan.Path); err != nil {
+	if escrowBeforePublish != nil {
+		escrowBeforePublish()
+	}
+	if err := publishEscrowArtifact(tmpName, plan.Path); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			// Another run published first, after the check above.
+			existing, rerr := os.ReadFile(plan.Path)
+			if rerr != nil {
+				return fmt.Errorf("an escrow artifact appeared at %s while this one was being written, "+
+					"and will not be overwritten (reading it: %w)", plan.Path, rerr)
+			}
+			return fmt.Errorf("%s", describeBlockingArtifact(plan.Path, existing))
+		}
 		return fmt.Errorf("publishing the escrow artifact: %w", err)
 	}
 	syncDir(dir)
 	return nil
 }
+
+// escrowBeforePublish, when set, runs between WriteEscrow's verify and its publish:
+// a test holds two writers there, so both have passed the existence check.
+var escrowBeforePublish func()
+
+// linkFile is os.Link; a test replaces it to take the fallback below.
+var linkFile = os.Link
+
+// publishEscrowArtifact puts the verified temporary file tmp at dst, and fails with
+// an error that is fs.ErrExist when anything is already there. It never replaces dst.
+//
+// os.Rename cannot do this anywhere: rename(2) replaces its destination atomically,
+// and on Windows Go renames with MOVEFILE_REPLACE_EXISTING. A hard link can: link(2)
+// on Linux and macOS, and CreateHardLink on Windows, create the new name or fail with
+// EEXIST (ERROR_ALREADY_EXISTS), as one atomic step, and the file appears complete,
+// since tmp has already been written, flushed and verified. It is in the standard
+// library on every platform dcctl ships for, unlike renameat2(RENAME_NOREPLACE)
+// (Linux only, and refused by some filesystems), renamex_np(RENAME_EXCL) (macOS only)
+// or MoveFileEx without MOVEFILE_REPLACE_EXISTING (Windows only).
+//
+// A filesystem without hard links (FAT and exFAT, some network and FUSE mounts)
+// refuses the link with some other error, and then the only way left to publish is
+// to check that dst is absent and rename tmp onto it. That check-then-rename is safe
+// only if no other writer can publish in between, by EITHER path.
+//
+// 🔴 ONE PROTOCOL FOR EVERY WRITER. So every publish, the link included, first takes
+// a lock file beside the artifact, created with O_CREATE|O_EXCL, and holds it until it
+// returns. A writer that links without the lock could otherwise publish between a
+// renaming writer's check and its rename, and be replaced while both report success:
+// whether a link works can differ between two runs (another dcctl build, a test, a
+// mount that changed), so "the link path needs no lock" is not a property of the file.
+// Under the lock a link that meets dst still refuses, and a rename re-checks that dst
+// is absent. The artifact appears only whole, and a writer that comes second waits for
+// the lock and then finds the first writer's complete artifact. A lock that outlives
+// escrowLockWait is reported, by name, rather than taken: it is another run
+// publishing, or one that was killed while doing so.
+func publishEscrowArtifact(tmp, dst string) error {
+	release, err := lockEscrowPublish(dst)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return publishLocked(tmp, dst)
+}
+
+// publishLocked publishes tmp at dst; the caller holds dst's publish lock.
+func publishLocked(tmp, dst string) error {
+	err := linkFile(tmp, dst)
+	if err == nil || errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	if _, err := os.Lstat(dst); err == nil {
+		return &fs.PathError{Op: "publish", Path: dst, Err: fs.ErrExist}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if escrowBeforeRename != nil {
+		escrowBeforeRename()
+	}
+	return os.Rename(tmp, dst)
+}
+
+// lockEscrowPublish takes dst's publish lock, waiting up to escrowLockWait for another
+// writer to release it, and returns the function that releases it.
+func lockEscrowPublish(dst string) (func(), error) {
+	lock := dst + ".publishing"
+	deadline := time.Now().Add(escrowLockWait)
+	for {
+		l, err := os.OpenFile(lock, os.O_WRONLY|os.O_CREATE|os.O_EXCL, escrowFileMode)
+		if err == nil {
+			l.Close()
+			return func() { _ = os.Remove(lock) }, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return nil, fmt.Errorf("taking the escrow publish lock %s: %w", lock, err)
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("%s exists: another dcctl run is publishing this escrow artifact, or one was "+
+				"interrupted while doing so. If no dcctl run is writing it, remove %s and re-run", lock, lock)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// escrowBeforeRename, when set, runs between the no-link path's absence check and its
+// rename: a test holds a writer there while another tries to publish.
+var escrowBeforeRename func()
+
+// escrowLockWait bounds how long publishEscrowArtifact waits for another writer's
+// lock. Holding it covers one link, or one stat and one rename. A test shortens it.
+var escrowLockWait = 10 * time.Second
 
 // keyFromHalfBuiltEscrow finds the root key a killed bootstrap already escrowed, so the
 // re-run deploys THAT key instead of minting a second one and then refusing to write it.
@@ -702,7 +825,7 @@ func verifyWrittenArtifact(path, passphrase, rootKeyBase64 string) error {
 	return nil
 }
 
-// syncDir flushes a directory entry so a freshly renamed file survives a power loss.
+// syncDir flushes a directory entry so a freshly published file survives a power loss.
 // Best-effort: a filesystem that refuses this (or a platform without it) is not a
 // reason to fail a bootstrap that has otherwise succeeded.
 func syncDir(dir string) {
@@ -951,7 +1074,12 @@ func parseDeployedConfig(raw []byte, instanceId, secretName string) (*config.Ins
 //
 // Three cases, and each says something different:
 //   - an artifact that matches the running key: nothing to do, and saying so is the
-//     "is my escrow current?" check happening for free on every re-run.
+//     "is my escrow current?" check happening on every re-run. 🔴 The header's
+//     fingerprint is only a CLAIM: it is cleartext, outside what the passphrase
+//     protects, so a truncated or altered ciphertext keeps it intact. "verified" is
+//     said only of an artifact OPENED with this run's passphrase that gave back the
+//     running key; one that does not open is refused, and with no passphrase in hand
+//     it is "present, not opened", never verified.
 //   - an artifact that does NOT match: refuse. It is an ORPHAN — it protects a key
 //     this instance no longer uses — and quietly leaving it would mean the operator
 //     holds a file they believe is their recovery path and is not.
@@ -967,7 +1095,7 @@ func ReconcileEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.T
 			if err := WriteEscrow(plan, rootKeyBase64, instance, now); err != nil {
 				return "", err
 			}
-			return "written", nil
+			return string(escrowWritten), nil
 		}
 		return "", fmt.Errorf("reading the existing escrow artifact: %w", err)
 	}
@@ -988,7 +1116,33 @@ func ReconcileEscrow(plan EscrowPlan, rootKeyBase64, instance string, now time.T
 			"  `dcctl secrets escrow show %s` that it is not the only copy of a key you still need",
 			plan.Path, instance, plan.Path)
 	}
-	return "verified", nil
+	if plan.Passphrase == "" {
+		return string(escrowPresentNotOpened), nil
+	}
+	if err := openMatchesKey(art, plan.Passphrase, key); err != nil {
+		return "", fmt.Errorf("the escrow artifact at %s names the root key instance %q is running, but %w.\n"+
+			"  Its header matches; what it protects could not be confirmed, so as it stands it may recover\n"+
+			"  nothing. Re-run with the passphrase it was written with, or check it with\n"+
+			"  `dcctl secrets escrow verify %s --instance %s`; if it is damaged, move it aside to have a\n"+
+			"  correct one written",
+			plan.Path, instance, err, plan.Path, instance)
+	}
+	return string(escrowVerified), nil
+}
+
+// openMatchesKey opens art with passphrase and reports whether it gives back key. The
+// header's fingerprint (Artifact.Matches) needs no passphrase and is never proof on its
+// own: it is cleartext, so damage to the ciphertext leaves it intact.
+func openMatchesKey(art *escrow.Artifact, passphrase string, key []byte) error {
+	opened, err := escrow.Open(art, passphrase)
+	if err != nil {
+		return fmt.Errorf("it does not open with the passphrase given (%v)", err)
+	}
+	defer zeroBytes(opened)
+	if !bytes.Equal(opened, key) {
+		return errors.New("it does not open to that key")
+	}
+	return nil
 }
 
 // DeployedRootKey reads the instance root key out of the config Secret the pods

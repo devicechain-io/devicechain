@@ -15,7 +15,9 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ledger"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // The posting transaction: one line, one device, one transaction. It is the ONLY code that applies a
@@ -94,6 +96,9 @@ var (
 	// fleetPostHook lets a test interleave a competing session at a named point of the posting transaction
 	// ("read": after the unlocked line read; "claim": just before the claim; "claimed": just after it). Nil in production.
 	fleetPostHook func(stage string, tx *gorm.DB)
+	// fleetRetryHook lets a test stall a replica between its line's retry record and the operation's
+	// last-error update. Nil in production.
+	fleetRetryHook func()
 	// fleetTryDeviceLock is the real try-lock; tests can model a held lock on SQLite.
 	fleetTryDeviceLock = tryLockDeviceAttributes
 )
@@ -131,11 +136,14 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 	defer cancel()
 
 	var (
-		result  FleetPostResult
-		decided *fleetDecision
-		minted  *DeviceConfigurationRevision
-		change  membershipChange
-		devID   uint
+		result      FleetPostResult
+		decided     *fleetDecision
+		minted      *DeviceConfigurationRevision
+		change      membershipChange
+		devID       uint
+		factRequest *EntityAttributeSetRequest
+		factRemoved bool
+		factAt      time.Time
 	)
 	abandon := func(o FleetPostOutcome) error {
 		result = FleetPostResult{Outcome: o}
@@ -143,6 +151,7 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 	}
 	err := api.runDeviceAttributeTx(postCtx, "fleet", func(tx *gorm.DB) error {
 		result, decided, minted, change, devID = FleetPostResult{}, nil, nil, membershipChange{}, 0
+		factRequest, factRemoved, factAt = nil, false, time.Time{}
 		if err := fleetTxTimeouts(tx); err != nil {
 			return err
 		}
@@ -204,7 +213,7 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 		}
 		// 6. The target and the kind gate.
 		var dev Device
-		if err := tx.Select("id").First(&dev, devID).Error; err != nil {
+		if err := tx.Select("id", "token").First(&dev, devID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				decided = &fleetDecision{string(ledger.PostingSkipped), FleetLineTargetGone, "the target device no longer exists"}
 				return errPostDecided
@@ -242,6 +251,21 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 			}
 			target, overridden, reversing = rev.target, rev.changed, rev
 		}
+		if target.Present {
+			// Persisted operations and reversal before-images can predate plan-time normalization.
+			canonical, err := normalizeAttributeValue(target.ValueType, target.Value)
+			if err != nil {
+				decided = &fleetDecision{FleetPostingRefused, CodeConfigurationValueType, err.Error()}
+				return errPostDecided
+			}
+			if canonical != nil {
+				if err := checkBytes("attribute value", *canonical, MaxAttributeValueBytes); err != nil {
+					decided = &fleetDecision{FleetPostingRefused, CodeConfigurationValueType, err.Error()}
+					return errPostDecided
+				}
+			}
+			target.Value = canonical
+		}
 		// 7. Before-image, effect, recompute: the primitive's own path, under the lock this transaction holds.
 		priorGen, _, err := attributeGeneration(tx, devID, string(AttributeScopeShared), intent.Key)
 		if err != nil {
@@ -250,7 +274,11 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 		if fleetEffectHook != nil {
 			fleetEffectHook()
 		}
-		patch := AttributePatch{{Scope: string(AttributeScopeShared), Key: intent.Key, LastUpdated: time.Now()}}
+		factAt = time.Now().UTC()
+		factRequest = &EntityAttributeSetRequest{EntityType: "device", Entity: dev.Token,
+			Scope: string(AttributeScopeShared), AttrKey: intent.Key, ValueType: target.ValueType, Value: target.Value}
+		factRemoved = !target.Present
+		patch := AttributePatch{{Scope: string(AttributeScopeShared), Key: intent.Key, LastUpdated: factAt}}
 		if !target.Present {
 			patch[0].Unset = true
 		} else {
@@ -357,6 +385,12 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 	case err == nil:
 		api.publishMintedConfiguration(ctx, devID, minted)
 		api.afterMembershipRecompute(ctx, "device", devID, change)
+		if factRemoved {
+			api.emitDeviceAttribute(ctx, &DeviceAttributeEvent{DeviceToken: factRequest.Entity, AttrKey: factRequest.AttrKey,
+				Scope: factRequest.Scope, Removed: true, UpdatedAt: factAt})
+		} else {
+			api.emitDeviceAttributeForSet(ctx, factRequest, factAt)
+		}
 		return result, nil
 	case errors.Is(err, errPostAbandoned):
 		if result.Outcome == FleetPostBusy {
@@ -497,18 +531,61 @@ func fleetRetryDelay(attempts int) time.Duration {
 	return d
 }
 
+// fleetLineRetryStamp is a line's retry record read back with the database time at which it was written.
+type fleetLineRetryStamp struct {
+	FleetOperationLine
+	RecordedAt sql.NullTime `gorm:"->;-:migration"`
+}
+
 // RecordFleetLineRetry notes a retryable failure on a line: one more attempt, the code, and when it may be
 // tried again (a jittered backoff). It never changes the line's posting, and its predicate keeps it from
 // touching a line that was cancelled, refused or redacted meanwhile.
-// now is a SQLite fixture input only; PostgreSQL schedules from its own clock.
+// The operation's runtime row carries the same code and when it was met: the last error the engine met
+// on this operation, which BulkChange.lastErrorCode serves. Each is its own autocommit statement, so the
+// runtime row stays outside every lock order. The time is the one the line's statement read, after its
+// row lock, so a replica that stalls between the two statements cannot overwrite a newer error with its
+// older one: the runtime row only moves forward.
+// now is a SQLite fixture input only; PostgreSQL schedules and stamps from its own clock.
 func (api *Api) RecordFleetLineRetry(ctx context.Context, lineID uint, code string, now time.Time) error {
+	db := api.RDB.DB(ctx)
 	var line FleetOperationLine
-	if err := api.RDB.DB(ctx).Select("attempts").First(&line, lineID).Error; err != nil {
+	if err := db.Select("attempts", "operation_id").First(&line, lineID).Error; err != nil {
 		return err
 	}
 	delay := fleetRetryDelay(int(line.Attempts) + 1)
 	delay += time.Duration(rand.Int64N(int64(delay)/4 + 1))
-	return api.RDB.DB(ctx).Model(&FleetOperationLine{}).Where("id = ? AND posting = ?", lineID, FleetPostingPlanned).
-		Updates(map[string]any{"attempts": gorm.Expr("attempts + 1"), "last_error_code": code,
-			"next_attempt_at": fleetTimestampAfter(api.RDB.DB(ctx), delay, now)}).Error
+	postgres := db.Dialector.Name() == "postgres"
+	var stamp fleetLineRetryStamp
+	record := db.Model(&stamp).Where("id = ? AND posting = ?", lineID, FleetPostingPlanned)
+	if postgres {
+		record = record.Clauses(clause.Returning{Columns: []clause.Column{{Name: "clock_timestamp() AS recorded_at", Raw: true}}})
+	}
+	recorded := record.Updates(map[string]any{"attempts": gorm.Expr("attempts + 1"), "last_error_code": code,
+		"next_attempt_at": fleetTimestampAfter(db, delay, now)})
+	if recorded.Error != nil || recorded.RowsAffected == 0 {
+		return recorded.Error
+	}
+	if fleetRetryHook != nil {
+		fleetRetryHook()
+	}
+	at := stamp.RecordedAt
+	if !postgres {
+		if now.IsZero() {
+			now = fleetClock()
+		}
+		at = sql.NullTime{Time: now, Valid: true}
+	}
+	if !at.Valid {
+		log.Warn().Str("code", code).Msg("A bulk change line's retry was recorded without its database time; its last error is left as it was")
+		return nil
+	}
+	// Best effort, like the driver's heartbeat: the line's own record above is what retries run on, and a
+	// diagnostic that could not be written must not turn a recorded retry into a failed post.
+	// Only a newer line record replaces the operation's last error.
+	if err := db.Model(&FleetOperationRuntime{}).
+		Where("operation_id = ? AND (last_error_at IS NULL OR last_error_at < ?)", line.OperationId, at).
+		Updates(map[string]any{"last_error_code": code, "last_error_at": at}).Error; err != nil {
+		log.Warn().Err(err).Str("code", code).Msg("Unable to record a bulk change's last error; the line's own record stands")
+	}
+	return nil
 }

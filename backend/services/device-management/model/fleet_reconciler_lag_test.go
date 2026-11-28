@@ -204,3 +204,27 @@ func TestReconcilerLagRefusesUnderSharding(t *testing.T) {
 	require.ErrorIs(t, api.MeasureFleetReconcilerLag(ctx), errFleetReconcilerLagSharded)
 	require.True(t, math.IsNaN(reconcilerLag()), "got %v", reconcilerLag())
 }
+
+// A line its deadline settled AMBIGUOUS already holds a verdict. It stays awaiting evidence, so a
+// late report can still decide it, but it is not what the lag measures: those lines accumulate
+// with every offline device of every retained change, and reading them made the measurement cost
+// the whole retained backlog. Only a line with no verdict yet is read.
+func TestReconcilerLagDoesNotReadLinesSettledAmbiguousAtTheirDeadline(t *testing.T) {
+	freshBulkMetrics(t)
+	api, ctx := fleetFixture(t, 1)
+	ambiguous := lagLine(t, api, "t-a", 9_400_000, 1)
+	require.NoError(t, api.RDB.DB(core.WithTenant(ctx, "t-a")).Model(ambiguous).
+		Updates(map[string]any{"settlement": "AMBIGUOUS", "code": "NO_EVIDENCE", "settled_at": time.Now()}).Error)
+	lagReport(t, api, "t-a", 9_400_000, 5, time.Hour)
+	lagLine(t, api, "t-b", 9_400_001, 1)
+	lagReport(t, api, "t-b", 9_400_001, 5, 30*time.Second)
+
+	require.NoError(t, api.MeasureFleetReconcilerLag(ctx))
+	require.InDelta(t, 30, reconcilerLag(), 2, "the AMBIGUOUS line's hour-old report is not the lag")
+
+	// Negative control: the same line with no verdict is read, and its report is the oldest.
+	require.NoError(t, api.RDB.DB(core.WithTenant(ctx, "t-a")).Model(ambiguous).
+		Updates(map[string]any{"settlement": nil, "code": "", "settled_at": nil}).Error)
+	require.NoError(t, api.MeasureFleetReconcilerLag(ctx))
+	require.InDelta(t, 3600, reconcilerLag(), 2)
+}

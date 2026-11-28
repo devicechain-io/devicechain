@@ -94,7 +94,7 @@ For a Slack incoming webhook, use `"auth":"none"` and leave `secret` out. The na
 
 The generic webhook `text` is a plain summary that uses the device token or originator instead of the device name; Slack users should use the native [Slack channel](#create-a-slack-channel).
 
-A webhook channel's JSON body carries the alarm's `eventType` (`RAISED`, `ESCALATED`, `DEESCALATED`, `CLEARED`, `ACKNOWLEDGED`, or `RENOTIFIED` for a timed re-notification), `alarmToken`, `alarmKey`, `severity`, `state`, the originator's `originatorType` and `originatorId` when known, and the times. When the alarm's device is known it also carries `deviceToken`, `deviceName` and `deviceTypeToken`; a key is left out when its value is unknown (for example a device with no name), never sent empty. Timed re-notifications (`RENOTIFIED`) and late `CLEARED` notifications picked up by the scheduler also include these device and originator fields when known. Alarms that were notified before upgrading omit these fields from those later notifications.
+A webhook channel's JSON body carries the alarm's `eventType` (`RAISED`, `ESCALATED`, `RENOTIFIED` for a timed re-notification, or `CLEARED` on a policy with [`notifyOnClear`](#notify-on-clear); acknowledgements and de-escalations are not delivered), `alarmToken`, `alarmKey`, `severity`, `state`, the originator's `originatorType` and `originatorId` when known, and the times. When the alarm's device is known it also carries `deviceToken`, `deviceName` and `deviceTypeToken`; a key is left out when its value is unknown (for example a device with no name), never sent empty. Timed re-notifications (`RENOTIFIED`) and late `CLEARED` notifications picked up by the scheduler also include these device and originator fields when known. Alarms that were notified before upgrading omit these fields from those later notifications.
 
 Optionally set `linkBaseUrl` in the webhook channel's `config` to your console's `http` or `https` base URL (`https` recommended), for example `"linkBaseUrl":"https://console.example.com"`. The payload then includes `alarmUrl` and, when the alarm names its device, `deviceUrl`. The base URL must not carry a query string or fragment, because links are built by appending a path. Both keys are absent when `linkBaseUrl` is unset. If a stored webhook has an invalid `linkBaseUrl`, delivery skips it, omits both links and logs a warning.
 
@@ -148,11 +148,10 @@ A PagerDuty channel sends Events API v2 events, and maps the alarm's lifecycle o
 
 | Alarm event | PagerDuty action |
 | --- | --- |
-| raised, escalated, de-escalated, or re-notified by a policy's escalation | `trigger` (a repeat on an open incident updates it instead of opening another) |
-| acknowledged | `acknowledge` |
-| cleared | `resolve` |
+| raised, escalated, or re-notified by a policy's escalation | `trigger` (a repeat on an open incident updates it instead of opening another) |
+| cleared (only on a policy with `notifyOnClear: true`) | `resolve` |
 
-The alarm's severity maps to PagerDuty's: `CRITICAL` to `critical`, `MAJOR` to `error`, `MINOR` and `WARNING` to `warning`, anything else to `info`. For the policy to resolve incidents, route the cleared and acknowledged transitions through the same channel as the raise.
+The alarm's severity maps to PagerDuty's: `CRITICAL` to `critical`, `MAJOR` to `error`, `MINOR` and `WARNING` to `warning`, anything else to `info`. For the policy to resolve incidents, set `notifyOnClear: true` on it (see [Notify when an alarm clears](#notify-on-clear)). Acknowledging an alarm in DeviceChain stops its escalation but does not acknowledge the PagerDuty incident.
 
 `config` accepts `region` (`us`, the default, or `eu`, which selects `events.eu.pagerduty.com`), `source` (the event's source; `devicechain` by default) and `linkBaseUrl`.
 
@@ -187,7 +186,7 @@ A **policy** decides which raised alarms are delivered, to whom, and through whi
 The severity here is **uppercase** because it is the *alarm's* severity. A detection rule's own authoring severity is lowercase (`major`) and is uppercased when the alarm is raised, so a notification rule always matches the uppercase form. A rule whose severity is not one of those values (a lowercase `major`, say) is **refused at write**, rather than stored as a rule that could never match.
 
 :::caution Policies are tenant-wide
-`deviceTypeToken` on notification policies is **deprecated from v1.10**: device-type scoping was never applied. Leave it unset. Its behavior stays unchanged until removal in a future major, no earlier than v3.0. See [Device-type scoping](#device-type-scoping) for details.
+`deviceTypeToken` on notification policies is **deprecated from v1.10**: device-type scoping was never applied. Leave it unset. Its existing behavior is preserved until it is refused in a later major release, after the deprecation period. See [Device-type scoping](#device-type-scoping) for details.
 :::
 
 ### Notify when an alarm clears {#notify-on-clear}
@@ -211,7 +210,7 @@ A clear is informational, so it is handled differently from a page:
 
 ### Device-type scoping {#device-type-scoping}
 
-The policy's `deviceTypeToken` field was never applied and is deprecated from v1.10 on the create input, policy output and search criteria. These coordinates remain available with their existing behavior until removal in a future major, no earlier than v3.0: a non-blank value is refused at write, an unset or blank value is accepted and reads back as null, and any supplied search-filter value matches no API-created policy. Omit the filter to include tenant-wide policies. The dispatcher continues to skip any stored policy with a non-empty device-type scope. Policy scoping by anchor or group is planned, with no release version promised.
+The policy's `deviceTypeToken` field was never applied and is deprecated from v1.10 on the create input, policy output and search criteria. These coordinates remain available with their existing behavior until they are refused in a later major release, after the deprecation period: a non-blank value is refused at write, an unset or blank value is accepted and reads back as null, and any supplied search-filter value matches no API-created policy. Omit the filter to include tenant-wide policies. The dispatcher continues to skip any stored policy with a non-empty device-type scope. Policy scoping by anchor or group is planned, with no release version promised.
 
 ### Throttling and escalation {#throttling-and-escalation}
 
@@ -370,7 +369,7 @@ Each record is one try, newest first. A channel allowed three tries that failed 
 
 Each channel also reports `deliveryHealth { lastSuccessAt lastFailureAt consecutiveFailures }`, read from the ledger. `consecutiveFailures` counts the failed and refused attempts since the channel last delivered. `NOT_ATTEMPTED` records do not count against a channel, since they describe something the platform did not do, and neither does a `FAILED` record with `errorCode: BUDGET_SPENT`: the time allowed for all of the alarm's deliveries ran out while that attempt was in flight, so the platform cut it short. `deliveryHealth` is null for a caller without `notification:read`, such as a channel returned by a mutation to a caller who may write but not read.
 
-Two properties to keep in mind:
+Three properties to keep in mind:
 
 - **The ledger never delays a notification.** Records are written after the attempt and off the delivery path. If the database cannot take a record, the record is dropped and counted on `devicechain_notificationmanagement_ledger_writes_total{outcome="failed"}` (or `outcome="dropped"` when too many writes are already waiting). A record proves an attempt was made; a missing record does not prove one was not.
 - **Recipients are personal data.** Records are deleted after 7 days (the same window as resolved notification state), or after `AttemptRetentionSeconds` in the notification-management configuration. They are also erased with the tenant when it is deleted.

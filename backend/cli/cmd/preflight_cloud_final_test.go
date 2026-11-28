@@ -134,6 +134,11 @@ func TestAnExitEndsAStalledHandshake(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
+	// The Exit comes once the API server has been dialled, so the run ends with a
+	// handshake provably open. A fixed delay instead could land before the dial on a
+	// loaded machine, and then there would be no handshake to end.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	accepted := make(chan net.Conn, 4)
 	go func() {
 		for {
@@ -142,6 +147,7 @@ func TestAnExitEndsAStalledHandshake(t *testing.T) {
 				return
 			}
 			accepted <- c // and never answer the handshake
+			cancel()      // the Exit
 		}
 	}()
 	cfg := &rest.Config{Host: "https://" + ln.Addr().String(), BearerToken: "t"}
@@ -151,8 +157,6 @@ func TestAnExitEndsAStalledHandshake(t *testing.T) {
 		p.http = cloudHTTPClient(f)
 		return p, err
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(150*time.Millisecond, cancel)
 	if _, err := r.RunPreflight(ctx, func(installflow.PreflightObservation) {}); err != nil {
 		t.Fatal(err)
 	}

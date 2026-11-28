@@ -381,6 +381,7 @@
   "ruleLossyOpenWarning": "此表单无法表达此规则已存储定义中的全部内容，因此部分内容未显示。从这里保存会用您能看到的内容替换原定义，并会先请您确认。",
   "ruleLossySaveConfirm": "仍然保存",
   "ruleLossySaveDescription": "此表单无法承载规则已存储定义中的全部内容。保存会用表单显示的内容替换已存储的定义，其余内容将被移除。",
+  "ruleDescribeSaveAfterUpgrade": "此规则是用“描述”起草的。由于升级正在进行，服务器暂时无法记录这一点，因此规则未保存。升级完成后即可保存。",
   "ruleLossySaveTitle": "保存并丢失此规则的一部分？",
   "ruleMemberCapDescription": "可选的保留成员数兜底上限；默认为平台限制。",
   "ruleMemberCapLabel": "成员上限",

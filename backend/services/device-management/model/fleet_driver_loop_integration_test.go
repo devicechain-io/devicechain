@@ -258,7 +258,15 @@ func TestFleetDriverPostgresDependencyPauseUsesDatabaseClock(t *testing.T) {
 		Updates(map[string]any{"attempts": 20, "last_error_code": "CONNECTION_LOST", "next_attempt_at": gorm.Expr("clock_timestamp() + interval '1 hour'")}).Error)
 	require.NoError(t, db.Model(&FleetOperationRuntime{}).Where("operation_id = ?", p.op.ID).
 		Updates(map[string]any{"hold_code": "POST_ERROR", "hold_since": gorm.Expr("clock_timestamp() - interval '24 hours'")}).Error)
+	// The clock runs from the later of the hold and the epoch's start: a hold older than the epoch is not its own.
+	require.NoError(t, db.Model(&FleetOperation{}).Where("id = ?", p.op.ID).
+		Update("state_changed_at", gorm.Expr("clock_timestamp() - interval '23 hours'")).Error)
 	r, err := p.api.DriveFleetOperation(p.ctx, p.op.Token, DefaultFleetCaps)
+	require.NoError(t, err)
+	require.Empty(t, r.Paused, "a resumed epoch gets its own 24 hours")
+	require.NoError(t, db.Model(&FleetOperation{}).Where("id = ?", p.op.ID).
+		Update("state_changed_at", gorm.Expr("clock_timestamp() - interval '24 hours'")).Error)
+	r, err = p.api.DriveFleetOperation(p.ctx, p.op.Token, DefaultFleetCaps)
 	require.NoError(t, err)
 	require.Equal(t, "DEPENDENCY_UNAVAILABLE", r.Paused)
 }

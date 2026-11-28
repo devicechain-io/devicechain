@@ -98,8 +98,14 @@ func TestAdmissionOrphansGateIsTenantScopedAndFailsClosed(t *testing.T) {
 				}
 				before := events(t, api, ctx, op)
 				_, err = admissionCall(api, ctx, op, resume)
-				requireFleetCode(t, err, FleetCodeNotActivated)
-				require.EqualError(t, err, "orphaned device attribute rows remain; the sweep removes them")
+				if condition == "unreadable" {
+					// Could not tell is refused as unverified and retryable, not as orphans that a
+					// sweep would remove; either way nothing starts.
+					requireFleetCode(t, err, FleetCodeActivationUnverified)
+				} else {
+					requireFleetCode(t, err, FleetCodeNotActivated)
+					require.EqualError(t, err, "orphaned device attribute rows remain; the sweep removes them")
+				}
 				still, err := api.fleetOperationByToken(ctx, op.Token)
 				require.NoError(t, err)
 				require.Equal(t, op.Dispatch, still.Dispatch)

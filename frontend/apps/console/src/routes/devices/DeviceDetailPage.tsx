@@ -509,7 +509,10 @@ function DeviceReadingsPanel({ deviceToken }: { deviceToken: string }) {
   if (loading) return <LoadingState description={t('loadingReadings')} />;
   if (error) return <ErrorState description={error} />;
 
-  const readings = data ?? [];
+  const readings = data?.readings ?? [];
+  // An older device-state (mid-upgrade) cannot serve a text reading: say so in its cell rather
+  // than show it as having no value.
+  const textServed = data?.textServed ?? true;
   if (readings.length === 0) {
     return <EmptyState description={t('noMeasurements')} />;
   }
@@ -526,7 +529,11 @@ function DeviceReadingsPanel({ deviceToken }: { deviceToken: string }) {
           <DataTableRow key={m.id}>
             <DataTableCell className="font-medium text-foreground">{m.name}</DataTableCell>
             <DataTableCell className="max-w-[24rem] truncate font-mono text-foreground" data-shot-mask>
-              <span title={m.value == null ? (m.textValue ?? undefined) : undefined}>{m.value ?? m.textValue ?? '—'}</span>
+              {m.value == null && !textServed ? (
+                <span className="font-sans text-muted-foreground">{t('readingTextAfterUpgrade')}</span>
+              ) : (
+                <span title={m.value == null ? (m.textValue ?? undefined) : undefined}>{m.value ?? m.textValue ?? '—'}</span>
+              )}
             </DataTableCell>
             <DataTableCell className="text-muted-foreground" data-shot-mask>{formatTime(m.occurredTime)}</DataTableCell>
           </DataTableRow>

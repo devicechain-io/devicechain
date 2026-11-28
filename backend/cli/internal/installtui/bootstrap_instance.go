@@ -29,7 +29,8 @@ type InstanceSeed struct {
 	NoTLS                            bool
 	// FromFlag names each flag the command line supplied, by its flag name
 	// ("profile", "host", "enable-area", "no-tls", "object-store"; "name" for the
-	// positional instance name). Those values are labelled "from --flag".
+	// positional instance name). Those values are labelled "from --flag", and the
+	// name "from the command line".
 	FromFlag map[string]bool
 	// ClusterShape describes the cluster the instance inherits (footprint and
 	// topology). It is shown and never edited here.
@@ -301,7 +302,10 @@ func (m *instanceModel) screen(t bsTheme) bsScreen {
 		if m.focus == f {
 			mark, role = t.focusMark()+" ", roleFocus
 		}
-		if from[flag] {
+		switch {
+		case from[flag] && flag == "name":
+			value += "  (from the command line)" // the positional argument has no flag
+		case from[flag]:
 			value += "  (from --" + flag + ")"
 		}
 		for i, v := range wrap(value, w-16) {

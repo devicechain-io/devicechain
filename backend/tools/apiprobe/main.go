@@ -171,6 +171,9 @@ const usage = `apiprobe — write one of every creatable entity, then prove it r
         seconds of an upgrade that REPLACES the signing key can refuse a valid
         token while the old user-management pod stops. Default 0: no retries, the
         first 401 exits DENIED.
+        --authored-via <DOOR>  also require every version of the seeded device
+        profile to read exactly [DOOR] in authoredVia (MISMATCH otherwise). The
+        upgrade drill passes UNKNOWN when the baseline recorded no save doors.
 
   apiprobe readsweep --receipt <path> --schemas <dir> [flags]
         Call every door the DEPLOYED release's schemas serve that this tool can
@@ -214,11 +217,19 @@ const usage = `apiprobe — write one of every creatable entity, then prove it r
         assignment need the instance to allow unverified artifacts, so a rig asks
         before it makes that edit.
 
-  apiprobe attrwrite --receipt <file> [--url <graphql>] [--count N]
+  apiprobe attrwrite --receipt <file> [--url <graphql>] [--count N] [--key K] [--delete]
         Rewrite the seeded device's attribute with the value it already holds, N times,
         signed in as the seed's tenant identity. --url sends the writes to one pod rather
         than the ingress. The upgrade drill's attrlock phase uses it to drive a
-        previous-release pod and a current one at the same device.
+        previous-release pod and a current one at the same device. --key writes another
+        SHARED key; --delete deletes it instead, and each delete must find the row.
+
+  apiprobe purgetenant seed --tenant <token> --out <file> [--keys N]
+  apiprobe purgetenant delete --state <file> [--user-url <base>]
+        The attrguard phase's tenant purge. seed: a throwaway tenant with one device and
+        N SHARED attributes, through the instance. delete: as the superuser, at --user-url
+        (user-management's base URL, so one pod) when given, remove the tenant
+        administrator's membership and deleteTenant. The rig judges the erasure in SQL.
 
   apiprobe bulkchange <action> ...
         The upgrade drill's bulk-change phase: seed a drill fleet on a profile of its own, plan,
@@ -289,6 +300,8 @@ func main() {
 		err = runStringMetric(ctx, os.Args[2:])
 	case "attrwrite":
 		err = runAttrWrite(ctx, os.Args[2:])
+	case "purgetenant":
+		err = runPurgeTenant(ctx, os.Args[2:])
 	case "bulkchange":
 		err = runBulkChange(ctx, os.Args[2:])
 	case "ssobaseline":

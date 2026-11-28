@@ -9482,8 +9482,9 @@ type Mutation {
     """
     Preview. Starts a READY operation. The caller presents the contract digest they reviewed; a different one is
     CONTRACT_DIGEST_MISMATCH. The caller approves the contract and the operation runs on their behalf. Refused with
-    BULK_CHANGES_NOT_ACTIVATED when the database does not enforce the device attribute writer protocol. Needs
-    device:write and fleet:operate.
+    BULK_CHANGES_NOT_ACTIVATED when the database does not enforce the device attribute writer protocol or orphaned
+    device attribute rows remain, and ACTIVATION_CHECK_UNAVAILABLE (retryable; nothing is started) when the check for
+    those rows could not be completed. Needs device:write and fleet:operate.
     """
     startBulkChange(
         """Preview. The READY bulk change's token."""
@@ -9502,7 +9503,8 @@ type Mutation {
     """
     Preview. Resumes a PAUSED operation on the caller's behalf. The digest must be the current contract's. A change to the
     limits is applied only if it stays within the approved contract (CONTRACT_WIDENED otherwise); a limit that is still
-    reached is THRESHOLD_STILL_EXCEEDED. Needs device:write and fleet:operate.
+    reached is THRESHOLD_STILL_EXCEEDED. Refused like a start with BULK_CHANGES_NOT_ACTIVATED or, retryable,
+    ACTIVATION_CHECK_UNAVAILABLE. Needs device:write and fleet:operate.
     """
     resumeBulkChange(
         """Preview. The PAUSED bulk change's token."""
@@ -9963,7 +9965,10 @@ input BulkChangeAmbiguityResolution {
   allAmbiguous: Boolean
   """Preview. The person's verdict."""
   verdict: BulkChangeVerdict!
-  """Preview. Reason for the verdict, from 1 to 1000 characters."""
+  """
+  Preview. Reason for the verdict, from 1 to 1000 characters. Served back as each line's resolutionNote to every
+  holder of device:read, so keep secrets out of it.
+  """
   note: String!
 }
 
@@ -10159,7 +10164,7 @@ type BulkChangeLine {
   overrideChanged: Boolean!
   """Preview. Sign-in name of the person who resolved the line."""
   resolvedBy: String
-  """Preview. The resolution's shared note. Null once redacted."""
+  """Preview. The resolution's shared note, visible to every holder of device:read. Null once redacted."""
   resolutionNote: String
   """Preview. When it was resolved."""
   resolvedAt: String
@@ -10265,9 +10270,9 @@ input BulkChangeSearchCriteria {
   pageNumber: Int!
   """Preview. Rows per page."""
   pageSize: Int!
-  """Preview. Only operations in this dispatch state."""
+  """Preview. Only operations in this dispatch state, one of the BulkChangeDispatch values. Any other value is refused."""
   dispatch: String
-  """Preview. Only operations in this evidence state."""
+  """Preview. Only operations in this evidence state, one of the BulkChangeEvidence values. Any other value is refused."""
   evidence: String
   """Preview. Only operations of this kind."""
   kind: String
@@ -10279,12 +10284,14 @@ input BulkChangeLineSearchCriteria {
   pageNumber: Int!
   """Preview. Rows per page."""
   pageSize: Int!
-  """Preview. Only lines in this posting state."""
+  """Preview. Only lines in this posting state, one of the BulkChangeLinePosting values. Any other value is refused."""
   posting: String
-  """Preview. Only lines with this settlement."""
+  """Preview. Only lines with this settlement, one of the BulkChangeLineSettlement values. Any other value is refused."""
   settlement: String
   """Preview. Only lines with this code."""
   code: String
+  """Preview. Only lines after this ordinal. To read every line of a running operation, ask for page 1 after the last ordinal read until a page is empty: a page number skips lines when the driver or settlement moves lines out of the filter between pages."""
+  afterOrdinal: Int
 }
 
 """Preview. A change to the limits an operation runs under when it is resumed. Anything looser than the approved contract is refused."""

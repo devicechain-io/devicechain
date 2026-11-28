@@ -85,6 +85,8 @@ type Api struct {
 	fleetSettlementFastCursor     fleetSettlementCursor
 	fleetSettlementDeadlineCursor fleetSettlementCursor
 	fleetMaintenanceCursor        fleetMaintenanceCursor
+	// fleetErasureCursor is where each tenant's next erasure repair pass resumes.
+	fleetErasureCursor fleetErasureCursor
 	// DeviceCredentialChecker shares password backoff between HTTP uplinks and MQTT connects.
 	DeviceCredentialChecker *credential.Checker
 

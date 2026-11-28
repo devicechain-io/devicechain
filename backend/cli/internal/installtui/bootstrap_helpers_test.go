@@ -161,7 +161,7 @@ func bsSetup(caps terminal.Capabilities) BootstrapSetup {
 		},
 		Escrow: EscrowSeed{
 			DefaultPath: func(name string) string { return "/home/op/.devicechain/escrow/" + name + "-rootkey.escrow" },
-			ValidatePath: func(p string) error {
+			ValidatePath: func(_, p string) error {
 				if strings.HasSuffix(p, "exists.escrow") {
 					return errors.New("refusing to overwrite the existing file " + p)
 				}

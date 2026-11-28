@@ -50,6 +50,11 @@ func TestInstallOnAConPTY(t *testing.T) {
 		// tui: the terminal UI takes the console, and keys are typed once it has.
 		tui  bool
 		keys string
+		// ready is text the terminal UI must have DRAWN before the keys are typed. Taking
+		// the console is not drawing a screen: line input goes off before the first frame
+		// reaches the console, so a key typed in between is read before any screen is on
+		// it, and a Ctrl+C there cancels from a screen that was never drawn.
+		ready string
 		// exit is the status dcctl must exit with. The dry run rehearses as plain output,
 		// and its preflight fails here for want of the tools.
 		exit uint32
@@ -61,7 +66,7 @@ func TestInstallOnAConPTY(t *testing.T) {
 		{name: "dry-run", args: []string{"install", "local", "--ui=tui", "--dry-run", "--version", "v1.12.0"}, exit: 1,
 			shows: "Preflight:"},
 		{name: "tui-ctrl-c", args: []string{"install", "local", "--ui=tui", "--no-splash", "--version", "v1.12.0"}, tui: true, keys: "\x03",
-			exit: 1, shows: "No changes have been made"},
+			ready: "No changes have been made", exit: 1, shows: "No changes have been made"},
 		{name: "tui-ctrl-c-splash", args: []string{"install", "local", "--ui=tui", "--version", "v1.12.0"}, tui: true, keys: "\x03", exit: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -75,6 +80,9 @@ func TestInstallOnAConPTY(t *testing.T) {
 				during := pc.awaitRawInput(t, env, before, proc)
 				if during.in == before.in {
 					t.Fatalf("the terminal UI never took the console (input mode %#x throughout)", before.in)
+				}
+				if tc.ready != "" {
+					pc.awaitText(t, tc.ready, proc)
 				}
 				pc.type_(t, tc.keys)
 			}
@@ -347,6 +355,21 @@ func (c *conPTY) awaitRawInput(t *testing.T, env []string, before consoleModes, 
 			t.Fatalf("line input still on (mode %#x) %v after dcctl started; screen:\n%s", m.in, 45*time.Second, c.text())
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// awaitText waits until the console has drawn want. It fails if dcctl exits first.
+func (c *conPTY) awaitText(t *testing.T, want string, proc windows.Handle) {
+	t.Helper()
+	deadline := time.Now().Add(45 * time.Second)
+	for !strings.Contains(c.text(), want) {
+		if ev, _ := windows.WaitForSingleObject(proc, 0); ev == windows.WAIT_OBJECT_0 {
+			t.Fatalf("dcctl exited before it drew %q; screen:\n%s", want, c.text())
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("dcctl never drew %q in %v; screen:\n%s", want, 45*time.Second, c.text())
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

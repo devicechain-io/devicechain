@@ -23,7 +23,7 @@ var (
 
 var testCmd = &cobra.Command{
 	Use:   "test <path>",
-	Short: "Run rule unit tests against a tenant's detection rules (preview)",
+	Short: "Run rule unit tests against a tenant's detection rules",
 	Long: `Run rule unit tests: check what a tenant's detection rules would do over events you describe,
 without waiting for them to happen and without touching live traffic.
 
@@ -58,8 +58,8 @@ A directory with no test file is an error, because a run that checks nothing mus
 expectation about a rule the evaluation did not run is an error, never a pass. When the platform
 is busy, dcctl waits and retries a few times before reporting it.
 
-The file formats are in the preview tier (apiVersion devicechain.io/ruletest/v1alpha1) and may
-change in a minor release, with the change in the release notes.
+Rule testing is covered by the versioning policy from v1.10; the scenario and test file formats
+keep the version devicechain.io/ruletest/v1alpha1.
 
 The server authorizes the evaluation as the identity you sign in with (device:read). The password
 may be given in the DCCTL_PASSWORD environment variable instead of --password, which keeps it out

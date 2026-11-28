@@ -8,7 +8,7 @@ note: --ha adds two more NATS servers per instance and their volumes; the printe
 
 -- stderr (0 bytes) --
 
--- engine (1668 bytes) --
+-- engine (1692 bytes) --
 {
   "Provider": "local",
   "Options": {
@@ -16,6 +16,7 @@ note: --ha adds two more NATS servers per instance and their volumes; the printe
     "KubeContext": "",
     "Cluster": "devicechain",
     "CreateCluster": false,
+    "ExposeLAN": false,
     "Profile": "",
     "DryRun": false,
     "AssumeYes": false,

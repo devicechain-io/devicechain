@@ -4,14 +4,17 @@
 #
 # Resolves one leg of the `go` job into the arguments its `go test` and race steps pass.
 #
-#   hack/go-leg.sh <module> <out-file>   # reads LEG_PKGS, LEG_EXCLUDE, LEG_SHARD; writes one arg per line
+#   hack/go-leg.sh <module> <out-file>   # reads LEG_PKGS, LEG_EXCLUDE, LEG_SHARD, LEG_TESTS, LEG_SKIP_TESTS;
+#                                        # writes one arg per line
 #   hack/go-leg.sh --self-test           # the shard partition and the catch-all, against cases that must fail
 #
-# The leg comes from hack/ci-select.py's plan, one of three shapes:
+# The leg comes from hack/ci-select.py's plan, one of four shapes:
 #
 #   LEG_PKGS=""        LEG_EXCLUDE="./messaging/"  -> the catch-all: `go list ./...` MINUS the split packages
 #   LEG_PKGS="./x/ ./y/"                           -> exactly those packages (a reader-selected leg)
-#   LEG_PKGS="./messaging/" LEG_SHARD="2/3"        -> shard 2 of 3 of one package's top-level tests
+#   LEG_PKGS="./messaging/" LEG_SHARD="2/3"        -> shard 2 of 3 of one package's top-level tests,
+#                         LEG_SKIP_TESTS="TestX"   ->   dealt from the list WITHOUT TestX (ci-select ALONE)
+#   LEG_PKGS="./messaging/" LEG_TESTS="TestX"      -> exactly TestX of that package, in a leg of its own
 #
 # 🔴 THE CATCH-ALL IS A SUBTRACTION, NOT A LIST. It is computed here, in the leg, from the
 # package loader's own `go list ./...`, so a package added tomorrow lands in it with no edit
@@ -24,11 +27,29 @@
 # residue class: the shards are disjoint and their union is the list by construction (the
 # self-test pins both). A shard that would run nothing fails, since `-run` matching nothing
 # exits 0 with "no tests to run", indistinguishable from a pass.
+#
+# 🔴 AN ALONE TEST IS SUBTRACTED BEFORE THE DEAL, AND RUN BY NAME. Every name in LEG_TESTS and
+# LEG_SKIP_TESTS must be in the package's `go test -list` (a renamed test fails here, rather than
+# its own leg running nothing while the shards deal it anyway), and a shard prints the arithmetic
+# |all| = |dealt| + |alone|. The self-test pins that the shards plus the alone tests are the list.
 set -euo pipefail
 
 # shard_names <i> <n>: stdin is the test names, one per line; prints those in shard i of n.
 shard_names() {
   LC_ALL=C sort -u | awk -v i="$1" -v n="$2" 'NF { if ((k++ % n) == i - 1) print }'
+}
+
+# without <names>: stdin is the test names, one per line; prints those not in the space-separated names.
+without() {
+  awk -v skip="$1" 'BEGIN { n = split(skip, s, " "); for (j = 1; j <= n; j++) drop[s[j]] = 1 } NF && !($0 in drop)'
+}
+
+# require_listed <all> <names> <what>: every name must be a listed test; a stale ALONE entry fails.
+require_listed() {
+  local t
+  for t in $2; do
+    grep -qxF -- "$t" <<<"$1" || { echo "::error::$3 $t is not among the package's tests (renamed or moved?); fix ALONE in hack/ci-select.py" >&2; return 1; }
+  done
 }
 
 # test_names <pkg>: the top-level tests, examples and fuzz targets `go test -run` can select.
@@ -60,6 +81,28 @@ self_test() {
   else
     echo "  ok: two of three shards are not the whole list"
   fi
+  # ALONE: the shards of the list without the alone tests, plus the alone tests, are the list once.
+  local alone="Test007 Test031"
+  union="$(tr ' ' '\n' <<<"$alone")"$'\n'
+  for i in 1 2 3; do union+="$(without "$alone" <<<"$list" | shard_names "$i" 3)"$'\n'; done
+  if [ "$(sed '/^$/d' <<<"$union" | LC_ALL=C sort)" != "$(LC_ALL=C sort <<<"$list")" ]; then
+    echo "  FAIL: three shards without the alone tests, plus the alone tests, are not a partition of the list"; fails=1
+  else
+    echo "  ok: three shards without 2 alone tests, plus those 2, partition 47 tests"
+  fi
+  # The counterweight: dealing the shards from the WHOLE list runs each alone test twice.
+  union="$(tr ' ' '\n' <<<"$alone")"$'\n'
+  for i in 1 2 3; do union+="$(shard_names "$i" 3 <<<"$list")"$'\n'; done
+  if [ "$(sed '/^$/d' <<<"$union" | LC_ALL=C sort)" = "$(LC_ALL=C sort <<<"$list")" ]; then
+    echo "  FAIL: shards that kept the alone tests compared equal to the list"; fails=1
+  else
+    echo "  ok: shards that keep the alone tests run them twice, and the check sees it"
+  fi
+  if require_listed "$list" "Test007 TestGone" "self-test:" 2>/dev/null; then
+    echo "  FAIL: an alone test the list does not print was accepted"; fails=1
+  else
+    echo "  ok: an alone test the list does not print is refused"
+  fi
   # Order-independence: every leg must agree whatever order `go test -list` printed.
   if [ "$(shard_names 2 3 <<<"$list")" != "$(shard_names 2 3 < <(sort -r <<<"$list"))" ]; then
     echo "  FAIL: the shard depends on input order"; fails=1
@@ -78,18 +121,35 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../$module"
 pkgs="${LEG_PKGS:-}"
 exclude="${LEG_EXCLUDE:-}"
 shard="${LEG_SHARD:-}"
+tests="${LEG_TESTS:-}"
+skip="${LEG_SKIP_TESTS:-}"
 args=()
 
-if [ -n "$shard" ]; then
+if [ -n "$tests" ]; then
+  if [ -n "$shard" ] || [ -n "$skip" ]; then
+    echo "::error::an alone leg (LEG_TESTS) is no shard and skips nothing" >&2; exit 1
+  fi
+  read -r -a p <<<"$pkgs"
+  [ "${#p[@]}" -eq 1 ] || { echo "::error::an alone leg names exactly one package, got: $pkgs" >&2; exit 1; }
+  all="$(test_names "${p[0]}")"
+  require_listed "$all" "$tests" "alone test"
+  mine="$(tr ' ' '\n' <<<"$tests" | sed '/^$/d' | LC_ALL=C sort -u)"
+  echo "leg: $module ${p[0]} alone runs $(grep -c . <<<"$mine") of $(grep -c . <<<"$all") top-level tests: ${tests}"
+  args=(-run "^($(paste -sd'|' <<<"$mine"))\$" "${p[0]}")
+elif [ -n "$shard" ]; then
   i="${shard%/*}"
   n="${shard#*/}"
   read -r -a p <<<"$pkgs"
   [ "${#p[@]}" -eq 1 ] || { echo "::error::a shard names exactly one package, got: $pkgs" >&2; exit 1; }
   all="$(test_names "${p[0]}")"
   [ -n "$all" ] || { echo "::error::${p[0]} lists no tests; a shard of it would run nothing" >&2; exit 1; }
-  mine="$(shard_names "$i" "$n" <<<"$all")"
+  require_listed "$all" "$skip" "the shards skip"
+  dealt="$(without "$skip" <<<"$all")"
+  na="$(grep -c . <<<"$all")"; nd="$(grep -c . <<<"$dealt" || true)"; ns="$(wc -w <<<"$skip" | tr -d ' ')"
+  [ "$na" -eq $((nd + ns)) ] || { echo "::error::${p[0]}: $na tests != $nd dealt + $ns alone" >&2; exit 1; }
+  mine="$(shard_names "$i" "$n" <<<"$dealt")"
   [ -n "$mine" ] || { echo "::error::shard $shard of ${p[0]} is empty" >&2; exit 1; }
-  echo "leg: $module ${p[0]} shard $shard runs $(grep -c . <<<"$mine") of $(grep -c . <<<"$all") top-level tests"
+  echo "leg: $module ${p[0]} shard $shard runs $(grep -c . <<<"$mine") of the $nd top-level tests dealt ($na listed, $ns in legs of their own${skip:+: $skip})"
   args=(-run "^($(paste -sd'|' <<<"$mine"))\$" "${p[0]}")
 elif [ -n "$pkgs" ]; then
   read -r -a args <<<"$pkgs"

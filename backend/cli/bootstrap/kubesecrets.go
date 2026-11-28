@@ -20,14 +20,22 @@ import (
 type credential struct {
 	value string
 	// found marks a value dcctl found rather than made: everything in a kubeconfig.
-	// It is registered redact-only (AddRedaction), as a whole token, and never
-	// refuses an event code. A kubeconfig holds credentials of users and plugins
-	// this run never touches, and they can be ordinary words: an unused user whose
-	// password is "install" must not stop an install, and a profile named "prod"
-	// must not be cut out of "production". dcctl's own secrets (a root key, a
-	// passphrase, a minted password, the alert and backup credentials it was given)
-	// are registered strictly.
+	// A typed or credential-shaped value is registered redact-only (AddRedaction),
+	// as a whole token, and never refuses an event code. A kubeconfig holds
+	// credentials of users and plugins this run never touches, and they can be
+	// ordinary words: an unused user whose password is "install" must not stop an
+	// install. Ordinary plugin settings, such as a profile named "prod", are not
+	// registered. dcctl's own secrets (a root key, a passphrase, a minted password,
+	// the alert and backup credentials it was given) are registered strictly, as
+	// substrings.
 	found bool
+	// generated marks one of dcctl's own values that it generated at random: the
+	// instance root key and the credentials it mints. Only such a value refuses an
+	// event code that contains it (AddGeneratedSecret). A value a person chose — the
+	// escrow passphrase, an SMTP password — can be a word of dcctl's own vocabulary
+	// ("install", "bootstrap"), and refusing the codes that spell it made a run
+	// that had done everything exit 1; it is redacted from text all the same.
+	generated bool
 	// typed marks a found value that is a credential by what it is, not by where it
 	// sits: a token, a password, a client key, a URL's password, and an exec env
 	// value, exec argument or auth-provider setting whose NAME says it holds one.
@@ -158,7 +166,9 @@ func credentialShaped(a string) bool {
 // registerCredentials registers each value with the hub, and returns how many it
 // could not cover.
 //
-// A found value is registered redact-only, always; one of dcctl's own strictly.
+// A found value is registered redact-only if typed or credential-shaped; ordinary
+// plugin settings are skipped. One of dcctl's own is registered strictly, refusing
+// identifiers only when dcctl generated it.
 //
 // 🔴 A VALUE THE HUB REFUSES IS NOT DROPPED SILENTLY. One of dcctl's own too short for
 // a strict registration (under installflow.MinSecretBytes) is registered redact-only,
@@ -170,7 +180,10 @@ func registerCredentials(events installflow.Reporter, creds []credential) (uncov
 		return 0
 	}
 	for _, c := range creds {
-		if !c.found && events.AddSecret(c.value) == nil {
+		if c.found && !c.typed && !credentialShaped(c.value) {
+			continue
+		}
+		if !c.found && strictly(events, c) == nil {
 			continue
 		}
 		if events.AddRedaction(c.value) != nil && (!c.found || c.typed) {
@@ -178,6 +191,14 @@ func registerCredentials(events installflow.Reporter, creds []credential) (uncov
 		}
 	}
 	return uncovered
+}
+
+// strictly registers one of dcctl's own values: see credential.generated.
+func strictly(events installflow.Reporter, c credential) error {
+	if c.generated {
+		return events.AddGeneratedSecret(c.value)
+	}
+	return events.AddSecret(c.value)
 }
 
 // registerKubeconfigSecrets tells the hub the kubeconfig's credentials, so a tool

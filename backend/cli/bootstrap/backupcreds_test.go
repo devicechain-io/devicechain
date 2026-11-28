@@ -66,7 +66,7 @@ func TestBackupEndpointCredentialsAreDeprecatedWithoutDisclosure(t *testing.T) {
 				t.Fatalf("got %d warnings, want one", len(warnings))
 			}
 			w := warnings[0]
-			for _, want := range []string{"credentials in backup endpointUrl", "deprecated", "refused in the next major release",
+			for _, want := range []string{"credentials in backup endpointUrl", "deprecated", "refused in a later major release, after the deprecation period",
 				"--backup-credentials-file", "accessKeyId", "secretAccessKey", installflow.RedactURL(tc.endpoint)} {
 				if !strings.Contains(w, want) {
 					t.Errorf("warning lacks %q: %s", want, w)

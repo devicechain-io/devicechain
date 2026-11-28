@@ -21,9 +21,13 @@ type Options struct {
 	// install` sets it: a cluster is prepared once, and instances are built on one that
 	// has been.
 	CreateCluster bool
-	Profile       string
-	DryRun        bool
-	AssumeYes     bool
+	// ExposeLAN publishes a cluster that EnsureCluster CREATES on every host interface
+	// instead of loopback only (`dcctl install local --expose-lan`). It changes nothing about
+	// a cluster that already exists: kind fixes a node's port bindings when it creates it.
+	ExposeLAN bool
+	Profile   string
+	DryRun    bool
+	AssumeYes bool
 	// ImageRegistry/ImageVersion select the published image source (defaults
 	// DefaultImageRegistry/DefaultImageVersion). BuildImages opts into building
 	// from source into a local registry instead (developer path).

@@ -42,7 +42,9 @@
 #                                 not upgrade onto: the same command must REFUSE,
 #                                 say to destroy and bootstrap, and damage nothing
 #   hack/upgrade-rig.sh ranwhat   which drill actually ran — refuses when NEITHER did
-#   hack/upgrade-rig.sh verify    every seeded row must read back UNCHANGED
+#   hack/upgrade-rig.sh verify    every seeded row must read back UNCHANGED, and a profile version
+#                                 published by a baseline that recorded no save doors reads
+#                                 authoredVia UNKNOWN
 #   hack/upgrade-rig.sh tablesweep  every tenant-scoped table must hold a seeded row,
 #                                   or say why it is legitimately empty
 #   hack/upgrade-rig.sh readsweep every door the served schemas expose must still
@@ -50,13 +52,17 @@
 #                                 one a round trip of one's own writes cannot ask
 #   hack/upgrade-rig.sh control   THE NEGATIVE CONTROLS: break the instance three
 #                                 different ways and require the right check to
-#                                 notice each, with the exact exit code for it
+#                                 notice each, with the exact exit code for it (and,
+#                                 first, ask verify for a save door no version carries)
 #   hack/upgrade-rig.sh infra     the instance's broker and event store must carry
 #                                 the release's settings, by value, and still enforce
 #                                 broker auth; nothing they owned may have gone
 #   hack/upgrade-rig.sh oldpods   a pod of the BASELINE release must still START on the
 #                                 upgraded configuration (the v1.4 drill-5 failure mode),
-#                                 and the check is shown to fail against a planted key
+#                                 and the check is shown to fail against a planted key;
+#                                 the event-management one must leave the analytics views
+#                                 unchanged (and skip a newer surface, counted, once the
+#                                 baseline knows surface generations)
 #   hack/upgrade-rig.sh executor  the in-cluster executor is installed as resource
 #                                 definitions only and is inert, shown to fail against
 #                                 a planted InstanceOperation
@@ -66,7 +72,12 @@
 #   hack/upgrade-rig.sh attrguard the attribute guard (the database trigger that refuses a write to a
 #                                 device's SHARED attribute made outside the writer protocol) reads ENFORCED
 #                                 after the upgrade, a BASELINE pod's attribute writes still pass under it,
-#                                 and an unmarked write is refused; the refusal is shown to be the trigger's
+#                                 and an unmarked write is refused; the refusal is shown to be the trigger's.
+#                                 A BASELINE pod's attribute delete, and a tenant purge run by a BASELINE
+#                                 user-management alone, pass under it too; each against an unmarked control
+#   hack/upgrade-rig.sh stringmetric  a STRING metric is declared, a text reading posted over the HTTP ingress
+#                                 reads back through both read doors, and an aggregate over it is refused;
+#                                 a probe reading the wrong field is shown to fail with MISMATCH
 #   hack/upgrade-rig.sh bulkchange a 2,000-device bulk change runs through an upgraded pod while a BASELINE pod
 #                                 writes, deletes and restarts; every baseline write is accepted, every prior
 #                                 matches the revisions, every line settles on evidence, deleted devices are
@@ -2131,7 +2142,26 @@ verify_auth_window() {
 # window — which the kind drill would catch only when the rotation race happened to
 # land, i.e. sometimes.
 drill_verify() {
-  run_verify --auth-window "$(verify_auth_window)"
+  run_verify --auth-window "$(verify_auth_window)" "$@"
+}
+
+# authored_via_expected prints the save door every seeded profile version must read after the upgrade, and
+# nothing when there is none to require: UNKNOWN when the deployed tree serves DeviceProfileVersion.authoredVia
+# and the baseline's did not, because the baseline published those versions before doors were recorded.
+# A baseline that records doors published the seed's versions through one, which this check does not model.
+authored_via_expected() {
+  local new="$repo_root/backend/services/device-management/graphql/schema.graphql"
+  local old="$baseline_src/backend/services/device-management/graphql/schema.graphql"
+  authored_via_served "$new" || return 0
+  [[ -f "$old" ]] || { echo "no baseline schema at $old to say whether $baseline_tag recorded save doors" >&2; return 1; }
+  authored_via_served "$old" && return 0
+  printf 'UNKNOWN'
+}
+
+# authored_via_served <schema file> says whether its DeviceProfileVersion type declares authoredVia.
+authored_via_served() {
+  awk '/^type DeviceProfileVersion[ {]/{in_type=1; next} in_type && /^}/{exit} in_type && /^[[:space:]]+authoredVia:/{found=1; exit}
+    END { exit found ? 0 : 1 }' "$1"
 }
 
 cmd_verify() {
@@ -2147,8 +2177,13 @@ there is no telling whether this upgrade replaced the signing key."
   window="$(verify_auth_window)"
   note "a token refused with 401 is retried for $window (0s: not at all), because the
 upgrade from $baseline_tag $([[ "$window" == 0s ]] && printf 'keeps' || printf 'replaces') the signing key"
-  local rc=0
-  drill_verify || rc=$?
+  local rc=0 doors door_args=()
+  doors="$(authored_via_expected)" || fail "cannot tell whether $baseline_tag recorded save doors (above)"
+  if [[ -n "$doors" ]]; then
+    door_args=(--authored-via "$doors")
+    note "$baseline_tag recorded no save doors, so every seeded profile version must read authoredVia [$doors]"
+  fi
+  drill_verify ${door_args[@]+"${door_args[@]}"} || rc=$?
 
   # 🔴 INCONCLUSIVE IS NOT A FINDING, and this rig used to say it was: every
   # non-zero code got the same "rows did NOT survive" headline, including the one
@@ -2458,7 +2493,7 @@ INCONCLUSIVE and fix the tool before reading anything into it."
 # happily against a probe that was broken in the positive direction too.
 expect_verify_to_fail() {
   local want="$1" label="$2" rc=0
-  run_verify || rc=$?
+  run_verify "${@:3}" || rc=$?
   if [[ $rc -eq 0 ]]; then
     fail "THE $label CONTROL DID NOT HOLD. The instance was damaged on purpose and
 verify still reported every row intact — so its PASS above proves nothing, and
@@ -2498,6 +2533,18 @@ cmd_control() {
   # sweep sees something verify cannot". The two controls below damage rows verify
   # reads, permanently, so after either of them verify can never pass again and the
   # second half of this claim becomes unmeasurable.
+
+  # CONTROL 0 damages nothing, so it can run first: verify's save-door read, asked for a door no seeded
+  # version can carry, must fail with MISMATCH. Without it the [UNKNOWN] pass is a read that cannot fail.
+  local doors
+  doors="$(authored_via_expected)" || fail "cannot tell whether $baseline_tag recorded save doors (above)"
+  if [[ -n "$doors" ]]; then
+    say "CONTROL 0 — verify asked for save door DESCRIBE, which no $baseline_tag version can carry"
+    expect_verify_to_fail "$APIPROBE_EXIT_MISMATCH" "SAVE-DOOR" --authored-via DESCRIBE
+  else
+    note "no save-door control: verify does not read authoredVia for a $baseline_tag baseline (authored_via_expected)"
+  fi
+
   say "CONTROL 1 — un-addressing a stored fence-set snapshot, so the SWEEP has something to fail on"
   local pod schema damaged tenant
   pod="$(pg_pod)"
@@ -2706,6 +2753,7 @@ operator_in_step() {
 
 cmd_operator() {
   need kubectl
+  need jq
   [[ -s "$target_file" ]] || fail "$target_file is missing; run 'upgrade' first. Without it this
 check has no version to measure the operator AGAINST, and comparing it to a guess
 would report skew or agreement at random."
@@ -2794,7 +2842,41 @@ Whichever it is, an operator following the documentation lands exactly here, whi
 is why this blocks the release rather than being noted in it."
   fi
 
+  operator_instance_versions
   say "OPERATOR IN STEP — $matched deployment(s) in $ns are running $want"
+}
+
+# operator_instance_versions: the Instance resource definition this release installs serves the seeded
+# Instance at v1, and the versions the API server has STORED are still exactly the tree's storage version.
+# A release that adds a served version must not quietly move storage; one that does lists a second stored
+# version, and every object would then need migrating before the old one could ever be dropped.
+#
+# Control: a read at v2, a version the definition does not serve, must FAIL, so the v1 read is not a
+# kubectl that resolves any version to the same thing.
+operator_instance_versions() {
+  local crd_file="$repo_root/backend/k8s/config/crd/bases/core.devicechain.io_instances.yaml" storage got stored rc
+  grep -qE '^    name: v1$' "$crd_file" || {
+    note "the tree's Instance resource definition serves no v1, so there is no v1 read to make"
+    return 0
+  }
+  storage="$(awk '/^    name: /{n=$2} /^    storage: true/{print n}' "$crd_file")"
+  [[ "$storage" =~ ^v[0-9a-z]+$ ]] || fail "cannot read the storage version out of $crd_file (got '$storage')"
+  got="$(kubectl --context "$kube_context" get instances.v1.core.devicechain.io "$instance" \
+    -o jsonpath='{.apiVersion} {.metadata.name}' 2>&1)" ||
+    fail "THE SEEDED INSTANCE DOES NOT READ AT v1: $got"
+  [[ "$got" == "core.devicechain.io/v1 $instance" ]] ||
+    fail "a read of the seeded Instance at v1 answered '$got', not core.devicechain.io/v1 $instance"
+  stored="$(kubectl --context "$kube_context" get crd instances.core.devicechain.io -o json | jq -c '.status.storedVersions')" ||
+    fail "could not read the Instance resource definition's stored versions"
+  [[ "$stored" == "[\"$storage\"]" ]] ||
+    fail "THE INSTANCE RESOURCE DEFINITION'S STORED VERSIONS ARE $stored, not exactly [\"$storage\"]: something
+stored Instances at a version other than the one this release declares for storage"
+  rc=0
+  kubectl --context "$kube_context" get instances.v2.core.devicechain.io "$instance" >/dev/null 2>&1 || rc=$?
+  [[ "$rc" -ne 0 ]] ||
+    fail "THE CONTROL DID NOT FAIL: a read of the Instance at v2, which the definition does not serve, answered, so the
+v1 read above does not show v1 is served"
+  note "the seeded Instance reads at v1, stored versions are exactly [\"$storage\"], and a read at v2 fails ✓"
 }
 
 # ---------------------------------------------------------------------------
@@ -3029,8 +3111,119 @@ oldpod_new_keys() {
 
 # The areas that read the keys a release adds: update-management (rolloutSafety),
 # command-delivery (commandProposals), event-sources (capture) and user-management, which
-# creates the placement table the shard seed describes. Others read the same documents.
-oldpod_areas="update-management command-delivery event-sources user-management"
+# creates the placement table the shard seed describes. device-state and event-processing
+# consume the same streams the upgraded pods do, and event-management also RECONCILES the
+# SQL/BI analytics surface on start, which is why it carries a check of its own below
+# (oldpod_analytics). Others read the same documents.
+oldpod_areas="update-management command-delivery event-sources user-management device-state event-processing event-management"
+
+# oldpod_tsdb_sql <sql> runs one query on the event store's primary, in the one database that holds the
+# analytics schema, and prints its rows. It returns non-zero, printing nothing, when there is no primary, no
+# such database or more than one: a guess here would compare views in the wrong place.
+oldpod_tsdb_sql() {
+  local primary dbs=() d n hit=""
+  primary="$(kubectl --context "$kube_context" -n "$(instance_namespace)" get clusters.postgresql.cnpg.io dc-tsdb \
+    -o jsonpath='{.status.currentPrimary}' 2>/dev/null)" || return 1
+  [[ -n "$primary" ]] || return 1
+  mapfile -t dbs < <(kubectl --context "$kube_context" -n "$(instance_namespace)" exec "$primary" -c postgres -- \
+    psql -U postgres -d postgres -Atqc "SELECT datname FROM pg_database WHERE NOT datistemplate AND datname <> 'postgres'" | tr -d '\r')
+  for d in "${dbs[@]}"; do
+    [[ -n "$d" ]] || continue
+    n="$(kubectl --context "$kube_context" -n "$(instance_namespace)" exec "$primary" -c postgres -- \
+      psql -U postgres -d "$d" -Atqc "SELECT count(*) FROM pg_namespace WHERE nspname = 'analytics'" | tr -d '\r')" || continue
+    if [[ "$n" == 1 ]]; then
+      [[ -z "$hit" ]] || return 1
+      hit="$d"
+    fi
+  done
+  [[ -n "$hit" ]] || return 1
+  kubectl --context "$kube_context" -n "$(instance_namespace)" exec "$primary" -c postgres -- \
+    psql -U postgres -d "$hit" -v ON_ERROR_STOP=1 -Atqc "$1" | tr -d '\r'
+}
+
+# The analytics views as "<name> <md5 of the definition> <options>", one per line, sorted: a definition or a
+# security_barrier option that moves changes the line.
+oldpod_views_sql="SELECT c.relname || ' ' || md5(pg_get_viewdef(c.oid)) || ' ' || coalesce(array_to_string(c.reloptions, ','), '')
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'analytics' AND c.relkind = 'v' ORDER BY c.relname"
+
+# oldpod_views_problem <before> <after> prints why the analytics views are NOT unchanged, and nothing when they
+# are. An empty "before" is a problem in itself: two empty listings are equal and prove nothing. Pure, so the
+# selftest hands it each case.
+oldpod_views_problem() {
+  if [[ -z "$1" ]]; then
+    printf 'the analytics schema holds no view, so there is no definition to compare\n'
+    return 0
+  fi
+  [[ "$1" == "$2" ]] || printf 'the analytics views changed:\nbefore:\n%s\nafter:\n%s\n' "$1" "$2"
+}
+
+# oldpod_counter <metrics text> <name> prints the value of an unlabelled counter whose exposed name ends in
+# <name> (the service prefixes it with its namespace and subsystem), and fails when there is no such series.
+oldpod_counter() {
+  awk -v want="$2" '$1 !~ /^#/ && (substr($1, length($1) - length(want) + 1) == want) { print $2; found = 1; exit }
+    END { exit found ? 0 : 1 }' <<<"$1"
+}
+
+# oldpod_analytics <copy deployment> is the event-management check, run once the copy is Ready (its start-up
+# reconcile of the analytics surface runs before it serves) against oldpod_views_before, which cmd_oldpods reads
+# before the copy is created:
+#
+#   - the view definitions are byte-for-byte what they were before it started. A release that widens a view
+#     relies on older pods leaving it alone, and a pod from before the surface was versioned does not know to;
+#   - when the BASELINE knows the surface generation and the stored one is NEWER than its own, the copy must
+#     count analytics_reconcile_newer_surface_skips_total at least once. Control: an upgraded pod, whose build
+#     generation is the stored one, counts zero, so the read can tell skipped from not.
+#
+# A baseline from before the generation protocol cannot count a skip (the counter does not exist in it), and
+# a stored generation equal to the baseline's gives it nothing to skip; both are said by name.
+oldpod_analytics() {
+  local copy="$1" ns after problem gen_file old_gen stored ops pod metrics count live_pod
+  ns="$(instance_namespace)"
+  after="$(oldpod_tsdb_sql "$oldpod_views_sql")" ||
+    fail "could not read the analytics views from the event store after the $baseline_tag event-management pod started"
+  problem="$(oldpod_views_problem "$oldpod_views_before" "$after")"
+  [[ -z "$problem" ]] || fail "THE $baseline_tag EVENT-MANAGEMENT POD'S START LEFT THE ANALYTICS SURFACE CHANGED, or there was none to check:
+$problem"
+  note "event-management: $(wc -l <<<"$after") analytics view definition(s) unchanged by the $baseline_tag pod's start ✓"
+
+  gen_file="$baseline_src/backend/services/event-management/model/analytics_generation.go"
+  if [[ ! -f "$gen_file" ]]; then
+    note "event-management: $baseline_tag predates the analytics surface generation, so its pod does not consult it and cannot count a newer-surface skip; the unchanged views above are the check"
+    return 0
+  fi
+  old_gen="$(sed -n 's/^const AnalyticsSurfaceGeneration = \([0-9][0-9]*\)$/\1/p' "$gen_file")"
+  [[ "$old_gen" =~ ^[0-9]+$ ]] || fail "cannot read AnalyticsSurfaceGeneration out of $gen_file"
+  stored="$(oldpod_tsdb_sql 'SELECT generation FROM "event-management".analytics_surface_generation WHERE id = 1')" ||
+    fail "could not read the stored analytics surface generation"
+  [[ "$stored" =~ ^[0-9]+$ ]] || fail "the stored analytics surface generation reads '$stored'"
+  if [[ "$stored" -le "$old_gen" ]]; then
+    note "event-management: the stored analytics surface generation ($stored) is not newer than $baseline_tag's ($old_gen), so there is nothing for its pod to skip"
+    return 0
+  fi
+  pod="$(kubectl --context "$kube_context" -n "$ns" get pods -l "$oldpod_label=$copy" -o jsonpath='{.items[0].metadata.name}')" ||
+    fail "could not find the $baseline_tag event-management pod"
+  ops="$(kubectl --context "$kube_context" -n "$ns" get pod "$pod" -o json |
+    jq -r '[.spec.containers[0].ports[]? | select(.name == "ops")][0].containerPort // empty')"
+  [[ -n "$ops" ]] || fail "the $baseline_tag event-management pod exposes no ops port to read metrics from"
+  metrics="$(MSYS_NO_PATHCONV=1 kubectl --context "$kube_context" get --raw "/api/v1/namespaces/$ns/pods/$pod:$ops/proxy/metrics")" ||
+    fail "could not read the $baseline_tag event-management pod's metrics"
+  count="$(oldpod_counter "$metrics" analytics_reconcile_newer_surface_skips_total)" ||
+    fail "the $baseline_tag event-management pod exports no analytics_reconcile_newer_surface_skips_total"
+  [[ "${count%%.*}" =~ ^[0-9]+$ && "${count%%.*}" -ge 1 ]] ||
+    fail "THE $baseline_tag EVENT-MANAGEMENT POD DID NOT SKIP A NEWER ANALYTICS SURFACE: stored generation $stored, its own $old_gen,
+and analytics_reconcile_newer_surface_skips_total reads $count. It reconciled a surface it does not understand."
+  live_pod="$(kubectl --context "$kube_context" -n "$ns" get pods -l "devicechain.io/functional-area=event-management,!$oldpod_label" \
+    -o jsonpath='{.items[0].metadata.name}')" || live_pod=""
+  [[ -n "$live_pod" ]] || fail "no upgraded event-management pod to read the control from"
+  metrics="$(MSYS_NO_PATHCONV=1 kubectl --context "$kube_context" get --raw "/api/v1/namespaces/$ns/pods/$live_pod:$ops/proxy/metrics")" ||
+    fail "could not read the upgraded event-management pod's metrics"
+  count="$(oldpod_counter "$metrics" analytics_reconcile_newer_surface_skips_total)" ||
+    fail "the upgraded event-management pod exports no analytics_reconcile_newer_surface_skips_total"
+  [[ "${count%%.*}" == 0 ]] ||
+    fail "THE SKIP CONTROL DID NOT HOLD: an upgraded event-management pod, whose generation is the stored one, counts $count newer-surface skips, so the count above does not tell a skip from a start"
+  note "event-management: the $baseline_tag pod skipped the newer analytics surface (generation $stored over its $old_gen) and counted it; an upgraded pod counts zero ✓"
+}
 
 # oldpod_image <live image> <tag> prints the baseline's published image of the same service:
 # the live image's last path segment, under the published registry, at <tag>. A digest or a tag
@@ -3113,6 +3306,12 @@ cmd_oldpods() {
       fail "cannot derive $baseline_tag's image of $area from '$live'"
     copy="oldpod-$area"
     names+=("$copy")
+    if [[ "$area" == event-management ]]; then
+      oldpod_views_before="$(oldpod_tsdb_sql "$oldpod_views_sql")" || {
+        oldpod_cleanup "${names[@]}"
+        fail "could not read the analytics views from the event store before the $baseline_tag event-management pod started"
+      }
+    fi
     oldpod_manifest "$json" "$copy" "$image" | kubectl --context "$kube_context" -n "$ns" apply -f - >/dev/null ||
       fail "could not create the $baseline_tag copy of $area ($image)"
     if ! oldpod_wait "$copy" 300; then
@@ -3125,6 +3324,13 @@ the baseline's strict loader does not know, which must stay absent until an oper
 it on in a separate roll."
     fi
     note "$area: a $baseline_tag pod started on the upgraded configuration ✓ ($image)"
+    if [[ "$area" == event-management ]]; then
+      # A subshell, so its failure comes back here and the copies are removed before the rig stops.
+      (oldpod_analytics "$copy") || {
+        oldpod_cleanup "${names[@]}"
+        fail "the $baseline_tag event-management pod's analytics check failed (above)"
+      }
+    fi
     ran=$((ran + 1))
   done
   [[ "$ran" -ge 2 ]] || {
@@ -3552,11 +3758,32 @@ versions must leave none."
 #   3. THE NEGATIVE CONTROL: an unmarked writer is refused with DCAP1, the same write marked is accepted, and the
 #      same unmarked write is accepted with the trigger switched off inside a rolled-back transaction. The third
 #      is what shows the refusal came from the trigger and not from something else about the write.
+#   4. the BASELINE pod's attribute DELETE passes under the trigger too (every write above is an INSERT or an
+#      UPDATE). The API's delete is a SOFT delete (deleted_at stamped, an UPDATE under the trigger), so the
+#      check is that the live row goes and exactly one tombstone appears. Control: while the row is still there,
+#      the same soft delete and a hard DELETE, both unmarked in SQL, are refused with DCAP1, so the delete
+#      passing is the old pod's marker.
+#   5. a TENANT PURGE run by the BASELINE's user-management, as the only user-management running, erases every
+#      SHARED attribute row of a throwaway tenant. The purge deletes a whole tenant's rows in one transaction it
+#      marks itself, and here it does so under a trigger its own release never installed. Controls: the tenant
+#      holds the seeded rows just before deleteTenant, so "none left" cannot pass on a tenant that never had any;
+#      and the purge's own DELETE, unmarked, is refused with DCAP1, so the rows going is the marker's doing and
+#      not a trigger that lets deletes through.
+#
+# 🔴 THE PURGE CONTROL IS NOT "the same purge with the marker forced off", BECAUSE THAT CANNOT BE BUILT. The
+# purge marks with set_config(..., true) INSIDE its own transaction, and a transaction-local setting overrides
+# any session default PGOPTIONS could plant (-c devicechain.attr_protocol=0 is simply overwritten). Nothing
+# outside the binary can unmark it. The unmarked DELETE in SQL is that purge with its marker removed, which is
+# the only form of the inverse that exists.
 #
 # WHAT THIS DOES NOT COVER, said plainly: a pod from BEFORE the marker shipped (a skipped minor) is not run, so
 # its refusal is shown with plain SQL standing in for it; it is the release notes' warning, not a supported roll.
 attrguard_port=18463
+attrguard_um_port=18468
 attrguard_pids=()
+# Set only while the live user-management Deployment is scaled to zero for step 5, so cleanup puts it back.
+attrguard_um_deploy=""
+attrguard_um_replicas=""
 
 attrguard_cleanup() {
   local pid
@@ -3565,7 +3792,35 @@ attrguard_cleanup() {
   done
   attrguard_pids=()
   kubectl --context "$kube_context" -n "${attrguard_ns:-dc-system}" delete deployment oldpod-device-management \
-    --ignore-not-found >/dev/null 2>&1 || true
+    oldpod-user-management --ignore-not-found >/dev/null 2>&1 || true
+  if [[ -n "$attrguard_um_replicas" ]]; then
+    kubectl --context "$kube_context" -n "${attrguard_ns:-dc-system}" scale deployment "$attrguard_um_deploy" \
+      --replicas "$attrguard_um_replicas" >/dev/null 2>&1 ||
+      warn "could not restore deployment $attrguard_um_deploy to $attrguard_um_replicas replica(s); do it by hand"
+    attrguard_um_replicas=""
+  fi
+}
+
+# attrguard_wait_port <port> <log> waits for a port-forward this phase opened.
+attrguard_wait_port() {
+  local port="$1" log="$2" i
+  for i in $(seq 1 30); do
+    (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && return 0
+    sleep 1
+  done
+  fail "the port-forward never opened on $port: $(cat "$log")"
+}
+
+# attrguard_count_sql <tenant> [<extra predicate>] counts a tenant's device SHARED attribute rows: the rows the
+# trigger guards.
+attrguard_count_sql() {
+  printf "SELECT count(*) FROM \"device-management\".entity_attributes WHERE tenant_id = '%s' AND entity_type = 'device' AND scope = 'SHARED' %s" "$1" "${2:-}"
+}
+
+# attrguard_delete_sql <tenant> [<extra predicate>] is one unmarked DELETE of those rows: with no predicate, the
+# tenant purge's own statement for this table.
+attrguard_delete_sql() {
+  printf "DELETE FROM \"device-management\".entity_attributes WHERE tenant_id = '%s' AND entity_type = 'device' AND scope = 'SHARED' %s" "$1" "${2:-}"
 }
 
 # attrguard_refused <psql output> says whether a statement was refused by the guard: SQLSTATE DCAP1, or the
@@ -3681,6 +3936,46 @@ $out"
   [[ "$out" == *"rc=0" ]] || fail "the trigger-off control failed for another reason:
 $out"
   note "control: with the trigger off (rolled back) the unmarked write is accepted, so the refusal is the trigger's ✓"
+
+  # 4. A baseline pod's attribute DELETE. Its controls first, while the row is there to refuse a delete of.
+  #
+  # 🔴 THE API'S DELETE IS A SOFT DELETE. EntityAttribute embeds gorm.Model, and the writer's unset is
+  # tx.Where(...).Delete(&EntityAttribute{}) with no Unscoped, so the row stays with deleted_at stamped; every
+  # read filters deleted_at IS NULL, which is what "deleted" means to the API. So the live row must go (live
+  # count 1 -> 0) AND exactly one new tombstone must appear: a delete that was swallowed leaves the live row,
+  # and one that went some other way leaves no tombstone. Both arms of the trigger are shown refusing: the
+  # stamp is an UPDATE, a hard delete is a DELETE.
+  local olddel=drill-guard-old-delete olddel_pred live_pred dead_pred rows dead_before
+  olddel_pred="AND entity_id = $dev_id AND attr_key = '$olddel'"
+  live_pred="$olddel_pred AND deleted_at IS NULL"
+  dead_pred="$olddel_pred AND deleted_at IS NOT NULL"
+  "$apiprobe" attrwrite "${args[@]}" --url "http://127.0.0.1:$attrguard_port/graphql" --key "$olddel" >"$work/attrguard-olddel.log" 2>&1 ||
+    fail "could not write $olddel through the $baseline_tag pod: $(cat "$work/attrguard-olddel.log")"
+  rows="$(attrlock_psql "$pod" "$(attrguard_count_sql "$tenant" "$live_pred")")"
+  [[ "$rows" == 1 ]] || fail "the $baseline_tag pod's write of $olddel left $rows live row(s), not 1, so its delete below would prove nothing"
+  dead_before="$(attrlock_psql "$pod" "$(attrguard_count_sql "$tenant" "$dead_pred")")"
+  out="$(attrguard_sql "$pod" "BEGIN; UPDATE \"device-management\".entity_attributes SET deleted_at = now() WHERE tenant_id = '$tenant' AND entity_type = 'device' AND scope = 'SHARED' $live_pred; ROLLBACK;")"
+  attrguard_refused "$out" ||
+    fail "AN UNMARKED SOFT DELETE WAS NOT REFUSED: the guard passed stamping deleted_at on a device's SHARED attribute outside the writer protocol:
+$out"
+  out="$(attrguard_sql "$pod" "BEGIN; $(attrguard_delete_sql "$tenant" "$olddel_pred"); ROLLBACK;")"
+  attrguard_refused "$out" ||
+    fail "AN UNMARKED DELETE WAS NOT REFUSED: the guard passed a delete of a device's SHARED attribute that skips the writer protocol:
+$out"
+  note "control: an unmarked soft delete (deleted_at stamped) and an unmarked hard DELETE of a device's SHARED attribute are both refused (DCAP1) ✓"
+  rc=0
+  "$apiprobe" attrwrite "${args[@]}" --url "http://127.0.0.1:$attrguard_port/graphql" --key "$olddel" --delete >>"$work/attrguard-olddel.log" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] || fail "AN ATTRIBUTE DELETE THROUGH THE $baseline_tag POD WAS REFUSED under the guard (exit $rc):
+$(cat "$work/attrguard-olddel.log")
+A baseline pod marks its deletes, so the trigger must pass them; if it does not, every attribute delete that
+reaches an old pod during the roll fails."
+  rows="$(attrlock_psql "$pod" "$(attrguard_count_sql "$tenant" "$live_pred")")"
+  [[ "$rows" == 0 ]] || fail "the $baseline_tag pod answered that it deleted $olddel, and $rows LIVE row(s) of it (deleted_at IS NULL) are still there"
+  rows="$(attrlock_psql "$pod" "$(attrguard_count_sql "$tenant" "$dead_pred")")"
+  [[ "$rows" == "$((dead_before + 1))" ]] || fail "the $baseline_tag pod's delete of $olddel left $rows tombstone(s) where $((dead_before + 1)) were expected
+($dead_before before it): the row went some way other than the API's soft delete"
+  note "an attribute delete through a $baseline_tag pod, under the guard, accepted: the live row gone, one tombstone stamped ✓"
+
   # And nothing was left: the control writes were all rolled back, and the trigger is still enforcing (read below).
   attrguard_cleanup
   kubectl --context "$kube_context" -n "$ns" wait --for=delete pod -l "$oldpod_label=oldpod-device-management" --timeout=120s >/dev/null 2>&1 ||
@@ -3689,8 +3984,165 @@ $out"
     --email "$email" --password "$pw" 2>/dev/null)" || true
   enforcement="$(attrguard_enforcement <<<"$out")" || enforcement=""
   [[ "$enforcement" == "ENFORCED" ]] || fail "the guard is no longer ENFORCED after the controls ('${enforcement:-nothing}'); a control left it changed"
+
+  # 5. A tenant purge, run by the baseline's user-management.
+  attrguard_purge "$pod"
   trap - EXIT
-  say "ATTRIBUTE GUARD HOLDS — enforced, $baseline_tag pods' writes pass, an unmarked writer is refused, and the refusal is the trigger's"
+  say "ATTRIBUTE GUARD HOLDS — enforced, $baseline_tag pods' writes, deletes and tenant purge pass, an unmarked writer is refused, and the refusal is the trigger's"
+}
+
+# attrguard_purge <postgres pod> is step 5 of the attrguard phase: a throwaway tenant, seeded through the upgraded
+# pods, is deleted and purged with a BASELINE user-management as the only one running.
+#
+# 🔴 THE LIVE user-management IS SCALED TO ZERO FOR THE PURGE, AND THAT IS THE ONLY WAY TO KNOW WHO RAN IT. Every
+# replica runs the purge coordinator and a pass goes to whichever takes its advisory lock first, so with an
+# upgraded pod beside the copy the evidence could be either release's. Nothing reconciles the Deployment's replica
+# count back (the operator only reads Deployments for status), and attrguard_cleanup restores it on any exit.
+attrguard_purge() {
+  local pod="$1" ns token state deploy json live image replicas rows admin_pw out deadline left
+  local live_sel="devicechain.io/functional-area=user-management,!$oldpod_label"
+  ns="$(instance_namespace)"
+  token="agpurge-$(date -u +%Y%m%d%H%M%S)"
+  state="$work/attrguard-purge.json"
+  admin_pw="$(superuser_password)" || fail "could not settle the superuser password the baseline seeded (see above)"
+
+  DC_ADMIN_PASSWORD="$admin_pw" "$apiprobe" purgetenant seed --server "$api_server" --scheme "$api_scheme" \
+    --tenant "$token" --keys 3 --out "$state" ||
+    fail "could not seed the throwaway tenant $token through the upgraded pods"
+  rows="$(attrlock_psql "$pod" "$(attrguard_count_sql "$token")")"
+  [[ "$rows" == 3 ]] || fail "the throwaway tenant $token holds $rows device SHARED attribute row(s), not the 3 seeded, so its purge
+would have nothing to erase and 'none left' would prove nothing"
+  out="$(attrguard_sql "$pod" "BEGIN; $(attrguard_delete_sql "$token"); ROLLBACK;")"
+  attrguard_refused "$out" ||
+    fail "THE PURGE'S OWN DELETE, UNMARKED, WAS NOT REFUSED, so a purge erasing these rows would say nothing about its marker:
+$out"
+  note "control: tenant $token holds 3 device SHARED attribute rows, and the purge's DELETE of them unmarked is refused (DCAP1) ✓"
+
+  deploy="$(kubectl --context "$kube_context" -n "$ns" get deployments -l "$live_sel" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" || deploy=""
+  [[ -n "$deploy" ]] || fail "this instance runs no user-management Deployment"
+  json="$(kubectl --context "$kube_context" -n "$ns" get deployment "$deploy" -o json)" || fail "could not read deployment $deploy"
+  live="$(jq -r '.spec.template.spec.containers[0].image' <<<"$json")"
+  image="$(oldpod_image "$live" "$baseline_tag")" || fail "cannot derive $baseline_tag's user-management image from '$live'"
+  replicas="$(jq -r '.spec.replicas // 1' <<<"$json")"
+  oldpod_manifest "$json" oldpod-user-management "$image" | kubectl --context "$kube_context" -n "$ns" apply -f - >/dev/null ||
+    fail "could not create the $baseline_tag user-management copy ($image)"
+  oldpod_wait oldpod-user-management 300 || {
+    kubectl --context "$kube_context" -n "$ns" logs deployment/oldpod-user-management --tail=30 >&2 2>/dev/null || true
+    fail "the $baseline_tag user-management copy did not become Ready ($image)"
+  }
+  # Recorded BEFORE the scale, so a failure from here on restores it.
+  attrguard_um_deploy="$deploy"
+  attrguard_um_replicas="$replicas"
+  kubectl --context "$kube_context" -n "$ns" scale deployment "$deploy" --replicas 0 >/dev/null ||
+    fail "could not scale $deploy to zero"
+  deadline=$((SECONDS + 180))
+  while :; do
+    left="$(kubectl --context "$kube_context" -n "$ns" get pods -l "$live_sel" -o name 2>/dev/null)" || left="unreadable"
+    [[ -z "$left" || $SECONDS -ge $deadline ]] && break
+    sleep 3
+  done
+  [[ -z "$left" ]] || fail "the upgraded user-management pods did not stop ($left), so the purge could run on either release"
+  note "user-management is now only the $baseline_tag copy ($image)"
+
+  kubectl --context "$kube_context" -n "$ns" port-forward deployment/oldpod-user-management "${attrguard_um_port}:8080" \
+    >"$work/attrguard-um-forward.log" 2>&1 &
+  attrguard_pids+=("$!")
+  attrguard_wait_port "$attrguard_um_port" "$work/attrguard-um-forward.log"
+  DC_ADMIN_PASSWORD="$admin_pw" "$apiprobe" purgetenant delete --server "$api_server" --scheme "$api_scheme" \
+    --state "$state" --user-url "http://127.0.0.1:$attrguard_um_port" ||
+    fail "the $baseline_tag user-management did not accept the delete of tenant $token"
+
+  # The coordinator passes once a minute, and the relational store is its first store.
+  deadline=$((SECONDS + 300))
+  while :; do
+    rows="$(attrlock_psql "$pod" "$(attrguard_count_sql "$token")")"
+    [[ "$rows" == 0 || $SECONDS -ge $deadline ]] && break
+    sleep 10
+  done
+  left="$(kubectl --context "$kube_context" -n "$ns" get pods -l "$live_sel" -o name 2>/dev/null)" || left="unreadable"
+  [[ -z "$left" ]] || fail "an upgraded user-management pod came back during the purge ($left), so who erased the rows cannot be said"
+  if [[ "$rows" != 0 ]]; then
+    kubectl --context "$kube_context" -n "$ns" logs deployment/oldpod-user-management --tail=40 >&2 2>/dev/null || true
+    fail "THE $baseline_tag TENANT PURGE LEFT $rows DEVICE SHARED ATTRIBUTE ROW(S) of tenant $token after 300s (its log is above).
+A baseline pod's purge marks its transaction, so the trigger must pass it; if it does not, every tenant deleted
+while an old pod runs the coordinator keeps its attribute rows, and the purge never completes."
+  fi
+  note "the $baseline_tag purge erased every device SHARED attribute row of tenant $token under the guard ✓"
+
+  attrguard_cleanup
+  kubectl --context "$kube_context" -n "$ns" rollout status "deployment/$deploy" --timeout=300s >/dev/null ||
+    fail "user-management did not come back to $replicas replica(s) after the purge"
+}
+
+# ---------------------------------------------------------------------------
+# stringmetric — a text reading, end to end, on the upgraded instance
+# ---------------------------------------------------------------------------
+#
+# THE CLAIM: a device can report a state as text under a metric declared STRING on its profile, and the
+# upgraded instance serves it: the declaration is accepted, a text reading posted over the HTTP ingress reads
+# back through latestMeasurements and measurementEvents as textValue (value null), and an aggregate over it is
+# refused with NOT_AGGREGATABLE. Every other phase reads numbers, so until this one nothing drove text through
+# an upgraded instance. apiprobe decides from the DEPLOYED schemas whether the producer is served; a tree that
+# does not serve it is held to the baseline behaviour instead (the declaration refused), never skipped.
+#
+# THE NEGATIVE CONTROL: the same phase with --control read-value, a probe that reads `value` where the text
+# lives, must fail with MISMATCH. Exactly that code: a SETUP or a REFUSED would hold just as well against a
+# phase that never reached the read doors.
+stringmetric_port=18467
+stringmetric_pid=""
+
+stringmetric_cleanup() {
+  [[ -z "$stringmetric_pid" ]] || kill "$stringmetric_pid" 2>/dev/null || true
+  stringmetric_pid=""
+}
+
+cmd_stringmetric() {
+  need kubectl
+  need jq
+  [[ -s "$receipt" ]] || fail "$receipt is missing; run 'up' and 'upgrade' first: the reading is posted as the seed's tenant"
+  [[ -x "$apiprobe" ]] || build_apiprobe
+  load_exit_codes
+  local ns deploy i args rc
+  ns="$(instance_namespace)"
+  say "STRING METRIC — a text reading declared, posted and read back on the upgraded instance"
+  deploy="$(kubectl --context "$kube_context" -n "$ns" get deployments \
+    -l "devicechain.io/functional-area=event-sources,!$oldpod_label" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)" || deploy=""
+  [[ -n "$deploy" ]] || fail "this instance runs no event-sources Deployment, so there is no HTTP ingress to post the reading to"
+  trap stringmetric_cleanup EXIT
+  kubectl --context "$kube_context" -n "$ns" port-forward "deployment/$deploy" "${stringmetric_port}:8081" \
+    >"$work/stringmetric-forward.log" 2>&1 &
+  stringmetric_pid=$!
+  for i in $(seq 1 30); do
+    (exec 3<>"/dev/tcp/127.0.0.1/$stringmetric_port") 2>/dev/null && break
+    sleep 1
+  done
+  (exec 3<>"/dev/tcp/127.0.0.1/$stringmetric_port") 2>/dev/null ||
+    fail "the port-forward to event-sources' HTTP ingress never opened on $stringmetric_port: $(cat "$work/stringmetric-forward.log")"
+
+  args=(--server "$api_server" --scheme "$api_scheme" --receipt "$receipt" --schemas "$repo_root/backend/services"
+    --events-url "http://127.0.0.1:$stringmetric_port")
+  rc=0
+  "$apiprobe" stringmetric "${args[@]}" || rc=$?
+  [[ "$rc" -eq 0 ]] || fail "THE STRING METRIC PHASE FAILED on the upgraded instance (apiprobe exit $rc; output above).
+$APIPROBE_EXIT_MISMATCH a read door answered something other than the text, $APIPROBE_EXIT_MISSING the reading never became readable,
+$APIPROBE_EXIT_REFUSED a declaration, a create or the ingress refused, $APIPROBE_EXIT_SETUP the phase could not run (no finding)."
+
+  # The control reads the text through a field that does not carry it, so it can only go red on a tree that
+  # serves the producer; on one that does not, the phase above asserted the refusal and there is no read.
+  if ! grep -q 'textValue' "$repo_root/backend/services/device-state/graphql/schema.graphql"; then
+    note "no read-value control: this tree serves no text producer, so the phase above asserted the declaration is refused"
+  else
+    rc=0
+    "$apiprobe" stringmetric "${args[@]}" --control read-value || rc=$?
+    [[ "$rc" -ne 0 ]] || fail "THE STRING METRIC CONTROL DID NOT FAIL: a probe reading \`value\` where the text lives passed, so the
+read-back above would pass a reading that lost its text"
+    [[ "$rc" -eq "$APIPROBE_EXIT_MISMATCH" ]] || fail "THE STRING METRIC CONTROL IS INCONCLUSIVE: it failed with exit $rc where
+$APIPROBE_EXIT_MISMATCH (MISMATCH) was required; a failure for another reason does not show the read can see a lost text"
+    note "control: a probe reading value instead of textValue fails with MISMATCH ✓ (the read-back can fail)"
+  fi
+  stringmetric_cleanup
+  trap - EXIT
+  say "STRING METRIC SERVED — a text reading read back exactly through both doors, an aggregate over it was refused, and the read was shown to fail"
 }
 
 # ---------------------------------------------------------------------------
@@ -5228,8 +5680,42 @@ commit-ish without the chart, or this check has quietly stopped checking."
   selftest_baseline_writable
   selftest_v19
   selftest_bulkchange
+  selftest_drill_reads
 
   say "SELF-TEST PASSED"
+}
+
+# selftest_drill_reads covers the pure halves of the save-door gate, the analytics view verdict and the
+# newer-surface counter read, each handed what it must accept and what it must refuse.
+selftest_drill_reads() {
+  say "SELF-TEST: the save-door gate, the analytics view verdict and the skip counter read"
+  local d metrics
+  d="$(mktemp -d)"
+  printf 'type DeviceProfileVersion {\n    version: Int!\n    authoredVia: [AuthoredVia!]!\n}\n' >"$d/new.graphql"
+  printf 'type DeviceProfileVersion {\n    version: Int!\n}\ntype Other {\n    authoredVia: [AuthoredVia!]!\n}\n' >"$d/old.graphql"
+  authored_via_served "$d/new.graphql" ||
+    fail "SELF-TEST FAILED: authored_via_served missed authoredVia on DeviceProfileVersion"
+  ! authored_via_served "$d/old.graphql" ||
+    fail "SELF-TEST FAILED: authored_via_served read another type's authoredVia as DeviceProfileVersion's"
+  rm -rf "$d"
+
+  [[ -z "$(oldpod_views_problem $'a 1 security_barrier=true\nb 2 security_barrier=true' $'a 1 security_barrier=true\nb 2 security_barrier=true')" ]] ||
+    fail "SELF-TEST FAILED: oldpod_views_problem reported identical views as changed"
+  [[ -n "$(oldpod_views_problem $'a 1 security_barrier=true' $'a 9 security_barrier=true')" ]] ||
+    fail "SELF-TEST FAILED: oldpod_views_problem passed a changed definition"
+  [[ -n "$(oldpod_views_problem $'a 1 security_barrier=true' $'a 1 ')" ]] ||
+    fail "SELF-TEST FAILED: oldpod_views_problem passed a dropped security_barrier"
+  [[ -n "$(oldpod_views_problem $'a 1 x\nb 2 x' $'a 1 x')" ]] ||
+    fail "SELF-TEST FAILED: oldpod_views_problem passed a dropped view"
+  [[ -n "$(oldpod_views_problem '' '')" ]] ||
+    fail "SELF-TEST FAILED: oldpod_views_problem passed two empty listings, which compare nothing"
+
+  metrics=$'# HELP dc_em_analytics_reconcile_newer_surface_skips_total skips\n# TYPE dc_em_analytics_reconcile_newer_surface_skips_total counter\ndc_em_analytics_reconcile_newer_surface_skips_total 2\ndc_em_analytics_reconcile_platform_collisions_total 0'
+  [[ "$(oldpod_counter "$metrics" analytics_reconcile_newer_surface_skips_total)" == 2 ]] ||
+    fail "SELF-TEST FAILED: oldpod_counter did not read the counter's value"
+  ! oldpod_counter $'dc_em_analytics_reconcile_platform_collisions_total 0' analytics_reconcile_newer_surface_skips_total >/dev/null ||
+    fail "SELF-TEST FAILED: oldpod_counter read a value for a counter that is not exported"
+  note "the save-door gate, the view verdict and the counter read each refuse what they must ✓"
 }
 
 # selftest_baseline_writable covers the two things a baseline that ships update-management
@@ -5657,6 +6143,7 @@ oldpods) cmd_oldpods ;;
 executor) cmd_executor ;;
 attrlock) cmd_attrlock ;;
 attrguard) cmd_attrguard ;;
+stringmetric) cmd_stringmetric ;;
 bulkchange) cmd_bulkchange ;;
 selftest) selftest ;;
 down) cmd_down ;;
@@ -5721,8 +6208,9 @@ and event history belongs to the DR drill, not this one."
   cmd_executor
   cmd_attrlock
   cmd_attrguard
+  cmd_stringmetric
   cmd_bulkchange
   say "UPGRADE DRILL COMPLETE — data survived, the operator is in step, and the broker and event store carry this release's settings."
   ;;
-*) fail "unknown command ${1}; try mode | up | upgrade | logins | recreate | ranwhat | verify | readsweep | tablesweep | control | controlverify | operator | infra | oldpods | executor | attrlock | attrguard | bulkchange | all | selftest | down" ;;
+*) fail "unknown command ${1}; try mode | up | upgrade | logins | recreate | ranwhat | verify | readsweep | tablesweep | control | controlverify | operator | infra | oldpods | executor | attrlock | attrguard | stringmetric | bulkchange | all | selftest | down" ;;
 esac

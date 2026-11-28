@@ -263,7 +263,7 @@ func (f *BootstrapFlow) finished(msg BootstrapRunFinished) tea.Cmd {
 		o.Reveal.Discard()
 	}
 	if f.choice.Escrow.Mode == EscrowWrite && msg.Facts.EscrowPath != "" {
-		f.rcpt = &receiptModel{path: msg.Facts.EscrowPath, written: msg.Facts.EscrowWritten,
+		f.rcpt = &receiptModel{path: msg.Facts.EscrowPath, outcome: msg.Facts.EscrowOutcome,
 			instance: f.choice.Instance.Name, context: msg.Facts.KubeContext}
 		f.phase = phaseReceipt
 		return nil
@@ -364,3 +364,14 @@ func (f *BootstrapFlow) Render() string {
 
 // View implements tea.Model.
 func (f *BootstrapFlow) View() tea.View { return tea.NewView(f.Render()) }
+
+// SeededChoices is what the instance and escrow screens settle on when the person changes
+// nothing: the plan they send for their seeds as they stand, with the escrow path the
+// chosen instance name gives. The command layer uses it to check that an unchanged choice
+// rebuilds the command line exactly as given.
+func SeededChoices(s BootstrapSetup) BootstrapPlanned {
+	inst, esc := newInstanceModel(s.Instance), newEscrowModel(s.Escrow)
+	c := inst.choices()
+	esc.setInstance(c.Name)
+	return BootstrapPlanned{Instance: c, Escrow: esc.choice()}
+}
