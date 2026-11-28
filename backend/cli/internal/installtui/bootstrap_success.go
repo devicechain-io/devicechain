@@ -25,10 +25,25 @@ type InstanceFacts struct {
 	// Backups describes the instance's backups, as the cluster was installed.
 	Backups string
 	// EscrowPath is where the root-key escrow artifact is, when the run settled
-	// one; EscrowWritten says this run wrote it and checked it back.
+	// one; EscrowOutcome is what the run established about it.
 	EscrowPath    string
-	EscrowWritten bool
+	EscrowOutcome EscrowOutcome
 }
+
+// EscrowOutcome is what a finished run established about the escrow artifact. Only
+// EscrowWrittenAndChecked and EscrowOpened say the file opens; an artifact the run
+// found but could not open is never presented as checked.
+type EscrowOutcome int
+
+const (
+	// EscrowFoundNotOpened is an artifact already in place that this run did not open.
+	EscrowFoundNotOpened EscrowOutcome = iota
+	// EscrowWrittenAndChecked is an artifact this run wrote and opened back.
+	EscrowWrittenAndChecked
+	// EscrowOpened is an artifact already in place that this run opened, with its
+	// passphrase, to the key being deployed.
+	EscrowOpened
+)
 
 // passphraseFilePlaceholder stands in for the passphrase file in the equivalent
 // command: the command is a template, and the passphrase is never in it.

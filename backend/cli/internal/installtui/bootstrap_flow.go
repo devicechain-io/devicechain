@@ -263,7 +263,7 @@ func (f *BootstrapFlow) finished(msg BootstrapRunFinished) tea.Cmd {
 		o.Reveal.Discard()
 	}
 	if f.choice.Escrow.Mode == EscrowWrite && msg.Facts.EscrowPath != "" {
-		f.rcpt = &receiptModel{path: msg.Facts.EscrowPath, written: msg.Facts.EscrowWritten,
+		f.rcpt = &receiptModel{path: msg.Facts.EscrowPath, outcome: msg.Facts.EscrowOutcome,
 			instance: f.choice.Instance.Name, context: msg.Facts.KubeContext}
 		f.phase = phaseReceipt
 		return nil

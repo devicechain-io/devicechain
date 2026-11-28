@@ -59,7 +59,7 @@ func TestKindInheritsOnlyTheDefaultConsolesFiles(t *testing.T) {
 			}
 			e := &InstallEngine{Provider: &fakeProvider{name: "local"}, SkipPreflight: true,
 				Cluster: func(ctx context.Context, _ Provider, _ InstallOptions) error {
-					return createKindCluster(ctx, "test")
+					return createKindCluster(ctx, "test", false)
 				}}
 			if err := p.Run(t.Context(), e, installflow.Request{}, nil); err != nil {
 				t.Fatal(err)

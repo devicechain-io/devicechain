@@ -6,7 +6,7 @@ compact mode: jetstream 3Gi, postgres 2Gi, timescale 4Gi, streams 64/16 MiB, req
 
 -- stderr (0 bytes) --
 
--- engine (1671 bytes) --
+-- engine (1695 bytes) --
 {
   "Provider": "local",
   "Options": {
@@ -14,6 +14,7 @@ compact mode: jetstream 3Gi, postgres 2Gi, timescale 4Gi, streams 64/16 MiB, req
     "KubeContext": "",
     "Cluster": "devicechain",
     "CreateCluster": false,
+    "ExposeLAN": false,
     "Profile": "",
     "DryRun": false,
     "AssumeYes": false,

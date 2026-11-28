@@ -118,7 +118,8 @@ type PlanFacts struct {
 	Counts Counts
 }
 
-// ErrNoPlan is returned when a healthy evaluation asks for a status with no plan to rest it on.
+// ErrNoPlan is returned when a healthy evaluation whose owner qualifies asks for a status with no
+// plan to rest it on.
 var ErrNoPlan = errors.New("a healthy evaluation has no plan facts")
 
 // Status is the would-be status of an intent, recomputed from this evaluation's answers on every
@@ -136,7 +137,10 @@ var ErrNoPlan = errors.New("a healthy evaluation has no plan facts")
 //  9. some members drifted: CONVERGING;
 //  10. otherwise SATISFIED.
 //
-// Where both declaration codes apply, KEY_UNDECLARED is named, as it precedes in the diff.
+// Where both declaration codes apply, KEY_UNDECLARED is named, as it precedes in the diff. With
+// no plan facts, rules 2 and 3 cannot be judged and rules 4 and 5 still are: an unknown or
+// unqualified owner is BLOCKED with or without a plan, and only a qualified owner with no plan is
+// ErrNoPlan.
 func Status(facts *PlanFacts, standing Standing, health Health) (State, string, error) {
 	switch health {
 	case HealthDependencyUnavailable:
@@ -153,6 +157,14 @@ func Status(facts *PlanFacts, standing Standing, health Health) (State, string, 
 		return "", "", fmt.Errorf("status: unknown standing %d", standing)
 	}
 	if facts == nil {
+		// An owner who does not qualify records no plan, so a first evaluation can have none.
+		// Standing is still answerable: no plan never hides OWNER_STANDING_UNKNOWN.
+		switch standing {
+		case StandingUnknown:
+			return StateBlocked, StatusOwnerStandingUnknown, nil
+		case StandingNotQualified:
+			return StateBlocked, StatusOwnerNotQualified, nil
+		}
 		return "", "", ErrNoPlan
 	}
 	if facts.TargetRejectedCode != "" {

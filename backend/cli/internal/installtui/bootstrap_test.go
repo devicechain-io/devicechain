@@ -38,7 +38,7 @@ func okBootstrapSummary() installflow.Summary {
 func acmeFacts() InstanceFacts {
 	return InstanceFacts{ConsoleURL: "https://devicechain.local/admin/", Account: "admin@devicechain.io",
 		KubeContext: "kind-devicechain", Backups: "nightly base backups, 7 days of WAL",
-		EscrowPath: "/home/op/.devicechain/escrow/acme-rootkey.escrow", EscrowWritten: true}
+		EscrowPath: "/home/op/.devicechain/escrow/acme-rootkey.escrow", EscrowOutcome: EscrowWrittenAndChecked}
 }
 
 func TestInstanceChoicesSettleIntoAPlan(t *testing.T) {

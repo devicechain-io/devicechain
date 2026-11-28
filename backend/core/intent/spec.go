@@ -101,7 +101,10 @@ type Point struct {
 }
 
 // Value is the intended value: a typed value text, or Unset (the key must be absent). The value
-// text is exact: it is compared, digested and posted as written, with no normalization.
+// text is exact: it is compared, digested and posted as written, with no normalization. So it
+// must also be the spelling device-management stores for that value (see checkValueText):
+// a spelling device-management would rewrite on the way in is refused, because its digest could
+// never match a device's stored row, and two spellings of one value would compete as two values.
 type Value struct {
 	ValueType string  `json:"valueType,omitempty"`
 	Value     *string `json:"value,omitempty"`
@@ -198,11 +201,15 @@ func (v Value) validate() error {
 	return checkValueText(v.ValueType, *v.Value)
 }
 
-// checkValueText refuses a value text the declared type cannot carry, by the same rules
-// device-management applies when it renders a device's configuration document: LONG is a
-// base-10 int64, DOUBLE a finite float64, BOOLEAN what strconv.ParseBool accepts, JSON exactly
-// one JSON value. An intent whose value device-management would refuse is refused here, at
-// authoring, rather than reported as drift forever.
+// checkValueText refuses a value text the declared type cannot carry, and a text device-management
+// would store in another spelling. Device-management normalizes every configuration write
+// (normalizeAttributeValue in model/api_attributes.go): LONG to strconv.FormatInt base 10, DOUBLE
+// to strconv.FormatFloat 'f' -1, BOOLEAN to strconv.FormatBool; STRING and JSON are stored as
+// written. An intent's value is digested as written and compared with the digest of the stored
+// row, so "TRUE", "040", "+40", "1.0", "1e3" or "0x1p2" would read as DRIFTED forever. Each is
+// refused here, at authoring, with the spelling to use instead: LONG is exactly FormatInt of a
+// base-10 int64, DOUBLE exactly FormatFloat of a finite float64, BOOLEAN "true" or "false", JSON
+// exactly one JSON value.
 func checkValueText(valueType, text string) error {
 	if !utf8.ValidString(text) {
 		return invalid("value.value is not valid UTF-8")
@@ -214,18 +221,23 @@ func checkValueText(valueType, text string) error {
 	case ValueTypeString:
 		return nil
 	case ValueTypeLong:
-		if _, err := strconv.ParseInt(text, 10, 64); err != nil {
+		i, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
 			return invalid("value.value %q is not a LONG", text)
 		}
+		return requireStored(valueType, text, strconv.FormatInt(i, 10))
 	case ValueTypeDouble:
 		f, err := strconv.ParseFloat(text, 64)
 		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
 			return invalid("value.value %q is not a finite DOUBLE", text)
 		}
+		return requireStored(valueType, text, strconv.FormatFloat(f, 'f', -1, 64))
 	case ValueTypeBoolean:
-		if _, err := strconv.ParseBool(text); err != nil {
+		b, err := strconv.ParseBool(text)
+		if err != nil {
 			return invalid("value.value %q is not a BOOLEAN", text)
 		}
+		return requireStored(valueType, text, strconv.FormatBool(b))
 	case ValueTypeJSON:
 		dec := json.NewDecoder(strings.NewReader(text))
 		dec.UseNumber()
@@ -238,6 +250,15 @@ func checkValueText(valueType, text string) error {
 		}
 	default:
 		return invalid("value.valueType %q is unknown", valueType)
+	}
+	return nil
+}
+
+// requireStored refuses text unless it is stored, the spelling device-management keeps for the
+// same value.
+func requireStored(valueType, text, stored string) error {
+	if text != stored {
+		return invalid("value.value %q is not how a %s is stored; write %q", text, valueType, stored)
 	}
 	return nil
 }

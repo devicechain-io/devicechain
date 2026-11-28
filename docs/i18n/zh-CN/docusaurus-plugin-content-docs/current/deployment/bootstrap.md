@@ -315,6 +315,7 @@ kind 不强制卷大小限制，可使用宿主机可用磁盘。
 - **OpenTofu 1.10 或更新版本**（`tofu`，也支持 `terraform` 1.10 或更新）位于 `PATH`。`dcctl` 使用它部署基础设施，安装见 [opentofu.org](https://opentofu.org)。`dcctl preflight local` 提前检查工具及环境，并拒绝早于 1.10 的版本，因此旧的二进制文件会在创建任何资源之前就让运行停止。
 - **`kubectl`** 位于 `PATH`；`local` 提供方还需 **`docker`** 和 **`kind`**。缺少本次运行所需的工具会使预检失败。只有本地 kind 集群或 `--build` 才需要 Docker：使用已发布镜像安装到 `--kube-context` 指定的集群时，既不检查也不使用它。需要时，其守护进程必须可访问：Linux 上为 Docker Engine，macOS 和 Windows 上为 Docker Desktop。
 - **空闲的主机端口 80、443 和 1883**（本地 kind 集群使用）。集群会将它们发布出来，分别用于控制台、HTTPS 和 MQTT。`dcctl preflight local` 会在端口被占用时失败并指出占用它的容器，而不是让集群创建时才因 Docker 的绑定错误而失败。
+- **默认只能从本机访问。** `dcctl install local` 创建的 kind 集群将这些端口发布在 `127.0.0.1` 上，因此控制台和 MQTT broker 只在本机响应。如需从网络中的其他机器（设备、手机、另一台电脑）访问，请使用 `dcctl install local --expose-lan`（或 `dcctl setup local --expose-lan`）创建集群，它会在所有网络接口上发布这些端口。请仅在可信网络中这样做，并且不要与 `--no-tls` 或 `--dev` 一起使用，因为它们通过明文 HTTP 提供控制台登录。kind 在创建集群时确定其端口，因此该选项对已存在的集群不起作用：如需更改，请删除并重新创建集群。
 - **在 Linux 上，需要调高 inotify 限制。** 对于本地 kind 集群，`dcctl preflight local` 要求 `fs.inotify.max_user_instances` 至少为 256，而原装 Ubuntu 24.04 默认只有 128，因此它会在此处失败并打印要运行的命令。第一行调高该限制（第二行 `max_user_watches` 仅是警告），`/etc/sysctl.d` 使其在重启后依然有效：
 
   ```bash
@@ -837,7 +838,7 @@ kubectl -n dci-<instance> patch clusters.postgresql.cnpg.io dc-tsdb --type merge
 
 ## 初始化之后 {#after-bootstrap}
 
-命令打印命名空间、**超级用户**凭据和通过集群 Ingress 访问方式。超级用户为 `superuser@devicechain.local`，没有默认密码。初始化为实例生成密码，保存于实例命名空间的 Secret `dci-<instance>-superuser`，只在生成密码的运行结束时显示一次，或完成此前尚未显示密码便失败的初始化时显示。再次读取：
+命令打印命名空间、**超级用户**凭据和通过集群 Ingress 访问方式。超级用户为 `superuser@devicechain.local`，没有默认密码。初始化为实例生成密码，保存于实例命名空间的 Secret `dci-<instance>-superuser`，只在生成密码的运行结束时显示一次，或完成此前尚未显示密码便失败的初始化时显示。仅当输出为终端时才会打印；管道或重定向的输出（例如 CI 日志）会改为指明该 Secret。再次读取或在脚本中读取：
 
 ```bash
 kubectl -n dci-my-instance get secret dci-my-instance-superuser -o jsonpath='{.data.password}' | base64 -d

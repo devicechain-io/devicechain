@@ -14,7 +14,7 @@ compact mode: jetstream 3Gi, postgres 2Gi, timescale 4Gi, streams 64/16 MiB, req
 ha mode: 3 NATS servers (one per node), streams and KV buckets at 3 replicas; both databases configured replicated too — relational synchronously, event store preferred — with volumes sized per instance, so their disk scales with the count
 note: --ha adds two more NATS servers per instance and their volumes; the printed compact footprint is measured single-node and is a floor, not the total
 
--- engine (1668 bytes) --
+-- engine (1692 bytes) --
 {
   "Provider": "local",
   "Options": {
@@ -22,6 +22,7 @@ note: --ha adds two more NATS servers per instance and their volumes; the printe
     "KubeContext": "",
     "Cluster": "devicechain",
     "CreateCluster": false,
+    "ExposeLAN": false,
     "Profile": "",
     "DryRun": false,
     "AssumeYes": false,

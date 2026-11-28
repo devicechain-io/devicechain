@@ -19,7 +19,8 @@ import (
 // with U+FFFD); a duplicate key at any level (encoding/json would keep the last); a key this
 // schema does not define, including one that differs from a defined key only in case
 // (encoding/json would match it); a null; a number that is not an integer; a missing required
-// field. The only default applied is reconcile.manualDwellSeconds.
+// field; an unset value that also carries a valueType or value key, even an empty one. The only
+// default applied is reconcile.manualDwellSeconds.
 func Parse(doc []byte) (Spec, error) {
 	if len(doc) > MaxSpecBytes {
 		return Spec{}, invalid("the document is %d bytes; at most %d are accepted", len(doc), MaxSpecBytes)
@@ -66,6 +67,13 @@ func Parse(doc []byte) (Spec, error) {
 			return Spec{}, invalid("value.unset must be a boolean")
 		}
 		s.Value.Unset = b
+		// Refused on the key, not its content: the struct cannot tell an empty valueType from an
+		// absent one, so Validate alone would accept {"unset":true,"valueType":""}.
+		_, typed := value["valueType"]
+		_, valued := value["value"]
+		if b && (typed || valued) {
+			return Spec{}, invalid("value: unset carries neither valueType nor value")
+		}
 	}
 	if _, ok := value["valueType"]; ok {
 		if s.Value.ValueType, err = str(value, "value.valueType", "valueType"); err != nil {

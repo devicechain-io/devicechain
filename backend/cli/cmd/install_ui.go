@@ -428,7 +428,7 @@ func settingGroup(name string) string {
 		return groupBackups
 	case strings.HasPrefix(name, "restore-rdb-"):
 		return groupRecovery
-	case name == "mqtt-gateway", name == "aws-nlb", name == "remove-legacy-ingress":
+	case name == "mqtt-gateway", name == "aws-nlb", name == "remove-legacy-ingress", name == "expose-lan":
 		return groupFrontEnd
 	case name == "allow-legacy-db-removal", name == "skip-preflight", name == "dry-run", name == "yes":
 		return groupEscape

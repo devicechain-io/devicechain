@@ -196,14 +196,96 @@ func TestARetriedUpdatedReportRestoresAnInstalledVersionThatFailedToWrite(t *tes
 	require.NoError(t, err)
 	e.mustApply(t, "acme", "dev-1", progress(v, 1, ota.StageInstalling, "b"), ota.VerdictApplied)
 	report := running(v, 2, "b2")
-	e.mustApply(t, "acme", "dev-1", report, ota.VerdictApplied)
+	e.advance(time.Minute)
+	updatedAt := e.clock
+	ctx := WithObservedAt(tenantCtx("acme"), updatedAt.Add(-time.Second))
+	verdict, err := e.api.ApplyReport(ctx, "dev-1", report)
+	require.NoError(t, err)
+	require.Equal(t, ota.VerdictApplied, verdict)
 	require.Equal(t, "3.1.0", installed(t, e, "acme", "dev-1")["firmware"].Version)
 	// The write of the installed version is what failed after the attempt committed.
 	require.NoError(t, e.api.RDB.DB(tenantCtx("acme")).Where("device_token = ?", "dev-1").Delete(&DeviceInstalledComponent{}).Error)
 	require.Empty(t, installed(t, e, "acme", "dev-1"))
-	// The redelivery is a duplicate for the attempt, and still repairs the observation.
-	e.mustApply(t, "acme", "dev-1", report, ota.VerdictDuplicate)
-	require.Equal(t, "3.1.0", installed(t, e, "acme", "dev-1")["firmware"].Version)
+	// The same message is redelivered later with its original broker time, and still repairs the
+	// observation using the persisted time the attempt reached UPDATED.
+	e.advance(time.Hour)
+	verdict, err = e.api.ApplyReport(ctx, "dev-1", report)
+	require.NoError(t, err)
+	require.Equal(t, ota.VerdictDuplicate, verdict)
+	got := installed(t, e, "acme", "dev-1")["firmware"]
+	require.Equal(t, "3.1.0", got.Version)
+	require.Equal(t, v.Attempt.TargetDigest, got.Digest)
+	require.Equal(t, InstalledSourceUpdated, got.Source)
+	require.True(t, got.ObservedAt.Equal(updatedAt), "repair keeps the attempt's completion time")
+}
+
+func TestAResentUpdatedReportDoesNotOverwriteANewerInstalledVersion(t *testing.T) {
+	for _, newer := range []string{"assignment", "inventory"} {
+		t.Run(newer, func(t *testing.T) {
+			e := newUpdateEnv(t)
+			ctx := tenantCtx("acme")
+			e.availableArtifact(t, "acme", "fw-2", "2.0.0", []byte("firmware two"))
+			a, err := e.api.AssignArtifact(ctx, "dev-1", "fw-2")
+			require.NoError(t, err)
+			e.mustApply(t, "acme", "dev-1", progress(a, 1, ota.StageInstalling, "b"), ota.VerdictApplied)
+			report := running(a, 2, "b2")
+			e.advance(time.Minute)
+			e.mustApply(t, "acme", "dev-1", report, ota.VerdictApplied)
+			require.Equal(t, "2.0.0", installed(t, e, "acme", "dev-1")["firmware"].Version)
+
+			e.advance(time.Minute)
+			if newer == "assignment" {
+				e.availableArtifact(t, "acme", "fw-3", "3.0.0", []byte("firmware three"))
+				b, err := e.api.AssignArtifact(ctx, "dev-1", "fw-3")
+				require.NoError(t, err)
+				e.mustApply(t, "acme", "dev-1", progress(b, 1, ota.StageInstalling, "b2"), ota.VerdictApplied)
+				e.mustApply(t, "acme", "dev-1", running(b, 2, "b3"), ota.VerdictApplied)
+			} else {
+				verdict, err := e.api.ApplyReport(WithObservedAt(ctx, e.clock), "dev-1", inventoryOf("firmware", "3.0.0", "sha256:bb"))
+				require.NoError(t, err)
+				require.Equal(t, ota.VerdictLate, verdict)
+				current, err := e.api.AssignmentByToken(ctx, a.Assignment.Token)
+				require.NoError(t, err)
+				require.False(t, current.Assignment.SupersededAt.Valid, "exercise ordering while A is still current")
+			}
+			before := installed(t, e, "acme", "dev-1")["firmware"]
+			require.Equal(t, "3.0.0", before.Version)
+
+			// Reconnecting publishes the old final report as a NEW message with a later append time.
+			e.advance(time.Minute)
+			verdict, err := e.api.ApplyReport(WithObservedAt(ctx, e.clock), "dev-1", report)
+			require.NoError(t, err)
+			require.Equal(t, ota.VerdictDuplicate, verdict)
+			require.Equal(t, before, installed(t, e, "acme", "dev-1")["firmware"], "the newer installed observation must stay unchanged")
+		})
+	}
+}
+
+func TestASupersededUpdatedDuplicateDoesNotRepairAMissingInstalledVersion(t *testing.T) {
+	e := newUpdateEnv(t)
+	ctx := tenantCtx("acme")
+	e.availableArtifact(t, "acme", "fw-2", "2.0.0", []byte("firmware two"))
+	a, err := e.api.AssignArtifact(ctx, "dev-1", "fw-2")
+	require.NoError(t, err)
+	e.mustApply(t, "acme", "dev-1", progress(a, 1, ota.StageInstalling, "b"), ota.VerdictApplied)
+	report := running(a, 2, "b2")
+	e.mustApply(t, "acme", "dev-1", report, ota.VerdictApplied)
+
+	e.advance(time.Minute)
+	e.availableArtifact(t, "acme", "fw-3", "3.0.0", []byte("firmware three"))
+	_, err = e.api.AssignArtifact(ctx, "dev-1", "fw-3")
+	require.NoError(t, err)
+	old, err := e.api.AssignmentByToken(ctx, a.Assignment.Token)
+	require.NoError(t, err)
+	require.True(t, old.Assignment.SupersededAt.Valid)
+	require.NoError(t, e.api.RDB.DB(ctx).Where("device_token = ?", "dev-1").Delete(&DeviceInstalledComponent{}).Error)
+	require.Empty(t, installed(t, e, "acme", "dev-1"))
+
+	e.advance(time.Minute)
+	verdict, err := e.api.ApplyReport(WithObservedAt(ctx, e.clock), "dev-1", report)
+	require.NoError(t, err)
+	require.Equal(t, ota.VerdictDuplicate, verdict)
+	require.Empty(t, installed(t, e, "acme", "dev-1"), "a superseded assignment cannot repair an installed observation")
 }
 
 func TestADeletionFactNeverTouchesAnotherTenantOrAnUnnamedIncarnation(t *testing.T) {

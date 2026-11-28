@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -53,9 +54,9 @@ func randomSpec(r *rand.Rand) Spec {
 	case 1:
 		v = Value{ValueType: ValueTypeLong, Value: ptr(jsonNumber(r.Int64() - r.Int64()))}
 	case 2:
-		v = Value{ValueType: ValueTypeDouble, Value: ptr(jsonFloat(r.NormFloat64() * 1e6))}
+		v = Value{ValueType: ValueTypeDouble, Value: ptr(storedFloat(r.NormFloat64() * 1e6))}
 	case 3:
-		v = Value{ValueType: ValueTypeBoolean, Value: ptr([]string{"true", "false", "1", "F"}[r.IntN(4)])}
+		v = Value{ValueType: ValueTypeBoolean, Value: ptr([]string{"true", "false"}[r.IntN(2)])}
 	case 4:
 		doc, _ := json.Marshal(map[string]any{"k": text(), "n": r.IntN(1000), "l": []any{true, nil, text()}})
 		v = Value{ValueType: ValueTypeJSON, Value: ptr(string(doc))}
@@ -77,8 +78,8 @@ func randomSpec(r *rand.Rand) Spec {
 	}
 }
 
-func jsonNumber(n int64) string  { b, _ := json.Marshal(n); return string(b) }
-func jsonFloat(f float64) string { b, _ := json.Marshal(f); return string(b) }
+func jsonNumber(n int64) string    { b, _ := json.Marshal(n); return string(b) }
+func storedFloat(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
 
 // digestReport computes every digest over a fixed corpus: the pinned vectors plus 300 random
 // specs from a fixed seed, each with a random observation of its own.
