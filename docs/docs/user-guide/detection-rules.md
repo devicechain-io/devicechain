@@ -60,7 +60,8 @@ The parts of the form, from top to bottom:
   dynamic group. Absence and correlation rules cannot be scoped this way.
 - **Condition** is the comparison the rule fires on: a structured comparison of a metric against a
   value or a device attribute, an advanced CEL expression, or, for some types, **Match every event**.
-  Absence and Connectivity rules have no condition.
+  Absence and Connectivity rules have no condition. A rule never reads a metric declared String on
+  the profile, so the form warns when the condition names one; the rule can still be saved.
 - **Actions** is what happens when the rule fires: **Raise alarm**, **Send command**, **Call a
   webhook** or **Publish to a connector**. A rule with no action raises no alarm. Area correlation
   rules cannot carry actions. A **Send command** action also takes an optional **Expires after**

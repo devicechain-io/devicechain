@@ -88,7 +88,7 @@ Para un webhook entrante de Slack, usa `"auth":"none"` y omite `secret`. El [can
 
 El campo `text` del webhook genérico es un resumen de texto plano que usa el token del dispositivo o el originador en lugar del nombre del dispositivo; los usuarios de Slack deben usar el [canal nativo de Slack](#create-a-slack-channel).
 
-El cuerpo JSON de un canal webhook incluye el `eventType` de la alarma (`RAISED`, `ESCALATED`, `DEESCALATED`, `CLEARED`, `ACKNOWLEDGED`, o `RENOTIFIED` para una renotificación temporizada), `alarmToken`, `alarmKey`, `severity`, `state`, el `originatorType` y el `originatorId` del originador cuando se conocen, y las horas. Cuando se conoce el dispositivo de la alarma, incluye además `deviceToken`, `deviceName` y `deviceTypeToken`; una clave se omite cuando su valor se desconoce (por ejemplo, un dispositivo sin nombre) y nunca se envía vacía. Las renotificaciones temporizadas (`RENOTIFIED`) y las notificaciones `CLEARED` tardías que recoge el planificador también incluyen estos campos del dispositivo y del originador cuando se conocen. Las alarmas notificadas antes de actualizar omiten estos campos en esas notificaciones posteriores.
+El cuerpo JSON de un canal webhook incluye el `eventType` de la alarma (`RAISED`, `ESCALATED`, `RENOTIFIED` para una renotificación temporizada, o `CLEARED` en una política con [`notifyOnClear`](#notify-on-clear); los reconocimientos y las desescaladas no se entregan), `alarmToken`, `alarmKey`, `severity`, `state`, el `originatorType` y el `originatorId` del originador cuando se conocen, y las horas. Cuando se conoce el dispositivo de la alarma, incluye además `deviceToken`, `deviceName` y `deviceTypeToken`; una clave se omite cuando su valor se desconoce (por ejemplo, un dispositivo sin nombre) y nunca se envía vacía. Las renotificaciones temporizadas (`RENOTIFIED`) y las notificaciones `CLEARED` tardías que recoge el planificador también incluyen estos campos del dispositivo y del originador cuando se conocen. Las alarmas notificadas antes de actualizar omiten estos campos en esas notificaciones posteriores.
 
 Opcionalmente, establece `linkBaseUrl` en el `config` del canal webhook con la URL base `http` o `https` de tu consola (se recomienda `https`), por ejemplo `"linkBaseUrl":"https://console.example.com"`. El cuerpo incluirá entonces `alarmUrl` y, cuando la alarma identifique el dispositivo, `deviceUrl`. La URL base no debe incluir una cadena de consulta ni un fragmento, porque los enlaces se construyen añadiendo una ruta. Ambas claves se omiten cuando no estableces `linkBaseUrl`. Si un webhook almacenado tiene un `linkBaseUrl` no válido, la entrega lo omite, excluye ambos enlaces y registra una advertencia.
 
@@ -142,11 +142,10 @@ Un canal de PagerDuty envía eventos de Events API v2 y asigna el ciclo de vida 
 
 | Evento de la alarma | Acción de PagerDuty |
 | --- | --- |
-| levantada, escalada, desescalada o renotificada por el escalado de una política | `trigger` (una repetición sobre un incidente abierto lo actualiza en lugar de abrir otro) |
-| reconocida | `acknowledge` |
-| cerrada | `resolve` |
+| levantada, escalada o renotificada por el escalado de una política | `trigger` (una repetición sobre un incidente abierto lo actualiza en lugar de abrir otro) |
+| cerrada (solo en una política con `notifyOnClear: true`) | `resolve` |
 
-La severidad de la alarma se asigna a la de PagerDuty: `CRITICAL` a `critical`, `MAJOR` a `error`, `MINOR` y `WARNING` a `warning`, cualquier otra a `info`. Para que la política resuelva incidentes, enruta las transiciones de cierre y reconocimiento por el mismo canal que el levantamiento.
+La severidad de la alarma se asigna a la de PagerDuty: `CRITICAL` a `critical`, `MAJOR` a `error`, `MINOR` y `WARNING` a `warning`, cualquier otra a `info`. Para que la política resuelva incidentes, activa `notifyOnClear: true` en ella (consulta [Notificar cuando una alarma se resuelve](#notify-on-clear)). Reconocer una alarma en DeviceChain detiene su escalado, pero no reconoce el incidente de PagerDuty.
 
 `config` admite `region` (`us`, el valor por defecto, o `eu`, que selecciona `events.eu.pagerduty.com`), `source` (el origen del evento; `devicechain` por defecto) y `linkBaseUrl`.
 
@@ -364,7 +363,7 @@ Cada registro es un intento, del más reciente al más antiguo. Un canal con tre
 
 Cada canal informa además de `deliveryHealth { lastSuccessAt lastFailureAt consecutiveFailures }`, leído del registro. `consecutiveFailures` cuenta los intentos fallidos y rechazados desde la última entrega correcta del canal. Los registros `NOT_ATTEMPTED` no cuentan contra el canal, porque describen algo que la plataforma no hizo, y tampoco un registro `FAILED` con `errorCode: BUDGET_SPENT`: el tiempo disponible para todas las entregas de la alarma se agotó mientras ese intento estaba en curso, así que fue la plataforma la que lo cortó. `deliveryHealth` es null para quien no tiene `notification:read`, por ejemplo un canal que una mutación devuelve a quien puede escribir pero no leer.
 
-Dos propiedades a tener en cuenta:
+Tres propiedades a tener en cuenta:
 
 - **El registro nunca retrasa una notificación.** Los registros se escriben después del intento y fuera de la ruta de entrega. Si la base de datos no puede aceptar un registro, este se descarta y se cuenta en `devicechain_notificationmanagement_ledger_writes_total{outcome="failed"}` (o `outcome="dropped"` cuando ya hay demasiadas escrituras en espera). Un registro demuestra que hubo un intento; la ausencia de un registro no demuestra que no lo hubo.
 - **Los destinatarios son datos personales.** Los registros se eliminan pasados 7 días (la misma ventana que el estado de notificación resuelto), o pasado `AttemptRetentionSeconds` en la configuración de notification-management. También se borran con el inquilino cuando este se elimina.

@@ -341,8 +341,10 @@ Two things on a cluster can belong to only one instance, and the bootstrap handl
   of them, silently. A bootstrap whose host another instance already serves is refused. Give
   each instance its own `--host` (on a local cluster, for example `--host beta.localhost`).
 - **The local MQTT port.** On a local cluster, port 1883 on your machine reaches the broker of
-  the first instance only. Later instances' brokers are reachable from inside the cluster, and
-  the bootstrap says so when it happens.
+  the first instance, and 1884 and 1885 reach the second and third instance's: each new local
+  instance is given the first of the three that is free. A cluster created before the extra two
+  were published has only 1883. Further instances' brokers are reachable from inside the cluster,
+  and the bootstrap says so when it happens.
 
 #### Ingress and your own controller {#ingress-controller}
 
@@ -477,8 +479,10 @@ failure names a step you can find here:
    many of its instances are ready; nothing is undone, and running the same `dcctl bootstrap`
    again finishes the instance.
 10. **Report access info** — print the namespace, the superuser's email and where its password
-    is kept (plus the password itself, once: on the run that generated it, or on the run that
-    finishes a bootstrap that failed before showing it), and how to reach the instance.
+    is kept (plus the password itself, once, and only when the output is a terminal: on the run
+    that generated it, or on the run that finishes a bootstrap that failed before showing it;
+    piped or redirected output names the `dci-<instance>-superuser` Secret instead), and how to
+    reach the instance.
 
 :::tip `Ctrl+C` stops a run cleanly
 An interrupted run stops the infrastructure tool gracefully — it finishes what it is doing and
@@ -713,8 +717,9 @@ The alerts for snapshots are described under
   local kind cluster or for `--build`: an install into a cluster you name with `--kube-context`,
   from published images, does not check for it or use it. Where it is needed, its daemon must
   be reachable: Docker Engine on Linux, Docker Desktop on macOS and Windows.
-- **Free host ports 80, 443 and 1883** for a local kind cluster, which publishes them for the
-  console, HTTPS and MQTT. `dcctl preflight local` fails, naming the container that holds one,
+- **Free host ports 80, 443 and 1883-1885** for a local kind cluster, which publishes them for the
+  console, HTTPS and MQTT (1884 and 1885 serve a second and a third local instance's broker).
+  `dcctl preflight local` fails, naming the container that holds one,
   rather than letting the cluster create fail on Docker's bind error.
 - **Reachable from this machine only, unless you ask otherwise.** The kind cluster that
   `dcctl install local` creates publishes those ports on `127.0.0.1`, so the console and the MQTT
