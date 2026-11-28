@@ -437,7 +437,7 @@ export type ResumeUpdateRolloutMutation = { resumeUpdateRollout: { id: string, t
 export type PromoteUpdateRolloutMutationVariables = Exact<{
   token: string;
   expectedCohort: number;
-  overrideFailure?: boolean;
+  overrideFailure?: boolean | null | undefined;
 }>;
 
 
@@ -1601,7 +1601,7 @@ export const ResumeUpdateRolloutDocument = new TypedDocumentString(`
   }
 }`) as unknown as TypedDocumentString<ResumeUpdateRolloutMutation, ResumeUpdateRolloutMutationVariables>;
 export const PromoteUpdateRolloutDocument = new TypedDocumentString(`
-    mutation PromoteUpdateRollout($token: String!, $expectedCohort: Int!, $overrideFailure: Boolean! = false) {
+    mutation PromoteUpdateRollout($token: String!, $expectedCohort: Int!, $overrideFailure: Boolean = false) {
   promoteUpdateRollout(
     token: $token
     expectedCohort: $expectedCohort

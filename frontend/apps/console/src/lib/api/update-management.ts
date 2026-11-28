@@ -765,7 +765,7 @@ const RESUME_ROLLOUT = graphql(`
 `);
 
 const PROMOTE_ROLLOUT = graphql(`
-  mutation PromoteUpdateRollout($token: String!, $expectedCohort: Int!, $overrideFailure: Boolean! = false) {
+  mutation PromoteUpdateRollout($token: String!, $expectedCohort: Int!, $overrideFailure: Boolean = false) {
     promoteUpdateRollout(token: $token, expectedCohort: $expectedCohort, overrideFailure: $overrideFailure) {
       ...RolloutFields
     }
