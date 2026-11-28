@@ -372,6 +372,14 @@ title: 指标参考
 | `update_rollout_transitions_total{to}` | 服务自行改变状态的发布：`completed`、`paused_failure_threshold` 或 `paused_artifact_not_assignable`（制品被停用或失去要求的签名）。 |
 | `update_reports_total{verdict,kind}` | 更新进度和清单报告，按 `kind`（`progress`、`inventory`）和更新状态机给出的结论分类：`APPLIED`，或未应用的原因（`DUPLICATE`、`STALE_ATTEMPT`、`DIGEST_MISMATCH`、`WRONG_COMPONENT`、`REGRESSION`、`UNCONFIRMED`、`NOT_CANCELLABLE`、`LATE`、`CONFLICT`、`INVALID_ATTEMPT`、`WRONG_KIND`、`UNKNOWN_ASSIGNMENT`）。某一批设备的未应用速率上升说明设备端存在缺陷；请按 `kind="progress"` 判断，因为没有任何分配的设备发送的清单报告，按设计会得到 `UNKNOWN_ASSIGNMENT` 或 `UNCONFIRMED`。 |
 
+## MCP {#mcp}
+
+前缀：`devicechain_mcp_`。
+
+| 指标 | 含义 |
+| --- | --- |
+| `skill_reads_total{skill,kind}` | 成功读取内嵌技能的次数。`skill` 为 `alarm-storm-triage`、`device-anomaly-investigation` 或 `propose-change-for-approval`；`kind` 为 `prompt`（`prompts/get`）或 `resource`（`resources/read`，包括辅助文件）。列表查询以及未知名称或 URI 不增加计数，也不创建时间序列。不包含租户、设备或用户标签。 |
+
 ## 所有服务 {#every-service}
 
 前缀：`devicechain_<area>_`，其中 `<area>` 是去掉连字符的服务名称（`devicechain_devicemanagement_ready`）。每个服务都导出这些指标。

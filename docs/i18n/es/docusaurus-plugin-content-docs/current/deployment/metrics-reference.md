@@ -426,6 +426,14 @@ Si sube `update_download_grants_total{result="not_configured"}`, no hay una base
 | `update_rollout_transitions_total{to}` | Despliegues que el servicio movió por sí solo: `completed`, `paused_failure_threshold` o `paused_artifact_not_assignable` (el artefacto se retiró o perdió la firma exigida). |
 | `update_reports_total{verdict,kind}` | Informes de progreso e inventario de actualizaciones, por `kind` (`progress`, `inventory`) y por el veredicto de la máquina de estados: `APPLIED`, o el motivo de no aplicarlo (`DUPLICATE`, `STALE_ATTEMPT`, `DIGEST_MISMATCH`, `WRONG_COMPONENT`, `REGRESSION`, `UNCONFIRMED`, `NOT_CANCELLABLE`, `LATE`, `CONFLICT`, `INVALID_ATTEMPT`, `WRONG_KIND`, `UNKNOWN_ASSIGNMENT`). Una tasa creciente de no aplicados desde una flota es un fallo del lado del dispositivo; júzgala con `kind="progress"`, porque un informe de inventario de un dispositivo sin nada asignado recibe `UNKNOWN_ASSIGNMENT` o `UNCONFIRMED` por diseño. |
 
+## MCP {#mcp}
+
+Prefijo: `devicechain_mcp_`.
+
+| Métrica | Significado |
+| --- | --- |
+| `skill_reads_total{skill,kind}` | Lecturas correctas de habilidades incluidas. `skill` es `alarm-storm-triage`, `device-anomaly-investigation` o `propose-change-for-approval`; `kind` es `prompt` para `prompts/get` o `resource` para `resources/read`, incluidos los archivos de apoyo. Los listados y los nombres o URI desconocidos no incrementan el contador ni crean series. Sin etiquetas de inquilino, dispositivo ni usuario. |
+
 ## Todos los servicios {#every-service}
 
 Prefijo: `devicechain_<area>_`, donde `<area>` es el nombre del servicio sin guiones (`devicechain_devicemanagement_ready`). Todos los servicios exportan estas.

@@ -134,6 +134,8 @@ func initializeService(ctx context.Context) error {
 // this — because the initializer needs configuration and a JWKS endpoint.
 func registerHttpRoutes(resourceURL, issuerURL string, validator func() *coreauth.Validator,
 	gql *server.GraphQLClient, limits server.Limits, opts ...server.Option) {
+	reads := Microservice.NewCounterVec("skill_reads_total", "Successful embedded MCP skill reads.", []string{"skill", "kind"})
+	opts = append(opts, server.WithSkillReadCounter(reads))
 	server.Routes(Microservice.Mux(), resourceURL, issuerURL, validator, gql, limits, opts...)
 }
 
