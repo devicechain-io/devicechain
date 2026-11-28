@@ -30,9 +30,8 @@ const URLRedaction = "REDACTED"
 //
 // 🔴 IT IS STRUCTURAL, NOT A LIST OF SECRETS. Registering the parts of a URL with the
 // hub's redactor cannot work: a password like "p" is below any length the redactor
-// can match without corrupting ordinary words, and a password like "install",
-// registered strictly, refuses identifiers such as "install.inputs" and aborts an
-// ordinary run. So the places a credential can STAND in a URL are cut out instead,
+// can match without corrupting ordinary words, and one like "install" would be cut
+// out of every word that holds it. So the places a credential can STAND in a URL are cut out instead,
 // whatever is standing there and however it is encoded: a percent-encoded password
 // or fragment token is removed with the part that holds it.
 //
@@ -54,11 +53,28 @@ const URLRedaction = "REDACTED"
 //     userinfo, and such a value's path is shown as it is.
 //   - QUERY AND FRAGMENT: everything after the first '?' or '#' that follows the
 //     authority.
-//   - 🔴 WHEN IN DOUBT, MORE IS HIDDEN. An authority with no '@' that is not a
-//     well-formed host[:port] cannot be told apart from a password holding a raw
-//     '/', '?', '#' or "://" ("s3://u:pa/ss@bucket", "user:secret://x@host"). If
-//     such a value has an '@' anywhere, everything from the authority's start to
-//     its LAST '@' is taken as userinfo.
+//   - 🔴 WHEN IN DOUBT, MORE IS HIDDEN, AND A USERINFO '@' WINS. An authority with
+//     no '@' may be a username and the start of a password cut short by a raw
+//     '/', '?', '#' or "://" inside the password ("s3://u:pa/ss@bucket",
+//     "user:secret://x@host"). When the value has an '@' after such an authority,
+//     everything from the authority's start to the value's LAST '@' is taken as
+//     userinfo if the authority is not a well-formed host[:port] at all, if it is
+//     a name and a ':' with nothing after it ("s3://AKID:/wJalr…@bucket" — a base64
+//     secret starts with '/' one time in 64), or if it is a name and an all-digit
+//     port ("s3://admin:2024/Secret@bucket") and what follows that '@' is anything
+//     but an image digest. A name and a port look exactly like a user and a
+//     password that starts with digits; the far side of the '@' tells them apart
+//     only when it is a digest ("localhost:5001/img@sha256:…"), which follows a
+//     path and never a userinfo. A host there, a scoped IPv6 literal or anything
+//     else unclear is read as userinfo.
+//     A bracketed IP literal, or a name with no ':', is read as a host. The one
+//     form this cannot see is a username alone holding a raw '/'
+//     ("https://tok/en@host"), which is written exactly as a path holding an '@'
+//     ("https://host/a@b/archive") is; the second is the commoner by far.
+//   - When an authority with a port is in doubt and a '?' or '#' comes before
+//     that '@', the value is either a password holding the '?' or a query holding
+//     the '@', and the two readings hide different parts. Everything after the
+//     scheme is hidden then, which covers both.
 //   - What is left after that is decoded (percent-escapes, repeatedly, so a doubly
 //     encoded value is read too), and if the DECODED form still holds something the
 //     rules above would hide — an '@', '?' or '#' written as %40, %3F or %23 — the
@@ -145,10 +161,21 @@ func redactURLForm(s string) string {
 		end = len(s)
 	}
 	userEnd := start + strings.LastIndexByte(s[start:end], '@')
-	if userEnd < start && !validHostPort(s[start:end]) {
-		// The doubt: an authority that is no host may be a password cut short by a
-		// raw delimiter inside it. Its userinfo runs to the value's last '@'.
-		userEnd = strings.LastIndexByte(s, '@')
+	if userEnd < start {
+		// The doubt: an authority with no '@' may be a username and a password cut
+		// short by a raw delimiter inside it. Its userinfo then runs to the value's
+		// last '@'.
+		if at := strings.LastIndexByte(s, '@'); at > end {
+			switch authorityDoubt(s[start:end], s[at+1:]) {
+			case doubtNotAHost:
+				userEnd = at
+			case doubtHostPort:
+				if strings.ContainsAny(s[end:at], "?#") {
+					return s[:start] + URLRedaction
+				}
+				userEnd = at
+			}
+		}
 	}
 	out, rest := s, start
 	if userEnd > start {
@@ -191,9 +218,71 @@ func authorityStart(s string) int {
 	return 0
 }
 
+// doubt is how an authority with no '@' reads when an '@' follows it.
+type doubt int
+
+const (
+	// noDoubt: the authority is a host, and the '@' is in its path.
+	noDoubt doubt = iota
+	// doubtNotAHost: the authority is no well-formed host[:port].
+	doubtNotAHost
+	// doubtHostPort: the authority is a well-formed name and port that may be a
+	// user name and the start of a password.
+	doubtHostPort
+)
+
+// authorityDoubt reads the authority a, which holds no '@', given tail: what
+// follows the value's last '@', which comes after a. See RedactURL.
+func authorityDoubt(a, tail string) doubt {
+	if !validHostPort(a) {
+		return doubtNotAHost
+	}
+	colon := strings.IndexByte(a, ':')
+	if strings.HasPrefix(a, "[") || colon < 0 {
+		return noDoubt
+	}
+	if colon == len(a)-1 || !readsAsDigest(tail) {
+		return doubtHostPort
+	}
+	return noDoubt
+}
+
+// readsAsDigest reports whether tail, what follows an '@', is an image digest as
+// the OCI distribution grammar writes one ("sha256:0d1f…"): an algorithm of
+// lower-case letters and digits joined by '+', '.', '_' or '-', a ':', and an
+// encoded part of letters, digits, '=', '_' and '-', and nothing else (closing
+// punctuation of a sentence aside). It is the one thing a name:port/path@… value
+// may carry after its '@' and still be shown: anything else — a host, a scoped IPv6
+// literal, a word — is read as the far side of a userinfo, because when in doubt,
+// more is hidden.
+func readsAsDigest(tail string) bool {
+	tail = strings.TrimRight(tail, ".,;:)]}")
+	alg, enc, ok := strings.Cut(tail, ":")
+	if !ok || alg == "" || enc == "" || allDigits(enc) {
+		// All digits is a port: "host.example:9000" is a host, not a digest.
+		return false
+	}
+	for i := 0; i < len(alg); i++ {
+		c := alg[i]
+		switch {
+		case 'a' <= c && c <= 'z' || isDigit(c):
+		case strings.IndexByte("+._-", c) >= 0 && i > 0 && i < len(alg)-1 && strings.IndexByte("+._-", alg[i-1]) < 0:
+		default:
+			return false
+		}
+	}
+	for i := 0; i < len(enc); i++ {
+		if c := enc[i]; !(isAlpha(c) || isDigit(c) || c == '=' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 // validHostPort reports whether a is a well-formed host with an optional port: a
-// bracketed IP literal or a reg-name (unreserved, percent-encoded and sub-delims
-// characters), then ":" and digits, or nothing.
+// bracketed IP literal, with an optional zone after a '%' ("[fe80::1%25eth0]", or
+// the raw "%eth0" a decoded value holds), or a reg-name (unreserved, percent-encoded
+// and sub-delims characters), then ":" and digits, or nothing.
 func validHostPort(a string) bool {
 	host, port := a, ""
 	if strings.HasPrefix(a, "[") {
@@ -202,6 +291,21 @@ func validHostPort(a string) bool {
 			return false
 		}
 		host, port = a[1:end], a[end+1:]
+		if z := strings.IndexByte(host, '%'); z >= 0 {
+			zone := host[z+1:]
+			if zone == "" {
+				return false
+			}
+			for i := 0; i < len(zone); i++ {
+				if c := zone[i]; !(isAlpha(c) || isDigit(c) || strings.IndexByte("-._~%", c) >= 0) {
+					return false
+				}
+			}
+			host = host[:z]
+		}
+		if host == "" {
+			return false
+		}
 		for i := 0; i < len(host); i++ {
 			if c := host[i]; !(isHex(c) || c == ':' || c == '.') {
 				return false
@@ -354,8 +458,10 @@ func redactWord(w string) string {
 	if c < 0 {
 		return w
 	}
-	if after := head[c+1:]; strings.IndexByte(after, '/') > 0 && allDigits(after[:strings.IndexByte(after, '/')]) {
-		// host:port/path@… — a digest, not a password.
+	if after := head[c+1:]; strings.IndexByte(after, '/') > 0 && allDigits(after[:strings.IndexByte(after, '/')]) &&
+		readsAsDigest(w[at+1:]) {
+		// host:port/path@digest — not a password. Anything else after the '@' makes
+		// it user:password@host with a password that starts with digits.
 		return w
 	}
 	// A bracket or parenthesis the tool put around the value is kept.

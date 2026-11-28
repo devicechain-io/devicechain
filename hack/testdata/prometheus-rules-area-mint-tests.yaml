@@ -1,0 +1,99 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the area-bound mint rules.
+#
+# The series are the spec: devicechain_usermanagement_area_mint_requests_total{area, result},
+# registered by user-management (identity.NewAreaMintMetrics) with every series at zero from
+# start. area is an area-bound area or "other" (no credential matched).
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the rendered
+# group in beside this file as rendered-rules.yaml.
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # MUST FIRE, ON ONE REQUEST, FOR EACH FORBIDDEN RESULT. The series sits at zero, then one
+  # refusal: the alert fires at once (no `for`) and names the area.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_area_mint_requests_total{namespace="dci-devicechain", job="devicechain/user-management", area="automation", result="over_ceiling"}'
+        values: '0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: AreaMintRefusedForbiddenRequest
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: AreaMintRefusedForbiddenRequest
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              area: automation
+            exp_annotations: &annotations
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#areamintrefusedforbiddenrequest"
+              summary: "An area-bound area asked for a service token it may never have"
+              description: "user-management refused a service-token request presented with the mint credential of automation: it asked for an authority outside that area's ceiling, for the super-authority, or to name the token's subject itself. The area is built never to ask for any of these, so either its pod is running code it should not be, or its credential is being used by something else. Nothing was granted. user-management's rate-limited 'area-bound service-token request refused' warning names the area, the result and the authorities asked for. Treat the area's pod as suspect: inspect it, then rotate its credential by deleting the Secret dci-<instance>-mint-<area> and running dcctl upgrade, which mints a new one. Both the area and user-management read the credential from its mounted file on every mint, so the new one is in force once the mounts refresh, without a restart."
+      # Ten minutes after the last refusal the window is empty and the alert clears.
+      - eval_time: 20m
+        alertname: AreaMintRefusedForbiddenRequest
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_area_mint_requests_total{namespace="dci-devicechain", job="devicechain/user-management", area="automation", result="wildcard"}'
+        values: '0 0 0 0 0 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: AreaMintRefusedForbiddenRequest
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              area: automation
+            exp_annotations: *annotations
+
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_area_mint_requests_total{namespace="dci-devicechain", job="devicechain/user-management", area="automation", result="invalid_request"}'
+        values: '0 0 0 0 0 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: AreaMintRefusedForbiddenRequest
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              area: automation
+            exp_annotations: *annotations
+
+  # ------------------------------------------------------------------
+  # MUST NOT FIRE. Issued tokens at any rate, and bad credentials from anything that is not the
+  # area (area="other"), are not this alert: the first is normal, the second carries no area.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_area_mint_requests_total{namespace="dci-devicechain", job="devicechain/user-management", area="automation", result="issued"}'
+        values: '0+50x30'
+      - series: 'devicechain_usermanagement_area_mint_requests_total{namespace="dci-devicechain", job="devicechain/user-management", area="other", result="bad_credential"}'
+        values: '0+50x30'
+      - series: 'devicechain_usermanagement_area_mint_requests_total{namespace="dci-devicechain", job="devicechain/user-management", area="automation", result="over_ceiling"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: AreaMintRefusedForbiddenRequest
+        exp_alerts: []
+
+  # Another instance's refusals are not this instance's alert.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_usermanagement_area_mint_requests_total{namespace="dci-other", job="devicechain/user-management", area="automation", result="over_ceiling"}'
+        values: '0 0 0 0 0 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: AreaMintRefusedForbiddenRequest
+        exp_alerts: []

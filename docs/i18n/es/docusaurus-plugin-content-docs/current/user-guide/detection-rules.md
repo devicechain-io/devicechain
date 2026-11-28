@@ -66,7 +66,8 @@ Las partes del formulario, de arriba abajo:
 - **Condición** es la comparación con la que se dispara la regla: una comparación estructurada de una
   métrica con un valor o con un atributo del dispositivo, una expresión CEL avanzada o, en algunos
   tipos, **Coincidir con todos los eventos**. Las reglas de ausencia y de conectividad no tienen
-  condición.
+  condición. Una regla nunca lee una métrica declarada String en el perfil, así que el formulario
+  avisa cuando la condición nombra una; la regla se puede guardar igualmente.
 - **Acciones** es lo que ocurre cuando la regla se dispara: **Generar alarma**, **Enviar comando**,
   **Llamar a un webhook** o **Publicar en un conector**. Una regla sin acciones no genera ninguna
   alarma. Las reglas de correlación de áreas no admiten acciones. Una acción **Enviar comando** admite además un

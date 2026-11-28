@@ -4,8 +4,9 @@
 // Runs under jsdom with the real i18n catalogs; only the GraphQL transport is faked.
 //
 // What this file pins: the metric form offers STRING; choosing it hides the unit, bounds and
-// formula (a text reading has none) and clears what they held, switching back restores them, and
-// the create request carries no unit, bounds or formula for a STRING metric.
+// formula (a text reading has none), switching back restores them with what they held, the create
+// request carries no unit, bounds or formula for a STRING metric, and an edit that tries STRING and
+// switches back saves the stored unit and bounds unchanged.
 import i18n from '@/i18n/config';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -36,6 +37,10 @@ function install() {
     if (String(doc).includes('mutation CreateMetricDefinition')) {
       created.push(vars.request as Record<string, unknown>);
       return Promise.resolve({ createMetricDefinition: { id: '1', token: 't' } });
+    }
+    if (String(doc).includes('mutation UpdateMetricDefinition')) {
+      created.push(vars.request as Record<string, unknown>);
+      return Promise.resolve({ updateMetricDefinition: { id: '1', token: 't' } });
     }
     return Promise.resolve({});
   });
@@ -85,5 +90,42 @@ describe('MetricDefinitionForm: STRING', () => {
       maxValue: null,
       expression: null,
     });
+  });
+
+  it('keeps what the numeric fields held across a switch to STRING and back', async () => {
+    install();
+    render(<MetricDefinitionForm profileToken="p" onDone={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('Unit'), { target: { value: 'Cel' } });
+    fireEvent.change(screen.getByLabelText('Min'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('Max'), { target: { value: '9' } });
+    await chooseType('String');
+    await chooseType('Double');
+    expect((screen.getByLabelText('Unit') as HTMLInputElement).value).toBe('Cel');
+    expect((screen.getByLabelText('Min') as HTMLInputElement).value).toBe('1');
+    expect((screen.getByLabelText('Max') as HTMLInputElement).value).toBe('9');
+  });
+
+  it('saves an edit that tried STRING and switched back with the stored unit and bounds', async () => {
+    const saved = install();
+    const entity = {
+      id: '1',
+      token: 'temp',
+      metricKey: 'temp',
+      name: 'Temperature',
+      dataType: 'DOUBLE',
+      unit: 'Cel',
+      minValue: -40,
+      maxValue: 85,
+      description: null,
+      calculated: false,
+      expression: null,
+    } as unknown as Parameters<typeof MetricDefinitionForm>[0]['entity'];
+    render(<MetricDefinitionForm profileToken="p" entity={entity} onDone={vi.fn()} />);
+    await chooseType('String');
+    await chooseType('Double');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]).toMatchObject({ dataType: 'DOUBLE', unit: 'Cel', minValue: -40, maxValue: 85 });
   });
 });

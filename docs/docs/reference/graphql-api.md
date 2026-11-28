@@ -23,7 +23,7 @@ Every schema is published here, generated from the files the services parse at s
 |---|---|
 | **Reference pages** | [GraphQL schema reference](/reference/graphql/) — one page per schema: every query, mutation, subscription and type, with its description |
 | **Index** | [`/schema/index.json`](pathname:///schema/index.json) — every area, its auth plane, its endpoint and its schema file |
-| **Schemas** | `/schema/<area>.graphql`, plus `-admin` and `-settings` for the two areas that serve those planes |
+| **Schemas** | `/schema/<area>.graphql`, plus `-admin` for the three areas that serve an admin plane and `-settings` for user-management |
 
 Start with the index. It names the auth plane each schema sits on, and the token that plane takes,
 for every area in one place. Each published schema file also opens with a comment naming its own plane,
@@ -61,13 +61,14 @@ the request reaches that service's own `/graphql`. Every endpoint below is there
 | `event-management` | time-series event queries — `events`, `locationEvents`, `measurementEvents`, `alertEvents`, `bucketedMeasurements` — plus `calculatedEvents`, which previews a draft calculated-metric formula over a device's stored readings |
 | `device-state` | live last-known state — `latestMeasurements`, `latestLocation`, `deviceStates` — plus `demoteAssertedPresence`, which returns an event source's asserted devices to inferred presence |
 | `command-delivery` | command dispatch — `createCommand`, `cancelCommand`, fleet-wide batches (`createCommandBatch`, `cancelCommandBatch`), command history |
-| `event-processing` | detection-rule validation, replay preview, rule health |
+| `event-processing` | detection-rule validation, replay preview, rule testing (`evaluateRules`, behind `dcctl test`), rule health |
 | `dashboard-management` | dashboard CRUD and versioning |
 | `outbound-connectors` | per-tenant outbound connector CRUD |
 | `notification-management` | notification channels and policies |
+| `update-management` | over-the-air updates: the artifact catalogue, device assignments and group rollouts (an opt-in area; see below) |
 | `ai-inference` | a single call, `inferRuleCandidate`, backing natural-language rule authoring — present only when the optional inference service is enabled |
 
-Three more endpoints sit on a **separate identity-token plane** rather than the tenant plane. They
+Four more endpoints sit on a **separate identity-token plane** rather than the tenant plane. They
 are authorized for the superuser or operator:
 
 | Endpoint | Covers |
@@ -75,6 +76,7 @@ are authorized for the superuser or operator:
 | `/api/user-management/admin/graphql` | the instance admin API — identity directory, memberships, role catalog, tenant registry and tiers |
 | `/api/user-management/settings/graphql` | instance settings |
 | `/api/ai-inference/admin/graphql` | operator-registered inference providers |
+| `/api/event-management/admin/graphql` | per-tenant event usage (`tenantEventUsage`), read-only, for operators |
 
 Authorization across the data-plane services is **capability-based**: each resolver checks for a
 specific authority (for example `device:write`) carried on the caller's tenant token. A few
@@ -1215,8 +1217,6 @@ When the alert fires, someone is most likely trying many addresses:
 1. Find where the sign-in traffic comes from and block it upstream.
 2. If the traffic is legitimate, raise `instance.config.infrastructure.nats.kvStateMaxBytes`. That
    size applies to every state bucket, so make sure the JetStream volume has room for the increase.
-
-Detailed, per-type reference pages will be generated from the schemas as they stabilize.
 
 `SECRET_RESUPPLY_REQUIRED` means an update would send a stored credential to a different destination or present it differently. On `updateConnector`, `updateNotificationChannel` or `updateAiProvider`, supply `secret` again in the same request, or clear it with `secret: null`. For a connector rollback with a different binding, use `updateConnector` with the target configuration and its credential instead.
 

@@ -146,7 +146,8 @@ joined (default)**. Planning, creating, starting, resuming, reversing and resolv
 `device:read`. Agent and service identities and scoped members are refused.
 
 In **v1.10** `dcctl setup local` joins the preview tier: the `dcctl setup` and `dcctl setup local`
-commands, their flags (`--kube-context`, `--cluster`, `--compact`, `--ha`, `--no-splash`), their
+commands, their flags (`--kube-context`, `--cluster`, `--compact`, `--ha`, `--expose-lan`,
+`--no-splash`), their
 screens and their exit statuses (see [the guided set-up](./install-terminal-ui.md#setup-local)).
 Promotion: **two minors after it joined (default)**. `dcctl install` and `dcctl bootstrap`, which it
 runs, stay covered and are unchanged by it.

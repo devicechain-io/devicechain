@@ -44,8 +44,12 @@ func wireEdge(e core.EdgeKind) string {
 // (slice 7) — pre-GA, changeable.
 type DerivedEvent struct {
 	// Replayed marks a detection re-derived by startup replay rather than a fresh
-	// trigger. REACT still dispatches it (it may never have been delivered) but does
-	// not charge it to the command loop guard or the outbound budget. It is additive
+	// trigger: one made from an event the resolved-events durable had already handed to
+	// an earlier term, which may have acted on it before it died. A replayed event no
+	// term was ever given (a backlog that arrived while nothing consumed) is a fresh
+	// trigger and is NOT marked. REACT still dispatches a replayed detection (it may
+	// never have been delivered) but does not charge it to the command loop guard or
+	// the outbound budget. It is additive
 	// on the wire and excluded from DedupID; pre-upgrade events decode as live, and a
 	// pre-upgrade REACT ignores it and dispatches as before.
 	Replayed bool `json:"replayed,omitempty"`

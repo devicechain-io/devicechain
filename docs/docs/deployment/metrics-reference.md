@@ -114,6 +114,35 @@ bus: read them with `dcctl dead-letters`.
 | `resolve_measurement_dropped_total{reason}` | Measurement entries dropped at resolution while the rest of the event was stored: `undeclared_non_numeric` (a text value, or a boolean literal, for a key the profile does not declare), `undeclared_unstorable` (`NaN`, infinite or out-of-range number for an undeclared key) and `declared_not_storable` (a declared key whose data type cannot be stored, or a `STRING` value over 4,096 bytes, not valid UTF-8 or holding a NUL byte). The device is acknowledged normally and nothing is dead-lettered, so this is the signal that a device's payload is losing data. Not labelled by tenant, device or metric; the log line, once per device and metric, names them, and so does the device's page in the console. Declare the metric on the profile to store it. |
 | `resolve_not_gateway_child_total` | Events refused because a [gateway](./edge-services.md#gateway-identity) published for a device that is not assigned to it, that does not exist, or because the gateway is disabled. Each is recorded on the `failed-events` stream with its payload (reason `NotGatewayChild`), is not retried, and is reported to the gateway on its notices topic. It is not labelled by tenant or gateway; the log line, at most one a minute per gateway and device, names them. A rise usually means a device was never assigned to its gateway, or was assigned to another. |
 
+### Bulk changes {#bulk-changes}
+
+These series belong to [bulk changes](../guides/bulk-changes.md) and are registered only by a build
+that serves them. Every one exists from start-up at zero, except `bulk_change_reconciler_lag_seconds`,
+which starts as NaN (not measured) because zero is its healthy reading. The gauges are instance-wide
+and read the same on every replica, so the alerts read them with `max()`. The alerts are described in
+the [alert runbook](./alert-runbook.md#bulkchangesnotadvancing).
+
+| Metric | Means |
+| --- | --- |
+| `bulk_change_post_attempts_total{kind, result}` | Counter. Attempts to apply one bulk change line, by kind and result: `posted`, `refused`, `skipped`, `busy` (another writer held the device), `lost_race`, `fence_refused`, `fence_busy`, `lease_expired`, `not_activated` or `retryable` (failed in a way that is tried again). |
+| `bulk_change_post_duration_seconds{kind}` | Histogram. How long one attempt to apply a line took. |
+| `bulk_change_pacer_permits_total{result}` | Counter. Posting permits asked of the shared per-second pacer, `granted` or `denied`. |
+| `bulk_change_lines_settled_total{settlement, basis}` | Counter. Lines given a settlement, by settlement and the evidence that decided it (`REPORT_LOG`, `LATEST_STATE`, or `NONE` for a deadline or a person's verdict). |
+| `bulk_change_transitions_total{to, reason}` | Counter. Control transitions that committed, by the dispatch state entered and the reason (`none` when there is no reason). |
+| `bulk_change_operations{dispatch}` | Gauge. Bulk changes this release can drive, by dispatch state. |
+| `bulk_change_holds{code}` | Gauge. Running bulk changes whose hold was reported in the last 60 seconds, by hold code. `AUTHORITY_UNAVAILABLE` above zero raises `BulkChangesAuthorityUnavailable`. |
+| `bulk_change_oldest_runnable_line_age_seconds` | Gauge. Across running bulk changes that still have lines to apply and no blocking hold, the longest time one has gone without applying a line, on the database clock; 0 when none is waiting. Read by `BulkChangesNotAdvancing` and `BulkChangesStalled`. |
+| `bulk_change_deadline_lag_seconds` | Gauge. How far past its settlement deadline the oldest unsettled applied line is; 0 when none is. Read by `BulkChangesSettlementLagging`. |
+| `bulk_change_reconciler_lag_seconds` | Gauge. Age of the oldest device report that could settle an applied line and has not yet, measured once a minute. NaN until this pod has measured it, when its last measurement failed, and while another pod measures it. Read by `BulkChangesSettlementLagging`. |
+| `bulk_change_driver_last_pass_timestamp_seconds` | Gauge. Unix time of this pod's last completed bulk change driver pass; 0 until the first. Read by `BulkChangesDriverSilent`. |
+| `bulk_change_authority_decisions_total{result}` | Counter. Fresh authority answers asked for a bulk change's grantee: `qualified`, `revoked` (a definite no) or `unavailable` (no answer, which holds the operation). |
+| `bulk_change_fence_wait_seconds{action}` | Histogram. How long a bulk change transaction waited for its operation's fence, by action. |
+| `bulk_change_fence_pending_total{action}` | Counter. Control requests answered `FENCE_PENDING` because in-flight posting did not drain in time, by action. Read by `BulkChangesFencePending`. |
+| `bulk_change_admission_refusals_total{reason}` | Counter. Creates, starts and resumes refused at admission: `quota` (`QUOTA_EXCEEDED`) or `busy` (`ADMISSION_BUSY`). |
+| `bulk_change_redaction_repairs_total{table}` | Counter. Bulk change rows redacted by the repair pass for devices deleted without it, by table. |
+| `bulk_change_retention_rows_deleted_total{table}` | Counter. Bulk change rows removed by retention, by table. |
+| `bulk_change_activated` | Gauge. 1 when the database enforces the device attribute writer protocol that bulk changes post under, 0 when it does not or cannot be read. Read by `BulkChangesNotActivated`. |
+
 ## Event processing: detection {#event-processing-detect}
 
 Prefix: `devicechain_eventprocessing_`.
@@ -203,6 +232,7 @@ defect to investigate, not load. `react_actions_not_enabled_total` should never 
 | `react_actions_not_enabled_total{action}` | REACT actions recognized but dropped because this deployment has no sink for them, by action type: sendCommand without command-delivery configured, or httpCall/publish without outbound connectors enabled. The alarm sink is always wired, so raiseAlarm/clearAlarm should never appear here. |
 | `react_connector_egress_shed_total{action}` | Connector dispatch attempts (`httpCall`, `publish`) shed at the source for being over the tenant's outbound rate, by action type. Counted per attempt: a redelivery may shed and later admit the same action, so this is not a count of permanently dropped actions. |
 | `react_command_refused_total{reason,result}` | Commands a rule tried to send that were refused before reaching command-delivery, by reason, always with `result="unwanted"`. `command_rate_limited`: the tenant was over its outbound rate. `command_loop`: the rule had already sent 120 commands to that device within a minute. `command_guard_full`: the loop guard was already tracking its maximum number of rule and device pairs. Each refusal is also recorded as a dead letter with reason `shed`, up to the dead-letter budget. |
+| `react_command_governance_unresolved_admissions_total{cause}` | Commands a rule sent that were admitted at the platform default because the tenant's own ceiling was not known, by cause (`pending`, `unreachable`, `unknown-tenant`). Counted apart from the connector actions' `governance_unresolved_admissions_total`. No alert reads it: `TenantsMeteredAtPlatformDefault` watches only the `<area>_governance_unresolved_admissions_total` series. |
 | `react_connector_shed_dead_lettered_total{action}` | Actions refused at the source (connector actions over the tenant's outbound rate, and commands refused for any reason on `react_command_refused_total`) and recorded as an individual dead letter with reason shed, by action type (`httpCall`, `publish`, `sendCommand`). |
 | `react_derived_in_flight` | Derived events REACT has taken from the stream and not yet finished with: waiting for their device's worker or being dispatched. Normally at most `react_workers`; more while deliveries wait past their ack deadline. |
 | `react_dispatch_lag_seconds` | How far behind the derived-event stream REACT dispatches: each event's age, from the broker storing it to its dispatch starting. This is the time a detection's alarm, commands and connector calls wait on REACT. |
@@ -233,6 +263,7 @@ Prefix: `devicechain_eventmanagement_`.
 | `rollup_hour_backfill_complete_from_timestamp_seconds` | Gauge. Earliest fully refreshed hour boundary (Unix seconds). Older hours remain on minute rollups until filled. Exported only after this replica first acquires the backfill lock and reads progress. |
 | `rollup_hour_backfill_remaining_windows` | Gauge. Hour windows still owed down to the earliest source chunk/minute bucket or rollup retention floor. Zero means caught up. Exported only after the first locked progress read. |
 | `rollup_hour_backfill_windows_total` | Counter. Hour windows refreshed and recorded complete by this replica. Policy lock conflicts leave the window owed for the next pass. |
+| `analytics_reconcile_newer_surface_skips_total` | Counter. Reconcile passes in which this pod found the analytics (SQL/BI) views already at a newer generation than its own release and left them untouched. Expected only while an upgrade rolls; a steady rate after every pod runs the same release means an older pod is still running. |
 | `failed_events_recorded_total{source,reason}` | Records of events the platform refused or could not store that the [failed-events index](../guides/why-isnt-my-data-showing-up.md) read, by the area that wrote them and the reason. Every record counts, including those the flood bound folded into an existing row, so this is the platform's true rate of refusing events. `FailedEventsSustained` fires on it. |
 | `failed_events_suppressed_total{reason}` | Records folded into an existing row's count instead of adding a row, because the device or the reason reached its hourly bound. A sustained rate here means one device, or one cause, is refusing events in volume. |
 | `failed_events_unindexed_total{cause}` | Records the index did not store at all: `no_tenant` (the subject named no tenant), `undecodable` (the record would not decode), `erased` (the tenant's data has been erased) or `gave_up` (the store refused the record on every delivery). Only `gave_up` is a fault worth looking at; the record stays on the failure stream until it rolls off. |

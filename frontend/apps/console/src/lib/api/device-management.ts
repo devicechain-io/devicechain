@@ -3,6 +3,7 @@
 
 // Typed GraphQL operations against the device-management service.
 import { listAll } from './list-all';
+import { refusedAsUnserved, unservedInputField } from './rolling-upgrade';
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/device-management';
 import type {
@@ -40,6 +41,7 @@ import type {
   CommandDefinitionCreateRequest,
   CommandDefinitionUpdateRequest,
   DetectionRulesQuery,
+  AuthoredVia,
   DetectionRuleCreateRequest,
   DetectionRuleUpdateRequest,
   ScopeGroupsQuery,
@@ -1678,7 +1680,44 @@ const CREATE_DETECTION_RULE = graphql(`
 `);
 
 export async function createDetectionRule(request: DetectionRuleCreateRequest): Promise<void> {
-  await gql('device-management', CREATE_DETECTION_RULE, { request });
+  await withDoorFallback(request, (r) => gql('device-management', CREATE_DETECTION_RULE, { request: r }));
+}
+
+// ── The save door on an older device-management ───────────────────────────
+// authoredVia (the door a rule was saved through) is newer than some device-management pods a
+// rolling upgrade still runs, and their validator refuses a request that names it. A save the
+// old pod refuses for that reason alone is sent again without the door: that pod would not have
+// recorded it anyway, and the rule is otherwise saved exactly as asked. The one exception is a
+// rule drafted with Describe: its door is how the rule is marked as AI-assisted, so it is not
+// saved without it; the save is refused with RuleDoorUnavailableError until the upgrade completes.
+
+const AUTHORED_VIA_REFUSAL = [
+  unservedInputField('DetectionRuleCreateRequest', 'authoredVia'),
+  unservedInputField('DetectionRuleUpdateRequest', 'authoredVia'),
+];
+
+/** A Describe-drafted rule was not saved: the device-management that answered cannot record its door yet. */
+export class RuleDoorUnavailableError extends Error {
+  constructor() {
+    super('This rule was drafted with Describe, and the server cannot record that yet. Save it again after the upgrade completes.');
+    this.name = 'RuleDoorUnavailableError';
+  }
+}
+
+async function withDoorFallback<R extends { authoredVia?: AuthoredVia | null }>(
+  request: R,
+  send: (request: R) => Promise<unknown>,
+): Promise<void> {
+  try {
+    await send(request);
+    return;
+  } catch (err) {
+    if (request.authoredVia == null || !refusedAsUnserved(err, AUTHORED_VIA_REFUSAL)) throw err;
+  }
+  if (request.authoredVia === 'DESCRIBE') throw new RuleDoorUnavailableError();
+  const withoutDoor = { ...request };
+  delete withoutDoor.authoredVia;
+  await send(withoutDoor);
 }
 
 const UPDATE_DETECTION_RULE = graphql(`
@@ -1694,7 +1733,7 @@ export async function updateDetectionRule(
   token: string,
   request: DetectionRuleUpdateRequest,
 ): Promise<void> {
-  await gql('device-management', UPDATE_DETECTION_RULE, { token, request });
+  await withDoorFallback(request, (r) => gql('device-management', UPDATE_DETECTION_RULE, { token, request: r }));
 }
 
 const DELETE_DETECTION_RULE = graphql(`

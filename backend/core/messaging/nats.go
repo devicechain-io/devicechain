@@ -3213,6 +3213,28 @@ func (r *natsReader) Backlog(ctx context.Context) (pending, ackPending uint64, e
 	return ci.NumPending, uint64(ci.NumAckPending), nil
 }
 
+// DeliveredThrough reports the highest stream sequence this reader's durable consumer has handed
+// to any consumer instance, from the broker's ConsumerInfo. A consumer that checkpoints behind
+// its own ack floor reads it at the start of a replay to tell the part of the stream an earlier
+// instance may already have acted on (at or below it) from the part no instance was ever given
+// (above it). It is an upper bound on what was acted on, not a record of it: a fetch hands out a
+// batch, and a message delivered just before a crash may never have been applied.
+//
+// A durable that does not exist has delivered nothing, so that is 0 and no error. A durable that
+// is created afresh starts at the start position its creator gave it, and the broker reports the
+// sequence before that start as delivered. Like Backlog it touches no read-loop state and is safe
+// to call concurrently with Fetch.
+func (r *natsReader) DeliveredThrough(ctx context.Context) (uint64, error) {
+	ci, err := r.nmgr.js.ConsumerInfo(r.stream, r.durable, nats.Context(ctx))
+	if errors.Is(err, nats.ErrConsumerNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return ci.Delivered.Stream, nil
+}
+
 // ----------------
 // Lifecycle
 // ----------------

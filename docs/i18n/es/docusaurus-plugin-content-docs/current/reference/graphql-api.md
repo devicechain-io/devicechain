@@ -25,7 +25,7 @@ arrancar:
 |---|---|
 | **Páginas de referencia** | [Referencia de los esquemas GraphQL](/reference/graphql/): una página por esquema, con cada consulta, mutación, suscripción y tipo, y su descripción |
 | **Índice** | [`/schema/index.json`](pathname:///schema/index.json) — cada área, su plano de autenticación, su endpoint y su archivo de esquema |
-| **Esquemas** | `/schema/<area>.graphql`, más `-admin` y `-settings` para las dos áreas que sirven esos planos |
+| **Esquemas** | `/schema/<area>.graphql`, más `-admin` para las tres áreas que sirven un plano de administración y `-settings` para user-management |
 
 Empieza por el índice. Nombra el plano de autenticación en el que reside cada esquema, y el token que
 acepta ese plano, para todas las áreas en un solo sitio. Cada archivo de esquema publicado abre
@@ -65,13 +65,14 @@ son `https://<tu-host>/api/<area>/graphql`:
 | `event-management` | consultas de eventos de series temporales — `events`, `locationEvents`, `measurementEvents`, `alertEvents`, `bucketedMeasurements`, además de `calculatedEvents`, que previsualiza la fórmula en borrador de una métrica calculada sobre las lecturas almacenadas de un dispositivo |
 | `device-state` | último estado conocido en vivo — `latestMeasurements`, `latestLocation`, `deviceStates` — más `demoteAssertedPresence`, que devuelve los dispositivos afirmados de una fuente de eventos a presencia inferida |
 | `command-delivery` | envío de comandos — `createCommand`, `cancelCommand`, lotes para toda la flota (`createCommandBatch`, `cancelCommandBatch`), historial de comandos |
-| `event-processing` | validación de reglas de detección, vista previa de reproducción, salud de reglas |
+| `event-processing` | validación de reglas de detección, vista previa de reproducción, prueba de reglas (`evaluateRules`, detrás de `dcctl test`), salud de reglas |
 | `dashboard-management` | CRUD y versionado de paneles |
 | `outbound-connectors` | CRUD de conectores de salida por inquilino |
 | `notification-management` | canales y políticas de notificación |
+| `update-management` | actualizaciones por aire: el catálogo de artefactos, las asignaciones a dispositivos y los despliegues por grupo (un área opcional; consulta más abajo) |
 | `ai-inference` | una única llamada, `inferRuleCandidate`, que respalda la autoría de reglas en lenguaje natural — presente solo cuando el servicio opcional de inferencia está habilitado |
 
-Otros tres endpoints residen en un **plano de token de identidad separado**, no en el plano de
+Otros cuatro endpoints residen en un **plano de token de identidad separado**, no en el plano de
 inquilino. Están autorizados para el superusuario o el operador:
 
 | Endpoint | Cubre |
@@ -79,6 +80,7 @@ inquilino. Están autorizados para el superusuario o el operador:
 | `/api/user-management/admin/graphql` | la API de administración de instancia — directorio de identidades, membresías, catálogo de roles, registro de inquilinos y niveles |
 | `/api/user-management/settings/graphql` | ajustes de instancia |
 | `/api/ai-inference/admin/graphql` | proveedores de inferencia registrados por el operador |
+| `/api/event-management/admin/graphql` | uso de eventos por inquilino (`tenantEventUsage`), de solo lectura, para operadores |
 
 La autorización en los servicios del plano de datos está **basada en capacidades**: cada resolver
 comprueba una autoridad específica (por ejemplo, `device:write`) que lleva el token de inquilino del
@@ -1280,9 +1282,6 @@ Cuando se dispare la alerta, lo más probable es que alguien esté probando much
 2. Si el tráfico es legítimo, aumenta `instance.config.infrastructure.nats.kvStateMaxBytes`. Ese
    tamaño se aplica a todos los buckets de estado, así que comprueba que el volumen de JetStream
    tiene espacio para el aumento.
-
-Se generarán páginas de referencia detalladas por tipo a partir de los esquemas a medida que se
-estabilicen.
 
 `SECRET_RESUPPLY_REQUIRED` indica que una actualización cambiaría el destino o la presentación de una credencial almacenada. En `updateConnector`, `updateNotificationChannel` o `updateAiProvider`, vuelve a enviar `secret` en la misma solicitud o bórralo con `secret: null`. Para restaurar un conector con otro destino, usa `updateConnector` con la configuración de destino y su credencial.
 

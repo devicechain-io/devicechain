@@ -346,13 +346,13 @@ func TestShortKubeconfigCredentials(t *testing.T) {
 }
 
 // A found credential (a password that is an ordinary word) is redacted from text
-// but never refuses an event code that spells it; a strict one does.
+// but never refuses an event code that spells it; a generated one does.
 func TestRegisterCredentialsTextOnlyNeverRefusesACode(t *testing.T) {
 	hub, err := installflow.NewHub(installflow.Options{Sink: &testkit.CaptureSink{}, Clock: testkit.NewManualClock(testkit.Epoch)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := registerCredentials(hub, []credential{{value: "default", found: true, typed: true}, {value: "s3cr3t-strict"}, {value: "ab"}}); n != 1 {
+	if n := registerCredentials(hub, []credential{{value: "default", found: true, typed: true}, {value: "s3cr3t-strict", generated: true}, {value: "ab"}}); n != 1 {
 		t.Errorf("%d uncovered, want 1 (the two-byte value)", n)
 	}
 	if err := hub.Emit(installflow.Event{Payload: installflow.RunStarted{Target: installflow.Target{Mode: "managed-kind"},
@@ -369,6 +369,36 @@ func TestRegisterCredentialsTextOnlyNeverRefusesACode(t *testing.T) {
 	}
 	if got := hub.Redact("profile default, key s3cr3t-strict"); strings.Contains(got, "default") || strings.Contains(got, "s3cr3t") {
 		t.Errorf("Redact: %q", got)
+	}
+}
+
+// 🔴 ONE OF DCCTL'S OWN VALUES THAT A PERSON CHOSE — the escrow passphrase, an SMTP
+// password — is registered as strictly as ever for text, cut out as a substring, and
+// never refuses an event code that spells it: "install" is a substring of every
+// install step id. Only a value dcctl generated refuses one.
+func TestRegisterCredentialsAChosenValueNeverRefusesACode(t *testing.T) {
+	for _, generated := range []bool{false, true} {
+		hub, err := installflow.NewHub(installflow.Options{Sink: &testkit.CaptureSink{}, Clock: testkit.NewManualClock(testkit.Epoch)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := registerCredentials(hub, []credential{{value: "install", generated: generated}}); n != 0 {
+			t.Fatalf("%d uncovered", n)
+		}
+		err = hub.Emit(installflow.Event{Payload: installflow.RunStarted{Target: installflow.Target{Mode: "managed-kind"},
+			Manifest: []installflow.ManifestStep{{ID: installflow.StepInstallInputs}}}})
+		if generated {
+			if !errors.Is(err, installflow.ErrInvalidEvent) {
+				t.Errorf("the control: a generated value's code was not refused: %v", err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("a manifest spelling a chosen secret was refused: %v", err)
+		}
+		if got := hub.Redact("SMTP password install rejected"); strings.Contains(got, "install") {
+			t.Errorf("Redact kept a chosen secret: %q", got)
+		}
 	}
 }
 

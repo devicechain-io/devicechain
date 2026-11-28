@@ -17,7 +17,7 @@ import (
 //
 // The paths are matched as bare substrings, not as quoted literals, so a URL assembled in a
 // format string (fmt.Sprintf("http://%s:%d/auth/jwks", ...)) is found as well as a constant.
-var internalAuthEndpoints = []string{"ServiceTokenPath", "JWKSPath", "/auth/jwks", "/auth/service-token"}
+var internalAuthEndpoints = []string{"ServiceTokenPath", "JWKSPath", "/auth/jwks", "/auth/service-token", "/auth/area-service-token"}
 
 // internalAuthSites are the only non-test files allowed to name one of those endpoints, and what
 // each is for. A new file naming one is a new caller (or a new route), and either has to be a
@@ -29,6 +29,7 @@ var internalAuthEndpoints = []string{"ServiceTokenPath", "JWKSPath", "/auth/jwks
 //	            the same line, so a caller cannot build the public address for it.
 var internalAuthSites = map[string]string{
 	"core/auth/service_token.go":       "definition",
+	"core/auth/area_service_token.go":  "definition",
 	"core/auth/fetch.go":               "client",
 	"core/svcclient/client.go":         "client",
 	"services/user-management/main.go": "server",
