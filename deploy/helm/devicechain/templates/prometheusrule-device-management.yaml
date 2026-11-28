@@ -89,6 +89,20 @@ The certificate alerts watch devices that connect with a client certificate (MQT
 
 0/0 IS QUIET. Every series is created at zero, so an idle pod divides zero by zero; the
 result is NaN, NaN > 0.05 is false, and nothing fires. The promtool tests pin that case.
+The session-bound alerts watch the per-device bounds the auth callout puts on MQTT sessions
+(callout.maxSessionsPerDevice, callout.connectBurstPerDevice, callout.connectsPerMinutePerDevice).
+A device is never refused for the number of client ids it uses: past the count the session of its
+least recently used id is evicted (callout_sessions_evicted_total), which is not an alert. Every
+reason of callout_session_limited_total is created at zero when the service starts:
+
+  - DeviceMqttConnectRateLimited is devices being refused, steadily, for connecting faster than
+    the per-device rate: firmware reconnecting with no backoff, or one credential shared by
+    several clients that keep taking each other's session.
+  - DeviceMqttSessionStoreUnavailable is connects with a new client id refused because the
+    bound could not be kept: the bucket that records each device's ids could not be read or
+    written, or the session to evict could not be removed. Plain client ids and ids already
+    recorded are not affected.
+
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -225,6 +239,26 @@ spec:
             runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicex509jitrefusedsustained"
             summary: "Devices are being refused registration on first connect because registration is over its limit"
             description: "For 15m device-management has refused certificate registrations at {{ "{{ $value | humanize }}" }}/s, from the {{ "{{ $labels.result }}" }} limit. jit_rate_limited means the tenant's registrations per second are at its governance ceiling; jit_busy means the registration slots of every replica are taken, usually by a factory run on one provisioning profile, whose registrations take turns. Devices back off and retry on their own; raise the tenant's provisioning ceiling or spread the run out. A device that keeps retrying with a rotated certificate, before certificate renewal is available, spends the same allowance: every attempt that passes chain verification is charged to the tenant, including one refused afterwards."
+        - alert: DeviceMqttConnectRateLimited
+          expr: sum(rate(devicechain_devicemanagement_callout_session_limited_total{reason="connect_rate",namespace="{{ $ns }}"}[5m])) > 0.05
+          for: 15m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicemqttconnectratelimited"
+            summary: "Devices are being refused for connecting too often"
+            description: "For 15m device-management has refused device connects at {{ "{{ $value | humanize }}" }}/s because a device connected faster than callout.connectBurstPerDevice and callout.connectsPerMinutePerDevice allow. The debug log of device-management names the tenant and device. Usually it is firmware that reconnects with no backoff, or one credential shared by several clients that keep replacing each other's session. Fix the device; raise the bound only if the devices are right."
+        - alert: DeviceMqttSessionStoreUnavailable
+          expr: sum(increase(devicechain_devicemanagement_callout_session_limited_total{reason=~"session_store_unavailable|session_evict_failed",namespace="{{ $ns }}"}[10m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicemqttsessionstoreunavailable"
+            summary: "Devices connecting with a new client id are refused because their session bound cannot be kept"
+            description: "For 10m device-management has refused device connects that use a client id the device had not used before ({{ "{{ $value | humanize }}" }} in the last 10m), because the bound on its sessions could not be kept: the key-value bucket that records each device's client ids could not be read or written in time, or the session of its least recently used id could not be evicted from the broker. Devices on their plain client id, and ids already recorded, still connect. Check the broker's JetStream health and the fill of the dc_mqtt_session_discriminators bucket; the device-management log names the error."
         - alert: DeviceX509JitMisconfigured
           expr: sum by (result) (increase(devicechain_devicemanagement_callout_x509_total{result=~"jit_provisioning_misconfigured|jit_credential_type_unsupported|jit_ambiguous",namespace="{{ $ns }}"}[10m])) > 0
           labels:

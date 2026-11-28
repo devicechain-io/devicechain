@@ -133,6 +133,13 @@ func SparkplugCommandsAwaitingBucketName(instanceId string) string {
 	return sanitizeName(fmt.Sprintf("%s_%s", instanceId, kv.BucketSparkplugCommandsAwaiting))
 }
 
+// MqttSessionDiscriminatorsBucketName is the concrete KV bucket recording the MQTT client-id
+// discriminators each device has connected with. Instance-prefixed because its keys name a tenant
+// and a device, so two instances sharing a broker must not share them.
+func MqttSessionDiscriminatorsBucketName(instanceId string) string {
+	return sanitizeName(fmt.Sprintf("%s_%s", instanceId, kv.BucketMqttSessionDiscriminators))
+}
+
 // PartitionPlacementBucketName is the concrete KV bucket holding an instance's mirrored placement
 // table (core/partition). Instance-prefixed: two instances sharing a broker place their tenants
 // independently, and the vpartition hash itself is keyed by the instance id.

@@ -248,7 +248,7 @@ instance:
         # tenants. It is not a rate limit; it is the rate the disk is sized for. For a busier
         # instance raise it AND the JetStream volume (nats_jetstream_storage): at 20,000 a second
         # for 15 minutes the three streams reserve about 8.1 + 6.9 + 6.9 GB (20 GiB) on every
-        # broker server, up from 3 GiB, so the volume needs 33Gi against the default 16Gi.
+        # broker server, up from 3 GiB, so the volume needs 34Gi against the default 16Gi.
         # `dcctl bootstrap` and `dcctl upgrade` check the sum against the volume before they
         # change anything and say which of the two is short; dcctl sets 1000 for the standard
         # profile and 50 for --compact, and `--values` moves it.
@@ -1726,6 +1726,13 @@ functionalAreas:
       #     issuerPinRefresh: 30s   # how often the live servers are re-learned, 5s to 10m.
       #     issuerPinMinRefresh: 2s # least time between two server pings, 100ms up to issuerPinRefresh.
       #     issuerPinGatherWindow: 750ms # how long one ping waits for answers, 100ms to 2s.
+      #     maxSessionsPerDevice: 16 # MQTT client ids with a suffix ("{plain}:{suffix}") one device
+      #                             # holds sessions for, 1 to 1024. A new id past the count is still
+      #                             # admitted: the session of its least recently used id is evicted
+      #                             # first (callout_sessions_evicted_total). The plain id is never counted.
+      #     connectBurstPerDevice: 20 # connects one device may make at once, per replica, 1 to 10000...
+      #     connectsPerMinutePerDevice: 60 # ...refilling this many a minute, 1 to 60000. Over it a
+      #                             # connect is refused as not authorized and the device retries.
       #     revocation:             # bounds of the CA revocation lists an operator uploads (CRLs).
       #       maxCrlBytes: 2097152  # one CRL as submitted, 64 KiB to 32 MiB. An upload peaks at ~20-30x this in heap:
       #                             # size it against the pod's memory limit. Checked before parsing and

@@ -23,14 +23,6 @@ an area of this instance has no pod available
 
 ## `devicechain.area-mint`
 
-### AreaMintBadCredentialsSustained {#areamintbadcredentialssustained}
-
-**严重程度:** `warning` · **规则组:** `devicechain.area-mint`
-
-Service-token requests keep presenting an area credential that matches no area
-
-**含义与处理方式.** For at least 15 minutes, user-management's area-bound service-token endpoint has been refusing more than 10 requests every ten minutes because the credential presented matches no area-bound area. Nothing was granted. A short burst while a credential is being rotated is expected and does not raise this; a stream this long is either something on the instance's internal network presenting credentials that are not an area's, or a rotation whose two sides never agreed. Check whether an area-bound area's pod is failing to obtain tokens: if it is, its mounted credential and user-management's differ, so compare the Secret dci-&lt;instance&gt;-mint-&lt;area&gt; with what both pods mount, and restart the one that has not refreshed. If every area-bound area is obtaining tokens, the requests come from something else: the endpoint is served only on user-management's internal listener, so the caller is inside the instance's network. Find it and treat it as suspect.
-
 ### AreaMintRefusedForbiddenRequest {#areamintrefusedforbiddenrequest}
 
 **严重程度:** `critical` · **规则组:** `devicechain.area-mint`
@@ -434,6 +426,22 @@ The device credential cache is too small for the fleet
 A device-management per-device cache is too small for the fleet
 
 **含义与处理方式.** On ‹pod›, more than 5% of lookups in the ‹cache› cache have pushed another entry out of a full cache for 15m (now ‹value›). The cache is smaller than the set of devices reporting through it, so it is cycling and most lookups go to the key-value bucket. Raise inMemoryCache.perDeviceCacheMiB for device-management, and raise its memory limit with it.
+
+### DeviceMqttConnectRateLimited {#devicemqttconnectratelimited}
+
+**严重程度:** `warning` · **规则组:** `devicechain.device-management`
+
+Devices are being refused for connecting too often
+
+**含义与处理方式.** For 15m device-management has refused device connects at ‹value›/s because a device connected faster than callout.connectBurstPerDevice and callout.connectsPerMinutePerDevice allow. The debug log of device-management names the tenant and device. Usually it is firmware that reconnects with no backoff, or one credential shared by several clients that keep replacing each other's session. Fix the device; raise the bound only if the devices are right.
+
+### DeviceMqttSessionStoreUnavailable {#devicemqttsessionstoreunavailable}
+
+**严重程度:** `warning` · **规则组:** `devicechain.device-management`
+
+Devices connecting with a new client id are refused because their session bound cannot be kept
+
+**含义与处理方式.** For 10m device-management has refused device connects that use a client id the device had not used before (‹value› in the last 10m), because the bound on its sessions could not be kept: the key-value bucket that records each device's client ids could not be read or written in time, or the session of its least recently used id could not be evicted from the broker. Devices on their plain client id, and ids already recorded, still connect. Check the broker's JetStream health and the fill of the dc_mqtt_session_discriminators bucket; the device-management log names the error.
 
 ### DeviceTrustAnchorsExpiringSoon {#devicetrustanchorsexpiringsoon}
 

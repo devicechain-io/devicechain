@@ -379,6 +379,21 @@ func exceptionGrant(g *grant, instance, area string) {
 	case mqttBackoffArea:
 		// Reading the depth of the MQTT message store (the connect back-off). State only.
 		g.api("STREAM.INFO." + messaging.MqttMessageStore)
+		// EVICTING ONE DEVICE'S LEAST RECENTLY USED SESSION (messaging.MqttSessionEvictor), which is
+		// how the auth callout bounds the persistent sessions one device holds: read one session
+		// record by its subject, delete the consumers it names and then the record, as the gateway's
+		// own session clear does. The consumer names are the gateway's own ("{digest}_{nuid}"), so
+		// the grant cannot name them; the fail-closed durables are carved out as for the purge.
+		// It is no wider than what this login already is: the callout that mints every device's
+		// connect grant.
+		g.api("STREAM.INFO."+messaging.MqttSessionStore,
+			"STREAM.MSG.GET."+messaging.MqttSessionStore,
+			"STREAM.MSG.DELETE."+messaging.MqttSessionStore,
+			"CONSUMER.DELETE."+messaging.MqttMessageStore+".*",
+			"CONSUMER.DELETE."+messaging.MqttPubRelStore+".*")
+		for _, d := range messaging.MqttFailClosedConsumerNames(instance) {
+			g.apiDeny("CONSUMER.DELETE." + messaging.MqttMessageStore + "." + d)
+		}
 	case tenantPurgeArea:
 		// USER-MANAGEMENT ERASES A DELETED TENANT. It purges the tenant's subjects from every
 		// stream the platform declares (and the gateway's subject-carrying stores), deletes the

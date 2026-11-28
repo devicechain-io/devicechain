@@ -286,6 +286,32 @@ var All = []Bucket{
 			"DeviceCredentialAttemptStoreFull alert fires on it.",
 	},
 	{
+		Name:    BucketMqttSessionDiscriminators,
+		Tier:    State,
+		TTL:     MqttSessionDiscriminatorTTL,
+		Writers: []string{"device-management"},
+		Readers: []string{"device-management"},
+
+		BackupClass:   durability.BackupEphemeral,
+		Durability:    durability.Transient,
+		DurabilityWhy: "the MQTT client ids each device has used; a lost entry stops counting the sessions those ids left, which the broker's own session store still holds",
+		Why: "The MQTT client ids with a suffix each device has connected with, one entry per " +
+			"(tenant, device) that ever used one, holding at most callout.maxSessionsPerDevice of " +
+			"them with a last-seen time. Keys and values are keyed digests (and the broker's session " +
+			"digest, sealed), so it holds no identifier. It is what bounds how many persistent " +
+			"sessions one device credential leaves in the broker's session store: a new id past the " +
+			"count evicts the least recently seen one's session first. A device on its plain client " +
+			"id writes nothing, so this scales with the devices that use a second session, not with " +
+			"the fleet: an entry is about 200 bytes for a device with one suffixed id and about 1.7 KB " +
+			"at the default 16, so the default 128 MiB State ceiling holds roughly 600k devices with " +
+			"one and 75k at the full count (the compact preset's 16 MiB an eighth of that). Its " +
+			"reservation is in the published JetStream sizing table. Entries do not age out in " +
+			"practice (the lifetime is ten years): a slot is " +
+			"released only by evicting the session it counts. A full or unreachable bucket refuses " +
+			"only connects with an id the device has not used before (fail closed, counted as " +
+			"callout_session_limited_total{reason=\"session_store_unavailable\"}).",
+	},
+	{
 		Name:    BucketLocks,
 		Tier:    State,
 		TTL:     30 * time.Second, // the longest of the lifetimes its openers asked for before this was declared
@@ -430,6 +456,12 @@ var All = []Bucket{
 	},
 }
 
+// MqttSessionDiscriminatorTTL is the lifetime of an entry in BucketMqttSessionDiscriminators. It is
+// ten years, which is "never" for an instance: an entry counts broker sessions that do not expire,
+// and letting it age out would release their slots without removing them. Every bucket must declare
+// a positive lifetime, so this is the longest that reads as a deliberate one.
+const MqttSessionDiscriminatorTTL = 10 * 365 * 24 * time.Hour
+
 // CacheTTL is the entry lifetime of every cache bucket. It is what the device-management cache
 // settings defaulted to (300 seconds); those settings now bound only how long a replica keeps a
 // value in its own memory, which never exceeds the bucket's lifetime.
@@ -450,6 +482,9 @@ const (
 	// purpose: see its entry in All.
 	BucketDeviceCredentialAttempts = "dc_device_credential_attempts"
 	BucketLocks                    = "dc_locks"
+	// BucketMqttSessionDiscriminators bounds the persistent MQTT sessions one device can hold.
+	// See its entry in All.
+	BucketMqttSessionDiscriminators = "dc_mqtt_session_discriminators"
 	// BucketSparkplugCommandsAwaiting holds the Sparkplug commands sparkplug-ingest has published
 	// and is still waiting to hear an outcome for. See its entry in All.
 	BucketSparkplugCommandsAwaiting = "dc_sparkplug_commands_awaiting"

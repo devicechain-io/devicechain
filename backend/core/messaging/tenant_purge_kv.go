@@ -287,6 +287,16 @@ func KvPurgeExemptions() []string {
 			"principal of a throttled kind, keyed by a hash of the presented identifier (today an " +
 			"email). It names no tenant — a sign-in attempt belongs to the PERSON, like the refresh-token store — and " +
 			"every entry expires ten minutes after its last write, well inside the settle window",
+		kv.BucketMqttSessionDiscriminators + ": the MQTT client ids each device has connected " +
+			"with, which bound its persistent sessions. It holds NO identifier: the key is a keyed " +
+			"digest of the tenant and device (under a key derived from the instance root key, which " +
+			"the purge does not hold), and each value is a keyed digest of a client-id suffix with the " +
+			"broker's own session digest sealed under the same key. So no sweep can attribute an " +
+			"entry to a tenant, and none needs to: the tenant's broker sessions themselves are erased " +
+			"by the MQTT gateway purge, after which an entry names only sessions that no longer exist. " +
+			"It is exempt for a second reason during a rolling upgrade: a purge coordinator of the " +
+			"previous release never scanned it, and there is nothing in it such a purge would have " +
+			"to find",
 		kv.BucketDeviceCredentialAttempts + ": MQTT password backoff state, one entry per " +
 			"recently tried MQTT username. The username does name a tenant, but the key is a HASH " +
 			"of it, so no sweep can find a tenant's entries by name; the entries carry only a " +

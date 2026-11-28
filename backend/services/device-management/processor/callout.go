@@ -156,6 +156,12 @@ type CalloutResponder struct {
 	// pin, when set, refuses a certificate connect whose request was not signed by a live broker
 	// server. See WithIssuerPin.
 	pin *IssuerPin
+
+	// sessions caps the distinct client-id discriminators one device may connect with, and
+	// connects how often one device may connect; both nil when off. See WithSessionBounds and
+	// callout_session_bound.go.
+	sessions *sessionBound
+	connects *connectLimiter
 }
 
 // Defaults for the bounds above. The lookup timeout sits under the broker's 5 s
@@ -184,6 +190,15 @@ type CalloutMetrics struct {
 	// JitInFlight is the certificate registrations being decided right now. It stays zero until
 	// registration on first connect exists.
 	JitInFlight prometheus.Gauge
+	// SessionLimited counts the connects a per-device session bound refused, by reason (see
+	// sessionLimitedReasons). Every reason exists at zero from startup.
+	SessionLimited *prometheus.CounterVec
+	// SessionsEvicted counts the persistent sessions evicted to admit a device's new client id
+	// past callout.maxSessionsPerDevice.
+	SessionsEvicted prometheus.Counter
+	// ConnectLimiterSaturated counts connects admitted without a per-device rate bucket because a
+	// replica already holds DefaultConnectLimiterMaxDevices of them (the limiter fails open).
+	ConnectLimiterSaturated prometheus.Counter
 }
 
 // NewCalloutMetrics registers the callout's metrics on the microservice.
@@ -199,7 +214,23 @@ func NewCalloutMetrics(ms *core.Microservice) *CalloutMetrics {
 		Duration: newCalloutDuration(ms),
 		JitInFlight: ms.NewGauge("callout_jit_in_flight",
 			"Certificate registrations on first connect being decided right now."),
+		SessionLimited: newSessionLimitedCounter(ms),
+		SessionsEvicted: ms.NewCounter("callout_sessions_evicted_total",
+			"Persistent MQTT sessions the auth callout evicted (the device's least recently used client id) to admit a new client id past callout.maxSessionsPerDevice."),
+		ConnectLimiterSaturated: ms.NewCounter("callout_connect_limiter_saturated_total",
+			"Device connects admitted without a per-device connect-rate bucket because the replica's limiter was full (it fails open)."),
 	}
+}
+
+// newSessionLimitedCounter registers callout_session_limited_total with every reason at zero.
+func newSessionLimitedCounter(ms *core.Microservice) *prometheus.CounterVec {
+	vec := ms.NewCounterVec("callout_session_limited_total",
+		"Device connects refused by a per-device session bound, by reason: connect_rate (over the per-device connect rate), session_store_unavailable (a new MQTT client id could not be recorded in time), session_evict_failed (the session of the device's least recently used client id could not be evicted to make room).",
+		[]string{"reason"})
+	for _, r := range sessionLimitedReasons {
+		vec.WithLabelValues(r)
+	}
+	return vec
 }
 
 // UseDeviceUplinks makes the responder grant every device it admits the right to publish its own
@@ -717,6 +748,10 @@ const (
 	grantRefusedFence   grantRefusal = "tenant_fenced"
 	grantRefusedExpiry  grantRefusal = "expires_too_soon"
 	grantRefusedFailure grantRefusal = "error"
+	// grantRefusedSessionBound: a per-device session bound refused the connect (the connect
+	// rate, or a new client id that could not be recorded or made room for);
+	// callout_session_limited_total says which.
+	grantRefusedSessionBound grantRefusal = "session_limited"
 )
 
 // grantSession is the half of a device connect that is the same whatever the credential was:
@@ -725,6 +760,16 @@ const (
 // clamped to the credential's expiry before it is signed. The order matters and is part of the
 // contract (see the notes on each check).
 func (c *CalloutResponder) grantSession(ctx context.Context, req jwt.AuthorizationRequest, tenant string, device *model.Device) (string, grantRefusal) {
+	// The per-device connect rate, first: it is the cheapest check and the one that keeps a
+	// device reconnecting in a tight loop from costing everything below on every attempt. It is
+	// charged here, after the credential has named the device, because the device is its key.
+	if c.connects != nil && !c.connects.allow(tenant, device.Token, c.now()) {
+		log.Debug().Str("tenant", tenant).Str("device", device.Token).
+			Msg("Auth-callout refused a device connect: the device is over its connect rate.")
+		c.countSessionLimited(sessionLimitedConnectRate)
+		return "", grantRefusedSessionBound
+	}
+
 	// A disabled device is refused a session, with the same generic answer as every other
 	// refusal. Checked after the credential succeeded, like the client-id pin below: it is a
 	// property of the DEVICE, which only a successful credential check names, and it is not
@@ -807,6 +852,17 @@ func (c *CalloutResponder) grantSession(ctx context.Context, req jwt.Authorizati
 		log.Debug().Str("tenant", tenant).Str("device", device.Token).
 			Msg("Auth-callout refused a device connect: the credential expires too soon to mint a session.")
 		return "", grantRefusedExpiry
+	}
+
+	// The per-device session cap, last before signing, so only a connect that would otherwise be
+	// granted records a client id or evicts a session. It runs under the request's own deadline
+	// (ctx), so it never outlives the broker's wait. See sessionBound.admit.
+	if c.sessions != nil {
+		if reason := c.sessions.admit(ctx, tenant, device.Token, required,
+			clientIDDiscriminator(req.ClientInformation.MQTT, required), c.now()); reason != "" {
+			c.countSessionLimited(reason)
+			return "", grantRefusedSessionBound
+		}
 	}
 	signed, err := natsauth.SignDeviceUserJWT(c.issuerSeed, req.UserNkey, c.instanceId, tenant, device.Token, c.now(), ttl,
 		natsauth.WithDeviceUplink(c.deviceUplinks))

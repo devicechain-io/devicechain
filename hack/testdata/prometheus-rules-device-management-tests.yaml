@@ -1058,3 +1058,85 @@ tests:
       - eval_time: 14m
         alertname: AlarmEventRelayStalled
         exp_alerts: []
+
+  # The per-device connect rate refusing steadily: one a second fires (after its 15m hold, asserted
+  # at 12m); the other reasons are not this alert's, however fast.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_session_limited_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="connect_rate"}'
+        values: '0+60x60'
+      - series: 'devicechain_devicemanagement_callout_session_limited_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="session_store_unavailable"}'
+        values: '0+600x60'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: DeviceMqttConnectRateLimited
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: DeviceMqttConnectRateLimited
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicemqttconnectratelimited"
+              summary: "Devices are being refused for connecting too often"
+              description: "For 15m device-management has refused device connects at 1/s because a device connected faster than callout.connectBurstPerDevice and callout.connectsPerMinutePerDevice allow. The debug log of device-management names the tenant and device. Usually it is firmware that reconnects with no backoff, or one credential shared by several clients that keep replacing each other's session. Fix the device; raise the bound only if the devices are right."
+
+  # A slow trickle (1 a minute) stays under the line.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_session_limited_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="connect_rate"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: DeviceMqttConnectRateLimited
+        exp_alerts: []
+
+  # The session bound failing: fires after its hold on refusals of EITHER of its reasons, each on
+  # its own series; the connect rate and an idle service do not.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_session_limited_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="session_store_unavailable"}'
+        values: '0 0 0 0 0 5 10 15 20 25 30 35 40 45 50 55 60 65 70 75 80 85 90 95 100 105 110 115 120 125 130'
+      - series: 'devicechain_devicemanagement_callout_session_limited_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="connect_rate"}'
+        values: '0+600x30'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DeviceMqttSessionStoreUnavailable
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DeviceMqttSessionStoreUnavailable
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: DeviceMqttSessionStoreUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicemqttsessionstoreunavailable"
+              summary: "Devices connecting with a new client id are refused because their session bound cannot be kept"
+              description: "For 10m device-management has refused device connects that use a client id the device had not used before (50 in the last 10m), because the bound on its sessions could not be kept: the key-value bucket that records each device's client ids could not be read or written in time, or the session of its least recently used id could not be evicted from the broker. Devices on their plain client id, and ids already recorded, still connect. Check the broker's JetStream health and the fill of the dc_mqtt_session_discriminators bucket; the device-management log names the error."
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_session_limited_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="session_evict_failed"}'
+        values: '0 0 0 0 0 5 10 15 20 25 30 35 40 45 50 55 60 65 70 75 80 85 90 95 100 105 110 115 120 125 130'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: DeviceMqttSessionStoreUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#devicemqttsessionstoreunavailable"
+              summary: "Devices connecting with a new client id are refused because their session bound cannot be kept"
+              description: "For 10m device-management has refused device connects that use a client id the device had not used before (50 in the last 10m), because the bound on its sessions could not be kept: the key-value bucket that records each device's client ids could not be read or written in time, or the session of its least recently used id could not be evicted from the broker. Devices on their plain client id, and ids already recorded, still connect. Check the broker's JetStream health and the fill of the dc_mqtt_session_discriminators bucket; the device-management log names the error."
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_callout_session_limited_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="session_store_unavailable"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: DeviceMqttSessionStoreUnavailable
+        exp_alerts: []

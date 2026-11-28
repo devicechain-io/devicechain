@@ -60,6 +60,9 @@ const (
 	x509ResultTenantRefused  = "tenant_refused"
 	x509ResultError          = "error"
 	x509ResultCertIgnored    = "x509_cert_ignored"
+	// x509ResultSessionLimited: a per-device session bound refused the connect
+	// (callout_session_limited_total says which).
+	x509ResultSessionLimited = "session_limited"
 	// The registration results belong to registration on first connect, which counts them (see
 	// callout_x509_jit.go). A connect that registered its device is counted by what registration
 	// did, and not again as ok.
@@ -76,7 +79,7 @@ const (
 var x509Results = []string{
 	x509ResultOK, x509ResultNoCert, x509ResultChainInvalid, x509ResultAnchorDisabled, x509ResultRevoked, x509ResultCertRevoked, x509ResultRevocationUnknown, x509ResultOcspRevoked, x509ResultOcspUnavailable,
 	x509ResultClientIDMismatch, x509ResultUnknownPin, x509ResultMisconfigured, x509ResultPasswordPresented, x509ResultUnsealed, x509ResultIssuerUnpinned, x509ResultIssuerPending, x509ResultPinUnavailable, x509ResultCertMalformed,
-	x509ResultTenantRefused, x509ResultError, x509ResultCertIgnored,
+	x509ResultTenantRefused, x509ResultError, x509ResultCertIgnored, x509ResultSessionLimited,
 	x509ResultJitCreated, x509ResultJitAdopted, x509ResultJitRenewed, x509ResultJitReplayed,
 	x509ResultJitRateLimited, x509ResultJitBusy, x509ResultJitAmbiguous,
 }
@@ -301,6 +304,8 @@ func (c *CalloutResponder) grantX509(ctx context.Context, req jwt.AuthorizationR
 		return c.refuseX509(obs, x509ResultTenantRefused)
 	case grantRefusedExpiry:
 		return c.refuseX509(obs, x509ResultChainInvalid)
+	case grantRefusedSessionBound:
+		return c.refuseX509(obs, x509ResultSessionLimited)
 	default:
 		return c.refuseX509(obs, x509ResultError)
 	}

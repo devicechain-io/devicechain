@@ -57,6 +57,8 @@ func KvBucketNames(instanceId string, b kv.Bucket, area string) []string {
 		return []string{PartitionPlacementBucketName(instanceId)}
 	case kv.BucketSparkplugCommandsAwaiting:
 		return []string{SparkplugCommandsAwaitingBucketName(instanceId)}
+	case kv.BucketMqttSessionDiscriminators:
+		return []string{MqttSessionDiscriminatorsBucketName(instanceId)}
 	}
 	if b.Tier == kv.Cache {
 		return []string{CacheBucketName(instanceId, area, b.Name)}

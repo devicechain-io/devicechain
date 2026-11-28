@@ -4,9 +4,12 @@
 package messaging
 
 import (
+	"context"
+
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/kv"
 	nats "github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // CredentialAttemptStore returns the instance's credential-attempt bucket — the shared
@@ -53,4 +56,21 @@ func (nmgr *NatsManager) PartitionPlacementStore() (nats.KeyValue, error) {
 	b, _ := kv.Lookup(kv.BucketPartitionPlacement)
 	return nmgr.KeyValueStore(kv.BucketPartitionPlacement,
 		PartitionPlacementBucketName(nmgr.Microservice.InstanceId), b.TTL)
+}
+
+// MqttSessionDiscriminatorStore returns the instance's bucket of the MQTT client ids each device
+// has connected with (device-management's auth callout), which bounds how many persistent sessions
+// one device can hold. The bucket is verified (or, for a test's manager, created) through
+// KeyValueStore like every other; the handle returned is the jetstream package's, because every
+// call on it takes the callout request's context and deadline.
+func (nmgr *NatsManager) MqttSessionDiscriminatorStore(ctx context.Context) (jetstream.KeyValue, error) {
+	bucket := MqttSessionDiscriminatorsBucketName(nmgr.Microservice.InstanceId)
+	if _, err := nmgr.KeyValueStore(kv.BucketMqttSessionDiscriminators, bucket, kv.MqttSessionDiscriminatorTTL); err != nil {
+		return nil, err
+	}
+	js, err := jetstream.New(nmgr.nc)
+	if err != nil {
+		return nil, err
+	}
+	return js.KeyValue(ctx, bucket)
 }
