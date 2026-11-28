@@ -177,6 +177,8 @@ func TestFleetI25PostgresQuotasSurviveLineRetention(t *testing.T) {
 		// PLANNED rows or headers which are still dispatching.
 		require.NoError(t, api.RDB.DB(ctx).Exec(`INSERT INTO fleet_operation_lines (tenant_id, operation_id, ordinal, posting)
 SELECT ?, ?, n, 'CANCELLED' FROM generate_series(2, ?) AS n`, tenant, op.ID, ledger.TenantRetainedLines).Error)
+		// The header as create step two leaves it: admission reads the lines an operation holds from it.
+		require.NoError(t, api.RDB.DB(ctx).Model(op).Updates(map[string]any{"target_count": ledger.TenantRetainedLines, "plan_digest": "sha256:p"}).Error)
 		_, err := api.CreateFleetOperation(ctx, setReq("over-retained", tokens...), "alice")
 		var refusal *FleetOperationError
 		require.ErrorAs(t, err, &refusal)

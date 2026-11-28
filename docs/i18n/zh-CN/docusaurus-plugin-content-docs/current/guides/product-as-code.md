@@ -7,9 +7,7 @@ title: 产品即代码
 
 你可以把租户的产品保存在 git 中。`dcctl product export` 会把租户的设备类型、设备配置文件、仪表板、出站连接器和入站集成写成一个文件目录。`dcctl product plan` 显示应用这些文件会改变什么，`dcctl product apply` 则让租户与这些文件一致。可用它把产品从开发租户推进到生产租户、在拉取请求中评审变更，或发现租户偏离了已提交的内容。
 
-:::caution 预览
-命令树和包格式（`apiVersion: product.devicechain.io/v1alpha1`）目前为预览。它们是新的，后续的次要版本可能会更改格式。`dcctl` 只读取它认识的 `apiVersion`，拒绝其他版本，因此包不会被只理解一半。
-:::
+命令树和包格式自 v1.10 起受[版本策略](../deployment/versioning-policy.md)保障；包格式保留版本 `product.devicechain.io/v1alpha1`。
 
 这些命令与控制台使用相同的租户 GraphQL API，并以你登录的身份执行。服务器会对每次调用授权，因此你需要具备控制台进行同样更改所需的权限。
 
@@ -147,7 +145,7 @@ linkMetrics: true
 
 `apply` 只会把凭据发送给尚未设置凭据的连接器。平台无法告诉你存储了什么，因此无法判断变量是否已更改；传入 `--rotate-secrets` 可把凭据发送给所有已设置变量的连接器。需要凭据而其变量未设置的连接器会阻塞计划。从连接器文件中删除 `credential` 会删除已存储的凭据。
 
-入站集成的持有者令牌由服务器在创建集成时生成。`apply` 不会请求它，因此它从不会被接收、打印或保存。请在控制台中轮换该集成的令牌以签发一个。
+入站集成的持有者令牌由服务器在创建集成时生成。`apply` 不会请求它，因此它从不会被接收、打印或保存。要签发一个，请运行 [`dcctl product rotate-integration-token <integration-token>`](../reference/dcctl.md#dcctl-product-rotate-integration-token)（它只在 stdout 上打印新令牌，旧令牌立即失效），或在控制台中轮换。
 
 ## apply 如何收敛 {#apply}
 

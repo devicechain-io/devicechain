@@ -119,6 +119,36 @@ que un cambio de estado llegó a la base de datos pero no al bus: léelos con `d
 | `resolve_measurement_dropped_total{reason}` | Entradas de medición descartadas durante la resolución mientras el resto del evento se almacenó: `undeclared_non_numeric` (un valor de texto, o un booleano literal, para una clave que el perfil no declara), `undeclared_unstorable` (un número `NaN`, infinito o fuera de rango para una clave sin declarar) y `declared_not_storable` (una clave declarada cuyo tipo de dato no se puede almacenar, o un valor `STRING` de más de 4.096 bytes, que no es UTF-8 válido o que contiene un byte NUL). El dispositivo recibe la confirmación habitual y nada va a la cola de mensajes no entregados, así que esta es la señal de que la carga de un dispositivo pierde datos. No lleva etiquetas de tenant, dispositivo ni métrica; la línea de registro, una vez por dispositivo y métrica, los indica, y también la página del dispositivo en la consola. Declara la métrica en el perfil para almacenarla. |
 | `resolve_not_gateway_child_total` | Eventos rechazados porque una [pasarela](./edge-services.md#gateway-identity) publicó por un dispositivo que no tiene asignado, que no existe, o porque la pasarela está deshabilitada. Cada uno se registra en el flujo `failed-events` con su carga (motivo `NotGatewayChild`), no se reintenta y se notifica a la pasarela en su topic de avisos. No lleva etiqueta de tenant ni de pasarela; la línea de registro, como máximo una por minuto por pasarela y dispositivo, los nombra. Un aumento suele significar que un dispositivo nunca se asignó a su pasarela, o se asignó a otra. |
 
+### Cambios masivos {#bulk-changes}
+
+Estas series pertenecen a los [cambios masivos](../guides/bulk-changes.md) y solo las registra una
+compilación que los sirve. Todas existen desde el arranque con valor cero, salvo
+`bulk_change_reconciler_lag_seconds`, que empieza en NaN (sin medir) porque cero es su lectura sana.
+Los indicadores son de toda la instancia y se leen igual en cada réplica, por lo que las alertas los
+leen con `max()`. Las alertas se describen en el
+[manual de alertas](./alert-runbook.md#bulkchangesnotadvancing).
+
+| Métrica | Significado |
+| --- | --- |
+| `bulk_change_post_attempts_total{kind, result}` | Contador. Intentos de aplicar una línea de un cambio masivo, por tipo y resultado: `posted`, `refused`, `skipped`, `busy` (otro escritor tenía el dispositivo), `lost_race`, `fence_refused`, `fence_busy`, `lease_expired`, `not_activated` o `retryable` (falló de una forma que se vuelve a intentar). |
+| `bulk_change_post_duration_seconds{kind}` | Histograma. Cuánto tardó un intento de aplicar una línea. |
+| `bulk_change_pacer_permits_total{result}` | Contador. Permisos de envío pedidos al regulador compartido por segundo, `granted` o `denied`. |
+| `bulk_change_lines_settled_total{settlement, basis}` | Contador. Líneas que recibieron una liquidación, por liquidación y por la evidencia que la decidió (`REPORT_LOG`, `LATEST_STATE`, o `NONE` para un plazo vencido o el veredicto de una persona). |
+| `bulk_change_transitions_total{to, reason}` | Contador. Transiciones de control confirmadas, por el estado de despacho al que se entra y el motivo (`none` cuando no hay motivo). |
+| `bulk_change_operations{dispatch}` | Indicador. Cambios masivos que esta versión puede conducir, por estado de despacho. |
+| `bulk_change_holds{code}` | Indicador. Cambios masivos en ejecución cuya retención se notificó en los últimos 60 segundos, por código de retención. `AUTHORITY_UNAVAILABLE` por encima de cero dispara `BulkChangesAuthorityUnavailable`. |
+| `bulk_change_oldest_runnable_line_age_seconds` | Indicador. Entre los cambios masivos en ejecución que aún tienen líneas por aplicar y ninguna retención que los bloquee, el mayor tiempo que uno ha pasado sin aplicar una línea, según el reloj de la base de datos; 0 cuando ninguno espera. Lo leen `BulkChangesNotAdvancing` y `BulkChangesStalled`. |
+| `bulk_change_deadline_lag_seconds` | Indicador. Cuánto ha superado su plazo de liquidación la línea aplicada sin liquidar más antigua; 0 cuando ninguna lo ha superado. Lo lee `BulkChangesSettlementLagging`. |
+| `bulk_change_reconciler_lag_seconds` | Indicador. Antigüedad del informe de dispositivo más antiguo que podría liquidar una línea aplicada y aún no lo ha hecho, medida una vez por minuto. NaN hasta que este pod lo ha medido, cuando su última medición falló y mientras otro pod lo mide. Lo lee `BulkChangesSettlementLagging`. |
+| `bulk_change_driver_last_pass_timestamp_seconds` | Indicador. Hora Unix de la última pasada completada del conductor de cambios masivos de este pod; 0 hasta la primera. Lo lee `BulkChangesDriverSilent`. |
+| `bulk_change_authority_decisions_total{result}` | Contador. Respuestas de autoridad recientes pedidas para el beneficiario de un cambio masivo: `qualified`, `revoked` (un no definitivo) o `unavailable` (sin respuesta, lo que retiene la operación). |
+| `bulk_change_fence_wait_seconds{action}` | Histograma. Cuánto esperó una transacción de cambio masivo la barrera de su operación, por acción. |
+| `bulk_change_fence_pending_total{action}` | Contador. Solicitudes de control respondidas con `FENCE_PENDING` porque el envío en curso no terminó a tiempo, por acción. Lo lee `BulkChangesFencePending`. |
+| `bulk_change_admission_refusals_total{reason}` | Contador. Creaciones, inicios y reanudaciones rechazados en la admisión: `quota` (`QUOTA_EXCEEDED`) o `busy` (`ADMISSION_BUSY`). |
+| `bulk_change_redaction_repairs_total{table}` | Contador. Filas de cambios masivos redactadas por la pasada de reparación para dispositivos eliminados sin ella, por tabla. |
+| `bulk_change_retention_rows_deleted_total{table}` | Contador. Filas de cambios masivos eliminadas por la retención, por tabla. |
+| `bulk_change_activated` | Indicador. 1 cuando la base de datos aplica el protocolo de escritura de atributos de dispositivo bajo el que envían los cambios masivos, 0 cuando no lo aplica o no se puede leer. Lo lee `BulkChangesNotActivated`. |
+
 ## Event processing: detección {#event-processing-detect}
 
 Prefijo: `devicechain_eventprocessing_`.
@@ -239,6 +269,7 @@ Prefijo: `devicechain_eventmanagement_`.
 | `rollup_hour_backfill_complete_from_timestamp_seconds` | Gauge. Límite horario más antiguo completamente actualizado (segundos Unix). Las horas anteriores siguen usando resúmenes por minuto hasta completarse. Solo se publica cuando esta réplica obtiene por primera vez el bloqueo y lee el progreso. |
 | `rollup_hour_backfill_remaining_windows` | Gauge. Ventanas horarias pendientes hasta el fragmento de origen o resumen por minuto más antiguo, o el límite de retención de los resúmenes. Cero indica que está al día. Solo se publica tras la primera lectura del progreso bajo bloqueo. |
 | `rollup_hour_backfill_windows_total` | Contador. Ventanas horarias actualizadas y registradas como completas por esta réplica. Los conflictos con el bloqueo de la política dejan la ventana pendiente para la siguiente pasada. |
+| `analytics_reconcile_newer_surface_skips_total` | Contador. Pasadas de reconciliación en las que este pod encontró las vistas analíticas (SQL/BI) ya en una generación más reciente que la de su versión y las dejó intactas. Solo se espera mientras avanza una actualización; una tasa sostenida cuando todos los pods ejecutan la misma versión significa que sigue en ejecución un pod más antiguo. |
 | `failed_events_recorded_total{source,reason}` | Registros de eventos que la plataforma rechazó o no pudo almacenar que el [índice de eventos fallidos](../guides/why-isnt-my-data-showing-up.md) leyó, por el área que los escribió y el motivo. Cuenta todos los registros, incluidos los que el límite de inundación agrupó en una fila existente, así que es la tasa real de rechazos de la plataforma. `FailedEventsSustained` se dispara con ella. |
 | `failed_events_suppressed_total{reason}` | Registros agrupados en el contador de una fila existente en lugar de añadir una fila, porque el dispositivo o el motivo alcanzó su límite por hora. Una tasa sostenida indica que un dispositivo, o una causa, rechaza eventos en volumen. |
 | `failed_events_unindexed_total{cause}` | Registros que el índice no almacenó: `no_tenant` (el asunto no nombraba tenant), `undecodable` (el registro no se pudo decodificar), `erased` (los datos del tenant fueron borrados) o `gave_up` (el almacén rechazó el registro en todas las entregas). Solo `gave_up` es una falla a revisar; el registro permanece en el flujo de fallos hasta que se descarta. |
@@ -425,6 +456,14 @@ Si sube `update_download_grants_total{result="not_configured"}`, no hay una base
 | `update_rollout_step_failures_total{stage}` | Fallos del controlador de despliegues que quedaron para la siguiente pasada: `step` (falló el paso de un despliegue: un error de base de datos, un documento de perfiles compatibles ilegible en el artefacto, o todas las consultas de dispositivos fallaron porque device-management es inalcanzable o no está configurado para update-management) o `list` (falló la consulta de los despliegues en curso, así que no se avanzó ninguno). Un aumento constante significa que los despliegues no avanzan. |
 | `update_rollout_transitions_total{to}` | Despliegues que el servicio movió por sí solo: `completed`, `paused_failure_threshold` o `paused_artifact_not_assignable` (el artefacto se retiró o perdió la firma exigida). |
 | `update_reports_total{verdict,kind}` | Informes de progreso e inventario de actualizaciones, por `kind` (`progress`, `inventory`) y por el veredicto de la máquina de estados: `APPLIED`, o el motivo de no aplicarlo (`DUPLICATE`, `STALE_ATTEMPT`, `DIGEST_MISMATCH`, `WRONG_COMPONENT`, `REGRESSION`, `UNCONFIRMED`, `NOT_CANCELLABLE`, `LATE`, `CONFLICT`, `INVALID_ATTEMPT`, `WRONG_KIND`, `UNKNOWN_ASSIGNMENT`). Una tasa creciente de no aplicados desde una flota es un fallo del lado del dispositivo; júzgala con `kind="progress"`, porque un informe de inventario de un dispositivo sin nada asignado recibe `UNKNOWN_ASSIGNMENT` o `UNCONFIRMED` por diseño. |
+
+## MCP {#mcp}
+
+Prefijo: `devicechain_mcp_`.
+
+| Métrica | Significado |
+| --- | --- |
+| `skill_reads_total{skill,kind}` | Lecturas correctas de habilidades incluidas. `skill` es `alarm-storm-triage`, `device-anomaly-investigation` o `propose-change-for-approval`; `kind` es `prompt` para `prompts/get` o `resource` para `resources/read`, incluidos los archivos de apoyo. Los listados y los nombres o URI desconocidos no incrementan el contador ni crean series. Sin etiquetas de inquilino, dispositivo ni usuario. |
 
 ## Todos los servicios {#every-service}
 

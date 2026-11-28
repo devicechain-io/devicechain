@@ -18,6 +18,44 @@ var docsRoot = filepath.Join("..", "..", "..", "docs")
 
 const regenerate = "regenerate with: cd backend/cli && go run . docs --out ../../docs"
 
+func TestV110GraduatedHelp(t *testing.T) {
+	for _, c := range []*cobra.Command{testCmd, productCmd} {
+		t.Run(c.Name(), func(t *testing.T) {
+			help := strings.ToLower(c.Short + "\n" + c.Long)
+			if strings.Contains(help, "preview") || strings.Contains(help, "may change") {
+				t.Error("graduated commands must not claim Preview compatibility")
+			}
+			for _, want := range []string{"covered by the versioning policy from v1.10", "v1alpha1"} {
+				if !strings.Contains(c.Long, want) {
+					t.Errorf("graduated help missing %q", want)
+				}
+			}
+		})
+	}
+}
+
+func TestV110ReadinessHelp(t *testing.T) {
+	for _, c := range []*cobra.Command{bulkChangeReadinessCmd, fleetOpReadinessCmd} {
+		t.Run(c.CommandPath(), func(t *testing.T) {
+			for _, want := range []string{
+				"Exit status is zero only when enforcement is ENFORCED and orphanedAttributeRows is zero",
+				"From v1.10, an upgraded instance with enforcement ENFORCED and zero orphaned rows lists",
+				"config.set as executable",
+				"If the orphan count cannot be read",
+			} {
+				if !strings.Contains(c.Long, want) {
+					t.Errorf("readiness help missing %q", want)
+				}
+			}
+			for _, stale := range []string{"not that any operation kind is executable", "expected until the release"} {
+				if strings.Contains(c.Long, stale) {
+					t.Errorf("readiness help still claims %q", stale)
+				}
+			}
+		})
+	}
+}
+
 // Keep the evaluator on one published-image laptop recipe across all living locales:
 // `dcctl install local --compact`, then a plain-HTTP bootstrap on localhost. The recipe
 // keeps root-key escrow (no --dev, no --no-escrow); keeping backups as well is an

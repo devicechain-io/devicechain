@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ledger"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
@@ -114,11 +115,12 @@ func analyzeReports(t *testing.T, f *costFixture) {
 	require.NoError(t, f.db.Exec(`ANALYZE "device-management".device_configuration_reports`).Error)
 }
 
-// The reconciler lag is one statement per replica every 15 s, so what it reads matters: the lines
-// awaiting evidence and, for each, the first report at or after its posted revision, and nothing
-// that grows with the report log's retained, decided history. Measured with EXPLAIN (ANALYZE,
-// BUFFERS) on the statement the measurement issues, at two sizes of decided history, beside an
-// AMBIGUOUS backlog with no reports and one tenant whose reports are waiting.
+// The reconciler lag is one instance-wide statement per replica a minute, so what it reads matters:
+// the lines with no verdict yet and, for each, the first report at or after its posted revision, and
+// nothing that grows with the report log's retained, decided history or with the AMBIGUOUS backlog
+// (lines a deadline settled, which stay awaiting evidence until retention). Measured with EXPLAIN
+// (ANALYZE, BUFFERS) on the statement the measurement issues, at two sizes of decided history,
+// beside an AMBIGUOUS backlog with no reports and one tenant whose reports are waiting.
 func TestReconcilerLagReadsTheAwaitingLinesNotTheReportHistoryOnPostgres(t *testing.T) {
 	api := NewApi(driverPGManager(t))
 	f := newCostFixture(t, api)
@@ -157,9 +159,10 @@ func TestReconcilerLagReadsTheAwaitingLinesNotTheReportHistoryOnPostgres(t *test
 		analyzeReports(t, f)
 	}
 
-	// History and the waiting tenant's change are drivable; the newer release's lines await too, but
-	// its change is filtered out before any report is probed.
-	drivable := int64(6*costPostedPerOp + costPostedPerOp/2)
+	// The AMBIGUOUS backlog is six times the unsettled lines and is not read at all. The waiting
+	// tenant's change is drivable; the newer release's lines have no verdict either, but its change
+	// is filtered out before any report is probed.
+	drivable := int64(costPostedPerOp / 2)
 	awaiting := drivable + costPostedPerOp/2
 	addHistory(4, 5)
 	small := readLag(t, api, f, inserted)
@@ -175,11 +178,12 @@ func TestReconcilerLagReadsTheAwaitingLinesNotTheReportHistoryOnPostgres(t *test
 	require.InDelta(t, 130+small.since.Seconds(), small.lag.Seconds(), 3)
 	require.InDelta(t, 130+large.since.Seconds(), large.lag.Seconds(), 3)
 	for _, r := range []lagReading{small, large} {
-		// The lines read are the awaiting lines: the partial index's entries, once each.
-		require.Equal(t, awaiting, r.lines, "line rows read are the awaiting lines")
-		// One probe of the report log per awaiting line of a drivable change, reading only that
+		// The lines read are the lines with no verdict: the partial index's entries, once each, and
+		// no row of the AMBIGUOUS backlog.
+		require.Equal(t, awaiting, r.lines, "line rows read are the unsettled lines, not the AMBIGUOUS backlog")
+		// One probe of the report log per unsettled line of a drivable change, reading only that
 		// device's first report at or after its posted revision: nothing filtered away, a few buffers each.
-		require.Equal(t, drivable, r.reports.loops, "one report probe per awaiting drivable line")
+		require.Equal(t, drivable, r.reports.loops, "one report probe per unsettled drivable line")
 		require.Zero(t, r.reports.filtered, "a probe reads no report it then discards")
 		require.LessOrEqual(t, r.reports.buffers, 5*drivable, "a probe is an index descent")
 	}
@@ -215,6 +219,33 @@ func TestReconcilerLagProbeIsBoundedByUndecidedHistoryOnPostgres(t *testing.T) {
 	require.Equal(t, lines, undecided.lines)
 	require.Equal(t, lines, undecided.reports.loops, "one report probe per awaiting line")
 	require.LessOrEqual(t, undecided.reports.perLoop, 3.0, "a probe reads its decider, not the device's whole range of undecided reports")
+}
+
+// Two replicas whose passes coincide do not both run the instance-wide statement: the one that
+// finds the measurement's singleton lock held skips, and publishes NaN rather than its own last
+// value, which max() across replicas then passes over for the measuring replica's.
+func TestReconcilerLagSkipsWhileAnotherReplicaMeasuresOnPostgres(t *testing.T) {
+	freshBulkMetrics(t)
+	api := NewApi(driverPGManager(t))
+	ctx := context.Background()
+	require.NoError(t, api.MeasureFleetReconcilerLag(ctx))
+	require.Equal(t, 0.0, reconcilerLag(), "an empty instance measures 0")
+
+	pool, err := api.RDB.Database.DB()
+	require.NoError(t, err)
+	conn, err := pool.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Close()
+	key := rdb.AdvisoryLockKey(fleetReconcilerLagLockName)
+	_, err = conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", key)
+	require.NoError(t, err)
+	require.ErrorIs(t, api.MeasureFleetReconcilerLag(ctx), core.ErrPassSkipped)
+	require.True(t, math.IsNaN(reconcilerLag()), "a skipped pass publishes NaN, not its last value; got %v", reconcilerLag())
+
+	_, err = conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", key)
+	require.NoError(t, err)
+	require.NoError(t, api.MeasureFleetReconcilerLag(ctx))
+	require.Equal(t, 0.0, reconcilerLag())
 }
 
 // The throughput run's lag bound, on the instance-wide measurement the gauge publishes. The run

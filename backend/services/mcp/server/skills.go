@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -393,7 +394,7 @@ For multi-step work, read the matching skill first (Preview), served as resource
 // same for every caller, whatever their tenant, scopes or client, and serving it makes
 // no downstream call: a skill read is answered from the binary, behind the same bearer
 // check and message limits as everything else on the endpoint.
-func registerSkills(s *mcp.Server, skills []Skill) {
+func registerSkills(s *mcp.Server, skills []Skill, reads *prometheus.CounterVec) {
 	for _, skill := range skills {
 		skillMD := skill.SkillMD()
 		promptText := string(skillMD.Body)
@@ -403,6 +404,9 @@ func registerSkills(s *mcp.Server, skills []Skill) {
 			Title:       "DeviceChain skill (Preview): " + skill.Name,
 			Description: description,
 		}, func(context.Context, *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+			if reads != nil {
+				reads.WithLabelValues(skill.Name, "prompt").Inc()
+			}
 			return &mcp.GetPromptResult{
 				Description: description,
 				Messages: []*mcp.PromptMessage{{
@@ -428,6 +432,9 @@ func registerSkills(s *mcp.Server, skills []Skill) {
 			s.AddResource(resource, func(_ context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 				if req.Params == nil || req.Params.URI != uri {
 					return nil, mcp.ResourceNotFoundError(uri)
+				}
+				if reads != nil {
+					reads.WithLabelValues(skill.Name, "resource").Inc()
 				}
 				return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{URI: uri, MIMEType: skillMIMEType, Text: text}}}, nil
 			})

@@ -188,7 +188,7 @@ Operator 无法接管 StatefulSet 的数据目录，因此不支持原地升级�
 集群中以下两项只能属于一个实例，初始化会处理冲突：
 
 - **Ingress 主机名。** 两个实例使用同一主机名时，Ingress 控制器会静默地只服务一个。主机名已被其他实例使用时初始化拒绝执行。为每个实例设置独立 `--host`，本地集群例如 `--host beta.localhost`。
-- **本地 MQTT 端口。** 本地集群中，机器的 1883 端口只连接第一个实例的代理。后续实例的代理可从集群内部访问，初始化会对此提示。
+- **本地 MQTT 端口。** 本地集群中，机器的 1883 端口连接第一个实例的代理，1884 和 1885 分别连接第二个和第三个实例的代理：每个新的本地实例会分配到三者中第一个空闲的端口。在这两个额外端口发布之前创建的集群只有 1883。更多实例的代理可从集群内部访问，初始化会对此提示。
 
 #### Ingress 与自带控制器 {#ingress-controller}
 
@@ -235,7 +235,7 @@ kubectl label namespace dci-<id> devicechain.io/instance=<id>
 7. **应用基础设施**——通过 [terraform-exec](https://github.com/hashicorp/terraform-exec) 对嵌入的 OpenTofu 配置执行 `tofu apply`。仅处理本实例：命名空间中的 NATS 代理和 TimescaleDB 事件存储，状态保存在 `~/.devicechain/instances/<instance>/infra`；同时在共享关系型数据库上创建实例自己的登录和数据库。集群共享前置组件由 [`dcctl install`](#install) 安装，不在此重新应用。后续运行是增量操作。
 8. **安装实例（Helm）**——写入实例**配置文档**，所有服务从中读取凭据及端点。再通过 Helm Go SDK 部署 chart，并等待工作负载就绪。后续运行的第 3 步检查此文档；运行还需成功结束，实例才算运行中。
 9. **等待就绪**——轮询每个启用领域的 Deployment，直到全部滚动至本次生成的配置。这是 Helm 等待之外的显式确认。仅有可用副本不足，因为即将被替换的旧 Pod 也可能可用；还需新模板已被观察、全部副本按新模板重建，且没有旧副本仍在运行。`dcctl upgrade` 使用相同检查。随后最多等待 15 分钟，直到事件存储的所有实例加入，因为仅主实例就绪便足以让服务就绪。缺少实例时，错误指出数据库和就绪实例数；不会回滚，再运行相同 `dcctl bootstrap` 即可完成。
-10. **报告访问信息**——打印命名空间、超级用户邮箱、密码保存位置和访问方式。密码本身只显示一次：在生成它的运行中，或完成此前尚未显示密码便失败的初始化时。
+10. **报告访问信息**——打印命名空间、超级用户邮箱、密码保存位置和访问方式。密码本身只显示一次，且仅当输出为终端时显示：在生成它的运行中，或完成此前尚未显示密码便失败的初始化时；管道或重定向的输出会改为指明 Secret `dci-<instance>-superuser`。
 
 :::tip `Ctrl+C` 可正常停止运行
 中断会让基础设施工具正常完成当前操作并写入状态，再释放集群锁，之后重跑即可。第二次 `Ctrl+C` 立即退出，放弃两者。详见[中断运行](./cluster-lock.md#interrupt)。
@@ -314,7 +314,7 @@ kind 不强制卷大小限制，可使用宿主机可用磁盘。
 - **满足请求的 CPU 和内存。** 非 `--compact` 时，处理每个事件的五个服务合计请求约 4 CPU；`--ha` 下 `event-management` 两个 Pod，合计约 5 CPU。每个 NATS 服务器请求 500m CPU 和 768Mi 内存，高可用下有三个，另需其他服务、数据库和集群组件资源。无法容纳的 Pod 保持 `Pending`，安装等待至超时。各项见[服务容量配置](#service-sizing)；笔记本等资源有限集群使用 [`--compact`](#--compact)。
 - **OpenTofu 1.10 或更新版本**（`tofu`，也支持 `terraform` 1.10 或更新）位于 `PATH`。`dcctl` 使用它部署基础设施，安装见 [opentofu.org](https://opentofu.org)。`dcctl preflight local` 提前检查工具及环境，并拒绝早于 1.10 的版本，因此旧的二进制文件会在创建任何资源之前就让运行停止。
 - **`kubectl`** 位于 `PATH`；`local` 提供方还需 **`docker`** 和 **`kind`**。缺少本次运行所需的工具会使预检失败。只有本地 kind 集群或 `--build` 才需要 Docker：使用已发布镜像安装到 `--kube-context` 指定的集群时，既不检查也不使用它。需要时，其守护进程必须可访问：Linux 上为 Docker Engine，macOS 和 Windows 上为 Docker Desktop。
-- **空闲的主机端口 80、443 和 1883**（本地 kind 集群使用）。集群会将它们发布出来，分别用于控制台、HTTPS 和 MQTT。`dcctl preflight local` 会在端口被占用时失败并指出占用它的容器，而不是让集群创建时才因 Docker 的绑定错误而失败。
+- **空闲的主机端口 80、443 和 1883-1885**（本地 kind 集群使用）。集群会将它们发布出来，分别用于控制台、HTTPS 和 MQTT（1884 和 1885 供第二个和第三个本地实例的代理使用）。`dcctl preflight local` 会在端口被占用时失败并指出占用它的容器，而不是让集群创建时才因 Docker 的绑定错误而失败。
 - **默认只能从本机访问。** `dcctl install local` 创建的 kind 集群将这些端口发布在 `127.0.0.1` 上，因此控制台和 MQTT broker 只在本机响应。如需从网络中的其他机器（设备、手机、另一台电脑）访问，请使用 `dcctl install local --expose-lan`（或 `dcctl setup local --expose-lan`）创建集群，它会在所有网络接口上发布这些端口。请仅在可信网络中这样做，并且不要与 `--no-tls` 或 `--dev` 一起使用，因为它们通过明文 HTTP 提供控制台登录。kind 在创建集群时确定其端口，因此该选项对已存在的集群不起作用：如需更改，请删除并重新创建集群。
 - **在 Linux 上，需要调高 inotify 限制。** 对于本地 kind 集群，`dcctl preflight local` 要求 `fs.inotify.max_user_instances` 至少为 256，而原装 Ubuntu 24.04 默认只有 128，因此它会在此处失败并打印要运行的命令。第一行调高该限制（第二行 `max_user_watches` 仅是警告），`/etc/sysctl.d` 使其在重启后依然有效：
 

@@ -21,6 +21,11 @@ so a single pod that cannot measure changes nothing. When NO pod can, max() is N
 "X unless X <= 900" keeps it: the comparison is false for NaN, so nothing is subtracted. An
 instance that cannot measure its reconciler lag therefore alerts as lagging rather than reading
 healthy. A plain "X > 900" would drop the NaN and stay silent.
+
+The rule waits five minutes. Each pod measures the reconciler lag once a minute (with jitter), and a
+pod reads NaN after one failed measurement or while another pod holds the measurement's lock, so a
+wait of one minute would fire on a single missed pass. Five minutes is five passes of every pod
+without one measurement; the fifteen-minute thresholds are what the alert is about.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -77,14 +82,14 @@ spec:
             description: "A running bulk change has been held for five minutes because device-management cannot get a fresh answer from user-management on whether the person it runs for still holds the authority to apply it. Nothing is applied while it is held, and it is not paused. Check that user-management is running and reachable from device-management, and read its logs. Posting resumes on the first fresh answer; there is no way around the check."
         - alert: BulkChangesSettlementLagging
           expr: (max(devicechain_devicemanagement_bulk_change_deadline_lag_seconds{namespace="{{ $ns }}"}) > 900) or (max(devicechain_devicemanagement_bulk_change_reconciler_lag_seconds{namespace="{{ $ns }}"}) unless max(devicechain_devicemanagement_bulk_change_reconciler_lag_seconds{namespace="{{ $ns }}"}) <= 900)
-          for: 1m
+          for: 5m
           labels:
             severity: warning
             devicechain_instance: {{ .Values.instance.id }}
           annotations:
             runbook_url: "https://docs.devicechain.io/deployment/alert-runbook#bulkchangessettlementlagging"
             summary: "Bulk change settlement is lagging"
-            description: "An applied bulk change line is more than fifteen minutes past its settlement deadline, or a device report that could settle one has waited more than fifteen minutes, or no device-management pod can measure how long such reports have waited. Check the device-management logs for settlement task errors and failed reconciler lag measurements, and the database for load. Applied lines are not lost while this lags; they settle once the tasks catch up. An applied line is not proof that the device took the change, so read its evidence before resolving it by hand."
+            description: "An applied bulk change line is more than fifteen minutes past its settlement deadline, or a device report that could settle an applied line still without a verdict has waited more than fifteen minutes, or for five minutes no device-management pod has measured how long such reports have waited. A line its deadline already settled as ambiguous is not measured here; a late report still settles it. Check the device-management logs for settlement task errors and failed reconciler lag measurements, and the database for load. Applied lines are not lost while this lags; they settle once the tasks catch up. An applied line is not proof that the device took the change, so read its evidence before resolving it by hand."
         - alert: BulkChangesFencePending
           expr: sum(rate(devicechain_devicemanagement_bulk_change_fence_pending_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 10m

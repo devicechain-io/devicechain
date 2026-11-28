@@ -7,9 +7,7 @@ title: Probar tus reglas
 
 Una regla de detección que nadie ha probado es una suposición sobre lo que harán tus dispositivos. Esta guía muestra cómo escribir pruebas de reglas: describes los eventos que enviaría una flota, indicas qué deberían hacer las reglas al respecto y `dcctl test` comprueba la respuesta. La plataforma evalúa las reglas con su propio motor de detección, en tiempo de evento, así que una regla que espera siete días de silencio se prueba en una fracción de segundo, y nada de lo que hace toca tus dispositivos, alarmas o tráfico en producción.
 
-:::note Esta función está en versión preliminar
-Los formatos de escenario y de archivo de prueba llevan la versión `devicechain.io/ruletest/v1alpha1` y pueden cambiar de forma incompatible en una versión menor, con el cambio indicado en las notas de actualización de esa versión, hasta que se promuevan. Un archivo con una versión que el `dcctl` instalado no lee se rechaza, y también una clave que no conoce: una expectativa mal escrita que se ignorara pasaría.
-:::
+Las pruebas de reglas están cubiertas por la [política de versiones](../deployment/versioning-policy.md) desde v1.10; los formatos de escenario y de archivo de prueba conservan la versión `devicechain.io/ruletest/v1alpha1`.
 
 ## Qué comprueba una prueba {#what-a-test-checks}
 

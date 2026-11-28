@@ -123,9 +123,9 @@ func NewBulkChangeMetrics(f BulkChangeMetricFactory) *BulkChangeMetrics {
 		deadlineLag: f.NewGauge("bulk_change_deadline_lag_seconds",
 			"How far past its settlement deadline the oldest unsettled applied line is, on the database clock. 0 when none is."),
 		reconcilerLag: f.NewGauge("bulk_change_reconciler_lag_seconds",
-			"Age of the oldest device report that could decide an applied bulk change line and has not yet, across "+
-				"the instance, on the database clock. 0 when none is waiting; NaN until this pod has measured it and "+
-				"whenever its last measurement failed."),
+			"Age of the oldest device report that could decide an applied bulk change line with no verdict yet and has "+
+				"not yet, across the instance, on the database clock; measured once a minute. 0 when none is waiting; NaN "+
+				"until this pod has measured it, whenever its last measurement failed, and while another pod measures it."),
 		lastPass: f.NewGauge("bulk_change_driver_last_pass_timestamp_seconds",
 			"When this pod's bulk change driver last completed a pass, as a Unix timestamp. 0 until the first pass."),
 		authority: f.NewCounterVec("bulk_change_authority_decisions_total",

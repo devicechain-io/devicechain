@@ -7,9 +7,7 @@ title: Testing Your Rules
 
 A detection rule that nobody has tested is a guess about what your devices will do. This guide shows how to write rule tests: you describe the events a fleet would send, state what the rules should do about them, and `dcctl test` checks the answer. The rules are evaluated by the platform's own detection engine, in event time, so a rule that waits seven days for silence is tested in a fraction of a second, and nothing it does touches your live devices, alarms or traffic.
 
-:::note This feature is in preview
-The scenario and test file formats carry the version `devicechain.io/ruletest/v1alpha1` and may change incompatibly in a minor release, with the change in that release's upgrade notes, until they are promoted. A file with a version the installed `dcctl` does not read is refused, and so is a key it does not know: a misspelled expectation that was ignored would pass.
-:::
+Rule testing is covered by the [versioning policy](../deployment/versioning-policy.md) from v1.10; the scenario and test file formats keep the version `devicechain.io/ruletest/v1alpha1`.
 
 ## What a test checks {#what-a-test-checks}
 

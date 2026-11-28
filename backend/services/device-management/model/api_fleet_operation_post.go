@@ -132,11 +132,14 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 	defer cancel()
 
 	var (
-		result  FleetPostResult
-		decided *fleetDecision
-		minted  *DeviceConfigurationRevision
-		change  membershipChange
-		devID   uint
+		result      FleetPostResult
+		decided     *fleetDecision
+		minted      *DeviceConfigurationRevision
+		change      membershipChange
+		devID       uint
+		factRequest *EntityAttributeSetRequest
+		factRemoved bool
+		factAt      time.Time
 	)
 	abandon := func(o FleetPostOutcome) error {
 		result = FleetPostResult{Outcome: o}
@@ -144,6 +147,7 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 	}
 	err := api.runDeviceAttributeTx(postCtx, "fleet", func(tx *gorm.DB) error {
 		result, decided, minted, change, devID = FleetPostResult{}, nil, nil, membershipChange{}, 0
+		factRequest, factRemoved, factAt = nil, false, time.Time{}
 		if err := fleetTxTimeouts(tx); err != nil {
 			return err
 		}
@@ -205,7 +209,7 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 		}
 		// 6. The target and the kind gate.
 		var dev Device
-		if err := tx.Select("id").First(&dev, devID).Error; err != nil {
+		if err := tx.Select("id", "token").First(&dev, devID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				decided = &fleetDecision{string(ledger.PostingSkipped), FleetLineTargetGone, "the target device no longer exists"}
 				return errPostDecided
@@ -243,6 +247,21 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 			}
 			target, overridden, reversing = rev.target, rev.changed, rev
 		}
+		if target.Present {
+			// Persisted operations and reversal before-images can predate plan-time normalization.
+			canonical, err := normalizeAttributeValue(target.ValueType, target.Value)
+			if err != nil {
+				decided = &fleetDecision{FleetPostingRefused, CodeConfigurationValueType, err.Error()}
+				return errPostDecided
+			}
+			if canonical != nil {
+				if err := checkBytes("attribute value", *canonical, MaxAttributeValueBytes); err != nil {
+					decided = &fleetDecision{FleetPostingRefused, CodeConfigurationValueType, err.Error()}
+					return errPostDecided
+				}
+			}
+			target.Value = canonical
+		}
 		// 7. Before-image, effect, recompute: the primitive's own path, under the lock this transaction holds.
 		priorGen, _, err := attributeGeneration(tx, devID, string(AttributeScopeShared), intent.Key)
 		if err != nil {
@@ -251,7 +270,11 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 		if fleetEffectHook != nil {
 			fleetEffectHook()
 		}
-		patch := AttributePatch{{Scope: string(AttributeScopeShared), Key: intent.Key, LastUpdated: time.Now()}}
+		factAt = time.Now().UTC()
+		factRequest = &EntityAttributeSetRequest{EntityType: "device", Entity: dev.Token,
+			Scope: string(AttributeScopeShared), AttrKey: intent.Key, ValueType: target.ValueType, Value: target.Value}
+		factRemoved = !target.Present
+		patch := AttributePatch{{Scope: string(AttributeScopeShared), Key: intent.Key, LastUpdated: factAt}}
 		if !target.Present {
 			patch[0].Unset = true
 		} else {
@@ -358,6 +381,12 @@ func (api *Api) PostFleetLine(ctx context.Context, opID, lineID uint, lease Flee
 	case err == nil:
 		api.publishMintedConfiguration(ctx, devID, minted)
 		api.afterMembershipRecompute(ctx, "device", devID, change)
+		if factRemoved {
+			api.emitDeviceAttribute(ctx, &DeviceAttributeEvent{DeviceToken: factRequest.Entity, AttrKey: factRequest.AttrKey,
+				Scope: factRequest.Scope, Removed: true, UpdatedAt: factAt})
+		} else {
+			api.emitDeviceAttributeForSet(ctx, factRequest, factAt)
+		}
 		return result, nil
 	case errors.Is(err, errPostAbandoned):
 		if result.Outcome == FleetPostBusy {

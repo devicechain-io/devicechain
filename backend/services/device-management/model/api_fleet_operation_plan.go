@@ -213,7 +213,14 @@ func normalizeConfigSet(in *FleetConfigSetIntent) (FleetConfigSetIntent, error) 
 	}
 	out.ValueType = in.ValueType
 	v := *in.Value
-	out.Value = &v
+	if err := checkBytes("attribute value", v, MaxAttributeValueBytes); err != nil {
+		return out, fleetErr(FleetCodeInvalidRequest, "%s", err)
+	}
+	canonical, err := normalizeAttributeValue(out.ValueType, &v)
+	if err != nil {
+		return out, fleetErr(FleetCodeInvalidRequest, "%s", err)
+	}
+	out.Value = canonical
 	return out, nil
 }
 
