@@ -149,17 +149,108 @@ func TestCommandLoopWindowExpiresWithoutClockRewindOrRepublishBypass(t *testing.
 	}
 }
 
+// fillLoopKeys opens n new keys for tenant at at, each admitted.
+func fillLoopKeys(t *testing.T, g *commandLoopGuard, tenant string, n int, at time.Time) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		if code := g.admit(tenant, tenant+"/p@1/r1", fmt.Sprint(i), at); code != "" {
+			t.Fatalf("%s key %d of %d refused: %s", tenant, i, n, code)
+		}
+	}
+}
+
 func TestCommandLoopStateIsBoundedWithoutEvictingLiveKeys(t *testing.T) {
 	g := newCommandLoopGuard()
 	at := evt().OccurredTime
-	for i := 0; i < commandLoopKeys; i++ {
-		g.keys[commandLoopKey{tenant: "acme", device: fmt.Sprint(i)}] = commandLoopEntry{until: at.Add(commandLoopWindow), sends: commandLoopSends}
-	}
-	if code := g.admit("acme", "acme/p@1/r1", "new", at); code != CommandGuardFull || len(g.keys) != commandLoopKeys {
+	fillLoopKeys(t, g, "acme", commandLoopTenantKeys, at)
+	if code := g.admit("acme", "acme/p@1/r1", "new", at); code != CommandGuardFull || len(g.keys) != commandLoopTenantKeys {
 		t.Fatalf("capacity churn evicted live safety state: %s, %d keys", code, len(g.keys))
 	}
 	if code := g.admit("acme", "acme/p@1/r1", "new", at.Add(commandLoopWindow)); code != "" || len(g.keys) != 1 {
 		t.Fatalf("expired safety state was not reclaimed: %s, %d keys", code, len(g.keys))
+	}
+}
+
+// The table serves every tenant of the process. One tenant using all of its share
+// refuses only its own new keys: another tenant's commands are still admitted.
+func TestCommandLoopTenantSaturatingItsShareDoesNotRefuseAnother(t *testing.T) {
+	g := newCommandLoopGuard()
+	at := evt().OccurredTime
+	fillLoopKeys(t, g, "noisy", commandLoopTenantKeys, at)
+	if code := g.admit("noisy", "noisy/p@1/r1", "one-more", at); code != CommandGuardFull {
+		t.Fatalf("a tenant past its share was admitted: %q", code)
+	}
+	if code := g.admit("quiet", "quiet/p@1/r1", "d", at); code != "" {
+		t.Fatalf("another tenant's saturation refused this tenant's command: %s", code)
+	}
+}
+
+// The share is a fraction of the table, which stays bounded as a whole: once enough
+// tenants fill their shares to fill it, a new key of any tenant is refused.
+func TestCommandLoopTableBoundHoldsAcrossTenants(t *testing.T) {
+	g := newCommandLoopGuard()
+	at := evt().OccurredTime
+	for i := 0; i < commandLoopKeys/commandLoopTenantKeys; i++ {
+		fillLoopKeys(t, g, fmt.Sprintf("t%d", i), commandLoopTenantKeys, at)
+	}
+	if code := g.admit("late", "late/p@1/r1", "d", at); code != CommandGuardFull || len(g.keys) != commandLoopKeys {
+		t.Fatalf("the table grew past its bound: %q, %d keys of %d", code, len(g.keys), commandLoopKeys)
+	}
+}
+
+// A key whose window has ended holds no slot: it is released before a new key is
+// refused, not at the next periodic sweep, and its tenant's share is returned.
+func TestCommandLoopExpiredKeysAreEvictedBeforeRefusing(t *testing.T) {
+	g := newCommandLoopGuard()
+	at := evt().OccurredTime
+	half := commandLoopTenantKeys / 2
+	fillLoopKeys(t, g, "acme", half, at)
+	for i := 0; i < commandLoopTenantKeys-half; i++ {
+		if code := g.admit("acme", "acme/p@1/r2", fmt.Sprint(i), at.Add(commandLoopWindow/2)); code != "" {
+			t.Fatalf("second half key %d refused: %s", i, code)
+		}
+	}
+	if code := g.admit("acme", "acme/p@1/r3", "d", at.Add(commandLoopWindow-time.Nanosecond)); code != CommandGuardFull {
+		t.Fatalf("a full share admitted a new key before any window ended: %q", code)
+	}
+	// The first half's windows have ended; the second half's have not.
+	if code := g.admit("acme", "acme/p@1/r3", "d", at.Add(commandLoopWindow)); code != "" {
+		t.Fatalf("an expired key still held its slot: %s", code)
+	}
+	if want := commandLoopTenantKeys - half + 1; len(g.keys) != want || g.tenants["acme"] != want {
+		t.Fatalf("after expiry: %d keys, tenant holds %d; want %d live", len(g.keys), g.tenants["acme"], want)
+	}
+	// A live key's allowance survived the eviction around it.
+	if entry := g.keys[commandLoopKey{tenant: "acme", rule: stableContributorID("acme/p@1/r2"), device: "0"}]; entry.sends != 1 {
+		t.Fatalf("a live key was evicted or reset: %+v", entry)
+	}
+	// Every remaining window ends; the whole share is returned.
+	if code := g.admit("acme", "acme/p@1/r4", "d", at.Add(2*commandLoopWindow)); code != "" || len(g.keys) != 1 || g.tenants["acme"] != 1 {
+		t.Fatalf("expired keys kept their slots: %q, %d keys, tenant holds %d", code, len(g.keys), g.tenants["acme"])
+	}
+}
+
+// A refunded attempt returns its tenant's slot, and the record its window left in the
+// expiry queue cannot end a later window of the same key.
+func TestCommandLoopRefundReturnsTheTenantSlot(t *testing.T) {
+	g := newCommandLoopGuard()
+	at := evt().OccurredTime
+	if code := g.admit("acme", "acme/p@1/r1", "d", at); code != "" {
+		t.Fatal(code)
+	}
+	g.refund("acme", "acme/p@1/r1", "d")
+	if len(g.keys) != 0 || len(g.tenants) != 0 {
+		t.Fatalf("refund kept state: %d keys, tenants %v", len(g.keys), g.tenants)
+	}
+	later := at.Add(commandLoopWindow / 2)
+	for i := 0; i < commandLoopSends; i++ {
+		if code := g.admit("acme", "acme/p@1/r1", "d", later); code != "" {
+			t.Fatalf("send %d refused: %s", i, code)
+		}
+	}
+	// The refunded window's record expires here; the live window must not end with it.
+	if code := g.admit("acme", "acme/p@1/r1", "d", at.Add(commandLoopWindow)); code != CommandLoop {
+		t.Fatalf("a stale expiry record reset a live loop window: %q", code)
 	}
 }
 

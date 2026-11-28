@@ -45,6 +45,8 @@ func startupReplayRecoversCommands(t *testing.T, shards int) {
 	t.Cleanup(rp.closeDetector)
 	msg := resolvedMessage(t, diffEvent{device: "device-1", occurred: testBase, value: "40"}, 1, testBase, &fakeAck{})
 	rp.Replay = &fakeReplayOpener{msgs: []messaging.Message{msg}, head: 1}
+	// The durable had handed the message to the term that died: its detection is re-derived.
+	rp.ResolvedEventsReader = &deliveredReader{fakeReader: &fakeReader{}, through: 1}
 	if err := rp.replayToHead(); err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +85,87 @@ func startupReplayRecoversCommands(t *testing.T, shards int) {
 	}
 	if len(sink.sent) <= recovered || len(gate.at) == 0 {
 		t.Fatal("live detection after replay was not sent through the outbound gate")
+	}
+}
+
+// deliveredReader reports how far the resolved-events durable had delivered before this term.
+type deliveredReader struct {
+	*fakeReader
+	through uint64
+}
+
+func (r *deliveredReader) DeliveredThrough(context.Context) (uint64, error) { return r.through, nil }
+
+// Startup replay covers the window past the checkpoint, and only the part of it the durable had
+// already handed to a term is a re-derivation. Events that arrived while nothing was consuming
+// were never applied by any engine: their detections are fresh triggers, and their commands must
+// be charged to the tenant's ceiling and the loop guard like live ones, or a backlog of any size
+// actuates past both. The re-derived part is still sent uncharged.
+func TestStartupReplayGovernsTheBacklogNoTermWasGiven(t *testing.T) {
+	for _, shards := range []int{1, 2} {
+		t.Run(fmt.Sprint(shards), func(t *testing.T) { startupReplayGovernsBacklog(t, shards) })
+	}
+}
+
+func startupReplayGovernsBacklog(t *testing.T, shards int) {
+	for _, tc := range []struct {
+		name      string
+		reader    messaging.MessageReader
+		rederived map[string]bool
+	}{
+		// Sequence 1 had been delivered to the term that died; 2 and 3 arrived after it.
+		{"delivered through 1", &deliveredReader{fakeReader: &fakeReader{}, through: 1}, map[string]bool{"device-1": true}},
+		// A reader that cannot say proves no earlier delivery: everything is governed.
+		{"unknown", nil, map[string]bool{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &derivedCapture{}
+			rp := stampingProcessor(t, diffRegistry(t), w)
+			rp.cfg.Shards = shards
+			rp.closeDetector()
+			rp.engine = rp.newDetector()
+			t.Cleanup(rp.closeDetector)
+			var msgs []messaging.Message
+			for i := 1; i <= 3; i++ {
+				at := testBase.Add(time.Duration(i-1) * time.Second)
+				msgs = append(msgs, resolvedMessage(t, diffEvent{device: fmt.Sprintf("device-%d", i), occurred: at, value: "40"}, uint64(i), at, &fakeAck{}))
+			}
+			rp.Replay = &fakeReplayOpener{msgs: msgs, head: 3}
+			rp.ResolvedEventsReader = tc.reader
+			if err := rp.replayToHead(); err != nil {
+				t.Fatal(err)
+			}
+			sink := &reactFakeSink{}
+			gate := &meterGate{admit: false}
+			rd, _ := reactWithConnectors(t, governedCommandRule(), sink, nil, nil, &deadRecorder{}, testShedBudget, react.WithCommandRateGate(gate))
+			rederived, fresh := 0, 0
+			for _, ev := range w.events {
+				if ev.Edge == runtime.EdgeResolved {
+					continue
+				}
+				if ev.Replayed != tc.rederived[ev.Series] {
+					t.Fatalf("%s's detection marked replayed=%v; only a detection of an event an earlier term was given is re-derived", ev.Series, ev.Replayed)
+				}
+				if ev.Replayed {
+					rederived++
+				} else {
+					fresh++
+				}
+				rd.handle(derivedMsg(t, "acme", ev, 1, &fakeAck{}))
+			}
+			if rederived != len(tc.rederived) || fresh != 3-len(tc.rederived) {
+				t.Fatalf("fixture produced %d re-derived and %d fresh raises", rederived, fresh)
+			}
+			// The ceiling is closed: a fresh command is charged and refused, a re-derived one is sent uncharged.
+			if len(sink.sent) != rederived || len(gate.at) != fresh {
+				t.Fatalf("sent %d (want the %d re-derived) and charged %d (want the %d fresh)", len(sink.sent), rederived, len(gate.at), fresh)
+			}
+			for _, req := range sink.sent {
+				if !tc.rederived[req.DeviceToken] {
+					t.Fatalf("a backlog command for %s was sent past a closed ceiling", req.DeviceToken)
+				}
+			}
+		})
 	}
 }
 
