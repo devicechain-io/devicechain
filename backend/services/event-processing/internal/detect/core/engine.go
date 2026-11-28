@@ -282,11 +282,12 @@ type Engine struct {
 	// an alarm the latest reading still supports (review D3/F2). It is snapshotted, so the level and
 	// its origin survive a restart.
 	raised map[SeriesKey]time.Time
-	// raiseInputs preserves restored decision times so the next release can bump timestamps
-	// while older pods can still resolve safely. Fresh raises never populate it.
+	// raiseInputs holds the decision instant of a raise that latch stamped past a same-instant
+	// fall; the stale guards read it (raiseInput), never the bumped stamp. An unbumped raise has
+	// no entry.
 	raiseInputs map[SeriesKey]time.Time
-	// fell is written now so the next release can bump timestamps across rolling pods.
-	// This version never uses the memo to change an edge time.
+	// fell is each series' last falling edge (emitted and decision instants), kept for a bounded
+	// horizon so latch can stamp a same-instant fresh raise strictly after it.
 	fell map[SeriesKey]fallMemo
 	// presenceState is the Connectivity kind's per-series ordering cursor (ADR-067 S3b): the
 	// last-applied presence transition (session epoch, time, connected). It is the engine-side
@@ -1363,13 +1364,32 @@ func (e *Engine) pruneFellKey(key SeriesKey) {
 	}
 }
 
-// latch keeps the reading time unchanged in this compatibility reader.
+// latch stamps a fresh raise and latches the series, reporting false when it is already raised.
+//
+// A raise decided no earlier than the series' last fall, and stamped no later than that fall
+// was emitted, is a new episode the alarm fold could not order: the fold lets a resolve win an
+// equal-time raise, so Resolved@T then Raised@T would leave the alarm cleared while this latch
+// says raised, suppressing every later breach. Such a raise is stamped one microsecond past the
+// emitted fall, and its own decision instant is kept in raiseInputs for the stale guards. The
+// lower bound is the fall's DECISION time, not its emitted one: a fall clamped up to a bumped
+// raise is emitted later than it was decided, and a further same-instant raise must still pass
+// it. A raise strictly older than the fall's decision keeps its own time, as before.
 func (e *Engine) latch(key SeriesKey, at time.Time) (time.Time, bool) {
 	e.pruneFellKey(key)
 	if _, ok := e.raised[key]; ok {
 		return at, false
 	}
 	delete(e.raiseInputs, key)
+	if memo, ok := e.fell[key]; ok {
+		decided := memo.at
+		if !memo.input.IsZero() {
+			decided = memo.input
+		}
+		if !at.Before(decided) && !at.After(memo.at) {
+			e.raiseInputs[key] = at
+			at = memo.at.Add(time.Microsecond)
+		}
+	}
 	e.raised[key] = at
 	return at, true
 }
@@ -1542,7 +1562,8 @@ type snapRaised struct {
 	Input *time.Time `json:"input,omitempty"`
 }
 
-// snapFell preserves emitted and decision times for the next release's timestamp bump.
+// snapFell persists one falling-edge memo: its emitted and decision instants and the frontier
+// at which it was recorded, so a restart still stamps a same-instant raise past the fall.
 type snapFell struct {
 	Rule             string     `json:"rule"`
 	Series           string     `json:"series"`
