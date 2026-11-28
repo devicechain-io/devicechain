@@ -105,6 +105,12 @@ type UpdateAttempt struct {
 	FailureCode     string `gorm:"not null;size:64"`
 	FailureDetail   string `gorm:"not null;size:512"`
 	FailurePlatform bool   `gorm:"not null"`
+
+	// UpdatedObservedAt is the observation time (the broker's) of the report that took the attempt to
+	// UPDATED: the key the installed version it wrote is ordered by. A redelivered final report repairs
+	// that write with it. NULL on attempts that have not completed, and on those an earlier release
+	// completed.
+	UpdatedObservedAt sql.NullTime
 }
 
 // AuditLabel names the row in the audit journal.

@@ -263,7 +263,8 @@ CREATE TABLE "update-management".update_attempts (
  failure_stage character varying(16) NOT NULL,
  failure_code character varying(64) NOT NULL,
  failure_detail character varying(512) NOT NULL,
- failure_platform boolean NOT NULL
+ failure_platform boolean NOT NULL,
+ updated_observed_at timestamp with time zone
 );
 CREATE TABLE "update-management".update_management_migrations (
  id character varying(255) NOT NULL
