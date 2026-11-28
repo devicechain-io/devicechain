@@ -73,7 +73,8 @@ func (api *Api) HasOrphanedDeviceAttributes(ctx context.Context) (bool, error) {
 	var found bool
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if tx.Dialector.Name() == "postgres" {
-			if err := tx.Exec("SET LOCAL statement_timeout = '" + fleetOrphanProbeTimeout + "'").Error; err != nil {
+			// set_config(..., true) is SET LOCAL with the value bound, so the statement is a literal.
+			if err := tx.Exec("SELECT set_config('statement_timeout', ?, true)", fleetOrphanProbeTimeout).Error; err != nil {
 				return err
 			}
 		}
