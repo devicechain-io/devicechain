@@ -935,11 +935,11 @@ func (api *Api) ApplyReport(ctx context.Context, deviceToken string, rep ota.Rep
 		}
 		next, verdict := ota.Apply(row.ToOTA(asg.Token), rep, api.now())
 		if verdict != ota.VerdictApplied {
-			if verdict == ota.VerdictDuplicate && ota.State(row.State) == ota.StateUpdated {
-				// The attempt reached UPDATED earlier, and the write of the installed version may be what
-				// failed (the two are separate statements): a redelivery re-issues it. It is idempotent and
-				// ordered by the observation time, so it cannot move a newer version back.
-				if err := api.recordUpdated(ctx, deviceToken, facts, *asg, *row); err != nil {
+			// A current assignment's duplicate can repair an installed-version write that failed after
+			// the attempt reached UPDATED (the two are separate statements). Use the persisted completion
+			// time: a device resend is a new message whose append time must not displace a newer observation.
+			if verdict == ota.VerdictDuplicate && ota.State(row.State) == ota.StateUpdated && !asg.SupersededAt.Valid {
+				if err := api.recordUpdated(WithObservedAt(ctx, row.LastReportAt), deviceToken, facts, *asg, *row); err != nil {
 					return "", err
 				}
 			}
