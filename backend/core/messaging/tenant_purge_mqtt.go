@@ -31,7 +31,10 @@ import (
 //   - a PUBREL consumer's filter, on the CONSUMER, as "$MQTT.out.pubrel.{digest}";
 //   - the parked packets, under subjects the streams enumerate.
 //
-// So nothing resembling the server's getHash is reimplemented. Two SUBJECT LAYOUTS are
+// So the purge reimplements nothing resembling the server's getHash. (The auth callout's
+// per-device session eviction does need it, to address one session it never read:
+// MqttSessionClientIDHash, cross-checked against the server in mqtt_session_evict_test.go.)
+// Two SUBJECT LAYOUTS are
 // read rather than values, and both are called out because a wrong belief about another
 // project's layout compiles perfectly and then silently matches nothing:
 //

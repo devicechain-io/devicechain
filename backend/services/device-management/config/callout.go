@@ -83,12 +83,12 @@ type CalloutConfiguration struct {
 	// Ocsp bounds the OCSP check of a certificate connect (off instance-wide by default).
 	Ocsp OcspConfiguration
 
-	// MaxSessionsPerDevice is how many distinct MQTT client ids one device may connect with: its
-	// plain id plus up to this many ids with a discriminator appended ("{plain}:{anything}").
-	// Each is a broker session of its own, and a persistent one stays stored until it is
-	// cleaned. An id the device has connected with before is always admitted; a new one past
-	// the count is refused as not authorized. An id unused for 30 days stops counting. 1 to
-	// 1024, default 16.
+	// MaxSessionsPerDevice is how many MQTT client ids with a suffix ("{plain}:{suffix}") one
+	// device may hold sessions for. Each is a broker session of its own, and a persistent one
+	// stays stored until it is cleaned. A new id past the count is still admitted: the session of
+	// the id the device used least recently is evicted first (its record and consumers removed at
+	// the broker), so the device never holds more than this many. The plain id is never counted.
+	// 1 to 1024, default 16.
 	MaxSessionsPerDevice int
 	// ConnectBurstPerDevice and ConnectsPerMinutePerDevice bound how often one device may
 	// connect, per device-management replica: at most ConnectBurstPerDevice connects at once,

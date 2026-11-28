@@ -61,6 +61,9 @@ var (
 	// derived from the instance root key in AfterRdb, before anything can store or compare
 	// a secret.
 	DeviceSecretKey *credential.DeviceSecretKey
+	// SessionIndexKey keys the auth callout's per-device MQTT session index, so the bucket holds
+	// only digests. Derived from the instance root key with the device secret key.
+	SessionIndexKey *processor.SessionIndexKey
 
 	// EnrollmentKeys digest and verify provisioning profile secrets and device claim secrets,
 	// each under a key of its own. They are different keys from DeviceSecretKey, derived from
@@ -1211,6 +1214,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if SecretTransit, err = deriveSecretTransit(); err != nil {
 				return err
 			}
+			if SessionIndexKey, err = deriveSessionIndexKey(); err != nil {
+				return err
+			}
 			if err = digestStoredCredentialSecrets(ctx, RdbManager, DeviceSecretKey, EnrollmentKeys); err != nil {
 				return err
 			}
@@ -1503,7 +1509,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		}
 		// The per-device session bounds: a cap on the distinct MQTT client ids one device may
 		// connect with, and a per-device connect rate.
-		if err = wireCalloutSessionBounds(CalloutResponder, NatsManager, Configuration); err != nil {
+		evictor, err := messaging.NewMqttSessionEvictor(NatsManager.Conn())
+		if err != nil {
+			return err
+		}
+		if err = wireCalloutSessionBounds(CalloutResponder, NatsManager, evictor, SessionIndexKey, Configuration); err != nil {
 			return err
 		}
 		// The OCSP check of a certificate connect, for the anchors that ask for it. Off instance-wide

@@ -1726,11 +1726,10 @@ functionalAreas:
       #     issuerPinRefresh: 30s   # how often the live servers are re-learned, 5s to 10m.
       #     issuerPinMinRefresh: 2s # least time between two server pings, 100ms up to issuerPinRefresh.
       #     issuerPinGatherWindow: 750ms # how long one ping waits for answers, 100ms to 2s.
-      #     maxSessionsPerDevice: 16 # distinct MQTT client ids with a suffix ("{plain}:{suffix}") one
-      #                             # device may connect with, 1 to 1024. Each is a broker session of
-      #                             # its own. An id used before always connects; a new one past the
-      #                             # count is refused (callout_session_limited_total); an id unused
-      #                             # for 30 days stops counting. The plain id is never counted.
+      #     maxSessionsPerDevice: 16 # MQTT client ids with a suffix ("{plain}:{suffix}") one device
+      #                             # holds sessions for, 1 to 1024. A new id past the count is still
+      #                             # admitted: the session of its least recently used id is evicted
+      #                             # first (callout_sessions_evicted_total). The plain id is never counted.
       #     connectBurstPerDevice: 20 # connects one device may make at once, per replica, 1 to 10000...
       #     connectsPerMinutePerDevice: 60 # ...refilling this many a minute, 1 to 60000. Over it a
       #                             # connect is refused as not authorized and the device retries.

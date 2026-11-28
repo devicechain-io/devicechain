@@ -80,9 +80,10 @@ import (
 // (see mqtt_store.go), so each persistent one leaves a record nothing reclaims. This
 // rule does not bound that, because the format is part of the device wire; the auth
 // callout does. It records the distinct discriminators each device has used
-// (MqttSessionDiscriminatorStore) and refuses a new one past a configured count,
-// while a discriminator it has seen before is always admitted, and it limits how
-// often one device may connect at all.
+// (MqttSessionDiscriminatorStore), and a new one past a configured count first
+// evicts the session of the one least recently seen (MqttSessionEvictor), so a
+// device never holds more than that many; it also limits how often one device may
+// connect at all.
 
 // deviceClientIDSeparator joins the fields of a device's MQTT client id.
 //

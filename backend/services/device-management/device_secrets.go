@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/devicechain-io/dc-device-management/processor"
 	"github.com/devicechain-io/dc-device-management/schema"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -33,6 +34,16 @@ func deriveEnrollmentSecretKeys() (*credential.EnrollmentSecretKeys, error) {
 		return nil, fmt.Errorf("provisioning profile and device claim secrets are stored as digests under a key derived from the instance root key: %w", err)
 	}
 	return credential.DeriveEnrollmentSecretKeys(root)
+}
+
+// deriveSessionIndexKey derives the key the auth callout's per-device MQTT session index is
+// digested and sealed under, from the same root key as the device secret key.
+func deriveSessionIndexKey() (*processor.SessionIndexKey, error) {
+	root, err := Microservice.InstanceConfiguration.Infrastructure.Secrets.DecodedRootKey()
+	if err != nil {
+		return nil, fmt.Errorf("the MQTT session index is keyed by a key derived from the instance root key: %w", err)
+	}
+	return processor.NewSessionIndexKey(root)
 }
 
 // deriveSecretTransit derives the key that opens the sealed credential secrets inbound

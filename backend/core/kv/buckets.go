@@ -294,17 +294,18 @@ var All = []Bucket{
 
 		BackupClass:   durability.BackupEphemeral,
 		Durability:    durability.Transient,
-		DurabilityWhy: "the MQTT session ids a device has used recently; a lost entry only lets each device record its ids again",
-		Why: "The distinct MQTT client-id discriminators each device has connected with, one entry " +
-			"per (tenant, device) that ever used one, keyed tenant|device and holding a short hash " +
-			"and a last-seen time per discriminator, at most callout.maxSessionsPerDevice of them. " +
-			"It is what bounds how many persistent sessions one device credential can leave in the " +
-			"broker's session store. A device connecting with the plain client id writes nothing, " +
-			"so this scales with the devices that use a second session, not with the fleet. An " +
-			"entry ages out 30 days after its last write. A full or unreachable bucket refuses only " +
-			"connects with a discriminator the device has not used before (fail closed, counted as " +
-			"callout_session_limited_total{reason=\"session_store_unavailable\"}); a known one is " +
-			"still admitted when it can be read.",
+		DurabilityWhy: "the MQTT client ids each device has used; a lost entry stops counting the sessions those ids left, which the broker's own session store still holds",
+		Why: "The MQTT client ids with a suffix each device has connected with, one entry per " +
+			"(tenant, device) that ever used one, holding at most callout.maxSessionsPerDevice of " +
+			"them with a last-seen time. Keys and values are keyed digests (and the broker's session " +
+			"digest, sealed), so it holds no identifier. It is what bounds how many persistent " +
+			"sessions one device credential leaves in the broker's session store: a new id past the " +
+			"count evicts the least recently seen one's session first. A device on its plain client " +
+			"id writes nothing, so this scales with the devices that use a second session, not with " +
+			"the fleet. Entries do not age out in practice (the lifetime is ten years): a slot is " +
+			"released only by evicting the session it counts. A full or unreachable bucket refuses " +
+			"only connects with an id the device has not used before (fail closed, counted as " +
+			"callout_session_limited_total{reason=\"session_store_unavailable\"}).",
 	},
 	{
 		Name:    BucketLocks,
@@ -451,9 +452,11 @@ var All = []Bucket{
 	},
 }
 
-// MqttSessionDiscriminatorTTL is the lifetime of an entry in BucketMqttSessionDiscriminators, and
-// how long a discriminator a device stopped using stays counted against its cap.
-const MqttSessionDiscriminatorTTL = 30 * 24 * time.Hour
+// MqttSessionDiscriminatorTTL is the lifetime of an entry in BucketMqttSessionDiscriminators. It is
+// ten years, which is "never" for an instance: an entry counts broker sessions that do not expire,
+// and letting it age out would release their slots without removing them. Every bucket must declare
+// a positive lifetime, so this is the longest that reads as a deliberate one.
+const MqttSessionDiscriminatorTTL = 10 * 365 * 24 * time.Hour
 
 // CacheTTL is the entry lifetime of every cache bucket. It is what the device-management cache
 // settings defaulted to (300 seconds); those settings now bound only how long a replica keeps a

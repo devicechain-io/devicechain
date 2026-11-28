@@ -34,22 +34,6 @@ import (
 // Otherwise the boundary byte is smeared across a shared sextet and the prefix silently
 // stops matching. Decode, then compare.
 
-// tenantScopedBucket is one bucket a tenant purge scans.
-type tenantScopedBucket struct {
-	area, logical string
-	// perInstance, when set, is the concrete bucket name for a bucket that is not a per-area
-	// cache. Nil means CacheBucketName(instanceId, area, logical).
-	perInstance func(instanceId string) string
-}
-
-// bucket is the concrete name of b on an instance.
-func (b tenantScopedBucket) bucket(instanceId string) string {
-	if b.perInstance != nil {
-		return b.perInstance(instanceId)
-	}
-	return CacheBucketName(instanceId, b.area, b.logical)
-}
-
 // tenantScopedBuckets are the cache buckets whose keys carry a tenant, with the functional
 // area that creates them — the concrete bucket name folds the area in, so it cannot be
 // derived from the logical name alone.
@@ -60,18 +44,14 @@ func (b tenantScopedBucket) bucket(instanceId string) string {
 // a bucket with no matching keys is indistinguishable from one that was already clean. That
 // is why the membership test below is equality OR prefix, and why it is one function rather
 // than a rule per bucket.
-//
-// One of them is not a cache: dc_mqtt_session_discriminators is a per-instance State bucket, keyed
-// "{tenant}|{device}" like the caches, whose concrete name has no area in it (perInstance).
-var tenantScopedBuckets = []tenantScopedBucket{
-	{area: "device-management", logical: kv.BucketMqttSessionDiscriminators, perInstance: MqttSessionDiscriminatorsBucketName},
-	{"device-management", kv.BucketDeviceByToken, nil},
-	{"device-management", kv.BucketRelationshipsBySource, nil},
-	{"device-management", kv.BucketMembershipsByEntity, nil},
-	{"device-management", kv.BucketProfileResolutionByType, nil},
-	{"device-management", kv.BucketScopedGroupsExist, nil},
-	{"device-management", retiredBucketMetricDefsByType, nil},
-	{"device-management", retiredBucketProfileScopeByType, nil},
+var tenantScopedBuckets = []struct{ area, logical string }{
+	{"device-management", kv.BucketDeviceByToken},
+	{"device-management", kv.BucketRelationshipsBySource},
+	{"device-management", kv.BucketMembershipsByEntity},
+	{"device-management", kv.BucketProfileResolutionByType},
+	{"device-management", kv.BucketScopedGroupsExist},
+	{"device-management", retiredBucketMetricDefsByType},
+	{"device-management", retiredBucketProfileScopeByType},
 }
 
 // The two per-device-type caches that profile-resolution-by-type replaced. Nothing creates
@@ -122,7 +102,7 @@ func PurgeTenantKv(ctx context.Context, js nats.JetStreamContext, instanceId, te
 	}
 
 	for _, b := range tenantScopedBuckets {
-		bucket := b.bucket(instanceId)
+		bucket := CacheBucketName(instanceId, b.area, b.logical)
 		n, err := purgeBucket(ctx, js, bucket, tenant)
 		if err != nil {
 			return res, err
@@ -225,7 +205,7 @@ const kvSubjectPrefix = "$KV."
 func TenantScopedBucketStreams(instanceId string) []string {
 	out := make([]string, 0, len(tenantScopedBuckets))
 	for _, b := range tenantScopedBuckets {
-		out = append(out, KvStreamName(b.bucket(instanceId)))
+		out = append(out, KvStreamName(CacheBucketName(instanceId, b.area, b.logical)))
 	}
 	return out
 }
@@ -307,6 +287,16 @@ func KvPurgeExemptions() []string {
 			"principal of a throttled kind, keyed by a hash of the presented identifier (today an " +
 			"email). It names no tenant — a sign-in attempt belongs to the PERSON, like the refresh-token store — and " +
 			"every entry expires ten minutes after its last write, well inside the settle window",
+		kv.BucketMqttSessionDiscriminators + ": the MQTT client ids each device has connected " +
+			"with, which bound its persistent sessions. It holds NO identifier: the key is a keyed " +
+			"digest of the tenant and device (under a key derived from the instance root key, which " +
+			"the purge does not hold), and each value is a keyed digest of a client-id suffix with the " +
+			"broker's own session digest sealed under the same key. So no sweep can attribute an " +
+			"entry to a tenant, and none needs to: the tenant's broker sessions themselves are erased " +
+			"by the MQTT gateway purge, after which an entry names only sessions that no longer exist. " +
+			"It is exempt for a second reason during a rolling upgrade: a purge coordinator of the " +
+			"previous release never scanned it, and there is nothing in it such a purge would have " +
+			"to find",
 		kv.BucketDeviceCredentialAttempts + ": MQTT password backoff state, one entry per " +
 			"recently tried MQTT username. The username does name a tenant, but the key is a HASH " +
 			"of it, so no sweep can find a tenant's entries by name; the entries carry only a " +
@@ -365,7 +355,7 @@ func BroadcastTenantCacheEviction(nc *nats.Conn, instanceId, tenant string) erro
 	}
 	names := []string{DeviceCredentialCacheName}
 	for _, b := range tenantScopedBuckets {
-		if b.area == tenantCacheArea && b.perInstance == nil && b.logical != retiredBucketMetricDefsByType &&
+		if b.area == tenantCacheArea && b.logical != retiredBucketMetricDefsByType &&
 			b.logical != retiredBucketProfileScopeByType {
 			names = append(names, b.logical)
 		}

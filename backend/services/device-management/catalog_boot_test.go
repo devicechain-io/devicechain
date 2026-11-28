@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -139,6 +140,9 @@ func catalogBoot(t *testing.T, failStage string) {
 	RdbManager = &rdb.RdbManager{Database: db}
 	DeviceSecretKey = dmtest.DeviceSecretKey()
 	SecretTransit = testTransit(t)
+	var keyErr error
+	SessionIndexKey, keyErr = processor.NewSessionIndexKey(bytes.Repeat([]byte{3}, 32))
+	require.NoError(t, keyErr)
 
 	Svc = service.New(Microservice, service.Spec{
 		Nats: &service.NatsSpec{OnCreate: func(nmgr *messaging.NatsManager) error {

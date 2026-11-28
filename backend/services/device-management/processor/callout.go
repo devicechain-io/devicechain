@@ -193,6 +193,12 @@ type CalloutMetrics struct {
 	// SessionLimited counts the connects a per-device session bound refused, by reason (see
 	// sessionLimitedReasons). Every reason exists at zero from startup.
 	SessionLimited *prometheus.CounterVec
+	// SessionsEvicted counts the persistent sessions evicted to admit a device's new client id
+	// past callout.maxSessionsPerDevice.
+	SessionsEvicted prometheus.Counter
+	// ConnectLimiterSaturated counts connects admitted without a per-device rate bucket because a
+	// replica already holds DefaultConnectLimiterMaxDevices of them (the limiter fails open).
+	ConnectLimiterSaturated prometheus.Counter
 }
 
 // NewCalloutMetrics registers the callout's metrics on the microservice.
@@ -209,13 +215,17 @@ func NewCalloutMetrics(ms *core.Microservice) *CalloutMetrics {
 		JitInFlight: ms.NewGauge("callout_jit_in_flight",
 			"Certificate registrations on first connect being decided right now."),
 		SessionLimited: newSessionLimitedCounter(ms),
+		SessionsEvicted: ms.NewCounter("callout_sessions_evicted_total",
+			"Persistent MQTT sessions the auth callout evicted (the device's least recently used client id) to admit a new client id past callout.maxSessionsPerDevice."),
+		ConnectLimiterSaturated: ms.NewCounter("callout_connect_limiter_saturated_total",
+			"Device connects admitted without a per-device connect-rate bucket because the replica's limiter was full (it fails open)."),
 	}
 }
 
 // newSessionLimitedCounter registers callout_session_limited_total with every reason at zero.
 func newSessionLimitedCounter(ms *core.Microservice) *prometheus.CounterVec {
 	vec := ms.NewCounterVec("callout_session_limited_total",
-		"Device connects refused by a per-device session bound, by reason: sessions_per_device (a new MQTT client id past callout.maxSessionsPerDevice), connect_rate (over the per-device connect rate), session_store_unavailable (a new client id could not be recorded).",
+		"Device connects refused by a per-device session bound, by reason: connect_rate (over the per-device connect rate), session_store_unavailable (a new MQTT client id could not be recorded in time), session_evict_failed (the session of the device's least recently used client id could not be evicted to make room).",
 		[]string{"reason"})
 	for _, r := range sessionLimitedReasons {
 		vec.WithLabelValues(r)
@@ -739,8 +749,8 @@ const (
 	grantRefusedExpiry  grantRefusal = "expires_too_soon"
 	grantRefusedFailure grantRefusal = "error"
 	// grantRefusedSessionBound: a per-device session bound refused the connect (the connect
-	// rate, or a new client id past the cap or unrecordable); callout_session_limited_total
-	// says which.
+	// rate, or a new client id that could not be recorded or made room for);
+	// callout_session_limited_total says which.
 	grantRefusedSessionBound grantRefusal = "session_limited"
 )
 
@@ -844,10 +854,11 @@ func (c *CalloutResponder) grantSession(ctx context.Context, req jwt.Authorizati
 		return "", grantRefusedExpiry
 	}
 
-	// The distinct-session cap, last before signing, so only a connect that would otherwise be
-	// granted records a client id. See sessionBound.admit.
+	// The per-device session cap, last before signing, so only a connect that would otherwise be
+	// granted records a client id or evicts a session. It runs under the request's own deadline
+	// (ctx), so it never outlives the broker's wait. See sessionBound.admit.
 	if c.sessions != nil {
-		if reason := c.sessions.admit(tenant, device.Token,
+		if reason := c.sessions.admit(ctx, tenant, device.Token, required,
 			clientIDDiscriminator(req.ClientInformation.MQTT, required), c.now()); reason != "" {
 			c.countSessionLimited(reason)
 			return "", grantRefusedSessionBound
